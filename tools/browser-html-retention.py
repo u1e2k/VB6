@@ -84,16 +84,47 @@ with sync_playwright() as p:
         check(all(result.values()),str(result));return result
     case('keyboard movement refreshes selected controls and preserves full refresh API',selected_refresh)
 
+    def capture_stable(page,name):
+        # Wait for the fixture's fonts, ResizeObserver callbacks and canvas RAFs,
+        # rather than assuming an arbitrary 100 ms includes their presentation.
+        # This never retries until two DIFFERENT builds happen to match: each
+        # build must independently produce three identical consecutive frames.
+        page.bring_to_front()
+        page.evaluate("""async()=>{await document.fonts.ready;const d=vb6Studio.designer;let stable=0;for(let i=0;i<120;i++){await new Promise(requestAnimationFrame);if(!d.selectionFrame&&!d.grid?.dirty&&!d.grid?.resizeFrame&&!d.formView?.surface?.dirty)stable++;else stable=0;if(stable>=3)return;}throw Error('Designer did not settle')}""")
+        frames=[];stable=0;last=None
+        for index in range(12):
+            data=page.screenshot(animations='disabled')
+            rgb=Image.open(io.BytesIO(data)).convert('RGB')
+            changed=None if last is None else sum(any(pixel) for pixel in ImageChops.difference(last,rgb).getdata())
+            frames.append({'capture':index,'changedFromPrevious':changed})
+            stable=stable+1 if changed==0 else 0
+            if stable>=2:
+                (OUT/(name+'.png')).write_bytes(data)
+                METRICS.setdefault('captureStability',{})[name]=frames
+                return data
+            last=rgb;page.wait_for_timeout(50)
+        METRICS.setdefault('captureStability',{})[name]=frames
+        (OUT/(name+'.png')).write_bytes(data)
+        raise AssertionError('Presentation did not stabilize: '+name)
+
     for dpr in [1,1.25,1.5,2]:
         def visual(dpr=dpr):
-            page=page_for(HTML,dpr);page.evaluate(PROJECT_JS);page.wait_for_timeout(100)
-            image=page.screenshot(path=OUT/f'html-selected-{dpr}.png');result={'dpr':dpr,'controls':60}
+            page=page_for(HTML,dpr);page.evaluate(PROJECT_JS)
+            image=capture_stable(page,f'html-selected-{dpr}');result={'dpr':dpr,'controls':60}
             if args.baseline:
-                previous=page_for(args.baseline.read_text(),dpr);previous.evaluate(PROJECT_JS);previous.wait_for_timeout(100)
-                baseline=previous.screenshot(path=OUT/f'baseline-selected-{dpr}.png')
-                a,b=Image.open(io.BytesIO(image)).convert('RGB'),Image.open(io.BytesIO(baseline)).convert('RGB')
-                check(a.size==b.size,'Screenshot dimensions differ')
-                changed=sum(any(pixel) for pixel in ImageChops.difference(a,b).getdata());result['changedPixels']=changed
+                previous=page_for(args.baseline.read_text(),dpr);previous.evaluate(PROJECT_JS)
+                baseline=capture_stable(previous,f'baseline-selected-{dpr}')
+                # A second independent baseline detects browser nondeterminism;
+                # it is evidence, not a tolerance or replacement golden image.
+                repeat=page_for(args.baseline.read_text(),dpr);repeat.evaluate(PROJECT_JS)
+                repeated=capture_stable(repeat,f'baseline-repeat-{dpr}')
+                a,b,c=[Image.open(io.BytesIO(data)).convert('RGB') for data in [image,baseline,repeated]]
+                check(a.size==b.size==c.size,'Screenshot dimensions differ')
+                self_changed=sum(any(pixel) for pixel in ImageChops.difference(b,c).getdata())
+                changed=sum(any(pixel) for pixel in ImageChops.difference(a,b).getdata())
+                result.update(changedPixels=changed,baselineRepeatChangedPixels=self_changed)
+                METRICS.setdefault('visualComparisons',[]).append(result)
+                check(self_changed==0,'Baseline is nondeterministic: '+str(result))
                 check(changed==0,'HTML pixels changed: '+str(result))
             return result
         case(f'HTML designer selection visual evidence at DPR {dpr}',visual)
