@@ -23,7 +23,7 @@ measured results, source revisions and remaining gates.
 ## Classic Options dialog
 
 Open **Tools → Options → Rendering**. WebGPU is the preferred default in this
-feature branch; HTML/CSS remains selectable. The first and second fallback
+release; HTML/CSS remains selectable. The first and second fallback
 selectors define an ordered list. Duplicate entries and the preferred backend
 are removed; HTML/CSS is always the final safety net. The default chain is:
 
@@ -108,9 +108,10 @@ callback. ResizeObserver tracks encountered elements and removes obsolete target
 including when CSSOM geometry changes without an attribute mutation. CSS
 transition/animation events wake rendering; while document animations are active,
 styles are resampled and frames scheduled as needed. Rendering returns to idle
-when they complete. Arbitrary CSSOM color-only changes and programmatic animation
-starts without a wake-up event still require explicit style invalidation; do not
-assume every browser paint trigger is observed.
+when they complete. CSSOM rule edits and programmatic animation APIs now wake rendering through
+realm-scoped subscriptions which are removed in HTML mode. Pre-captured native
+references and direct indexed adopted-sheet array edits require
+`renderer.invalidateStyles()`. See [RENDERING-RELEASE.md](RENDERING-RELEASE.md).
 
 Each scene build is compared exactly with the retained immutable snapshot,
 including command order, clips, colors, texture identities and dimensions. No
@@ -159,3 +160,12 @@ The user's full target additionally needs approved native VB6/control-state
 references, representative physical desktop/mobile measurements against HTML/CSS,
 and completion of the remaining GPU-painted surfaces. Passing these bounded
 fixtures must not be described as universal pixel-perfect or GPU-only rendering.
+
+## Local measurement
+
+The Rendering tab offers **Measure Rendering**, cancellation and **Save Report**.
+`VB6Rendering.benchmarkRendering(document, {frames:30, quads:10000, signal})`
+returns bounded per-backend CPU submission samples, actual adapter identity and
+optional WebGPU render-pass timestamps, leaving project/preferences/DOM unchanged.
+No normal frame pays the cost of diagnostic queries or readbacks. This is not an
+HTML compositor comparison or a whole-IDE performance certification.

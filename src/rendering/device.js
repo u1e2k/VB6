@@ -13,7 +13,8 @@ export async function acquireDevice(view, timeout = 3000) {
     pending = (async () => {
       const adapter = await view.navigator.gpu.requestAdapter({powerPreference: 'high-performance'});
       if (!adapter) throw new Error('No WebGPU adapter');
-      const device = await adapter.requestDevice();
+      const requiredFeatures = adapter.features?.has('timestamp-query') ? ['timestamp-query'] : [];
+      const device = await adapter.requestDevice({requiredFeatures});
       const info = adapter.info || {};
       device.lost.then(() => { if (devices.get(view) === pending) devices.delete(view); });
       return {device, info: {vendor: info.vendor || '', architecture: info.architecture || '', description: info.description || '', isFallbackAdapter: info.isFallbackAdapter ?? adapter.isFallbackAdapter ?? null}};

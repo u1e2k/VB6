@@ -23,7 +23,7 @@ test('unsupported background images, gradients and repeating effects are explici
 test('failed first paint disconnects mutation observation before HTML fallback',async()=>{
  let observed=0,disconnected=0,disposed=0,removed=0,resized=0,cleared=0;
  const r=Object.create(UIRenderer.prototype);
- Object.assign(r,{resizeObserver:{disconnect(){resized++}},observedElements:new Set([{}]),retained:{clear(){cleared++}},disposed:false,generation:1,policy:{backend:'webgpu',text:'native'},metrics:{frames:0,invalidations:0,builds:[],submissions:[]},attempts:[],observer:{observe(){observed++},disconnect(){disconnected++}},document:{documentElement:{}},factory:async()=>({dispose(){disposed++}}),canvasForBackend:()=>({remove(){removed++}}),cancelFrame(){},renderNow(){throw Error('first draw failed')},publish(){}});
+ Object.assign(r,{view:{},resizeObserver:{disconnect(){resized++}},observedElements:new Set([{}]),retained:{clear(){cleared++}},disposed:false,generation:1,policy:{backend:'webgpu',text:'native'},metrics:{frames:0,invalidations:0,builds:[],submissions:[]},attempts:[],observer:{observe(){observed++},disconnect(){disconnected++}},document:{documentElement:{}},factory:async()=>({dispose(){disposed++}}),canvasForBackend:()=>({remove(){removed++}}),cancelFrame(){},renderNow(){throw Error('first draw failed')},publish(){}});
  await r.activate(['webgpu','html'],0,1);
  assert.equal(r.backend,'html');assert.equal(r.driver,null);
  assert.deepEqual([observed,disconnected,disposed,removed],[1,1,1,1]);

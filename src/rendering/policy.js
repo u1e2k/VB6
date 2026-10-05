@@ -6,7 +6,7 @@ export function normalizeRendering(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
   const backend = BACKENDS.includes(value.backend) ? value.backend : 'webgpu';
   const input = Array.isArray(value.fallbacks) ? value.fallbacks : DEFAULT_RENDERING.fallbacks;
-  const fallbacks = [...new Set(input.filter(item => BACKENDS.includes(item) && item !== backend && item !== 'webgpu'))];
+  const fallbacks = [...new Set(input.filter(item => BACKENDS.includes(item) && item !== backend))];
   // A missing GPU must never turn a working IDE into an invisible or unusable UI.
   if (backend !== 'html' && !fallbacks.includes('html')) fallbacks.push('html');
   return {backend, fallbacks: backend === 'html' ? [] : fallbacks, text: value.text === 'gpu' ? 'gpu' : 'native', pixelSnap: value.pixelSnap !== false};

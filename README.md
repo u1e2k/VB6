@@ -237,3 +237,13 @@ builds and tests a standalone `.tgz` after `npm run build`; it does not publish 
 ### Native workspace and interoperability
 
 Native project support also includes explicit ZIP filename-codepage selection, preserved/restored VBW document windows, recoverable folder-save journals, exclusive immutable ZIP snapshots, trusted custom-control/Automation adapter registries, an opt-in x86/x64 Windows stdio host, and a separately licensed compiler round-trip harness. Native activation is never granted by opening a project. See [native workspace and interoperability](docs/NATIVE-WORKSPACE-INTEROP.md) for commands, deployment contracts, tests, and remaining boundaries.
+
+### UI rendering backends
+
+**Tools → Options → Rendering** selects the WebGPU-first UI painter or the original
+HTML/CSS path, with configurable WebGL2/Canvas2D fallbacks and a final HTML safety
+path. The classic UI, native text/editing, accessibility and detached windows are
+retained. This is hybrid rendering, not a completely GPU-only UI. The tab also
+provides cancellable local CPU/GPU-pass measurements and JSON report export.
+See [rendering release and measured scope](docs/RENDERING-RELEASE.md),
+[API/settings](docs/RENDERING.md), and [source attribution](docs/RENDERING-SOURCES.md).

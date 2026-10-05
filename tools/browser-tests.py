@@ -310,7 +310,11 @@ def ide_tests(browser):
         frame.locator('[data-control="txtQuantity"] input').fill('2');frame.locator('[data-control="cmdAdd"]').click()
         frame.wait_for_function('vb6Application.forms[0].controlMap.get("lbltotal").Caption === "$143.00"')
         page.screenshot(path=str(SHOTS/'ide-running.png'))
-        stop_ide(page);check(len(page.frames)==1)
+        # DOM removal precedes Playwright's asynchronous frame-detached event.
+        # Await that event rather than racing its protocol-side frame registry.
+        with page.expect_event('framedetached', predicate=lambda detached: detached == frame):
+            stop_ide(page)
+        check(len(page.frames)==1)
         healthy(page);page.close()
     case('IDE run/stop: opaque-origin iframe, denied parent DOM and rejected spoofed message',run_sandbox)
 

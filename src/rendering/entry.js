@@ -5,4 +5,5 @@ import {WebGPUPainter, UI_SHADER} from './webgpu.js';
 import {WebGLPainter} from './webgl2.js';
 import {CanvasPainter} from './canvas2d.js';
 import {UIRenderer, createPainter, retainRenderer, rendererForDocument} from './renderer.js';
-export {BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect, PaintScene, parseColor, TextAtlas, WebGPUPainter, UI_SHADER, WebGLPainter, CanvasPainter, UIRenderer, createPainter, retainRenderer, rendererForDocument};
+import {benchmarkRendering, timingSummary} from './benchmark.js';
+export {benchmarkRendering, timingSummary, BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect, PaintScene, parseColor, TextAtlas, WebGPUPainter, UI_SHADER, WebGLPainter, CanvasPainter, UIRenderer, createPainter, retainRenderer, rendererForDocument};

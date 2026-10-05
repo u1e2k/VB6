@@ -13,7 +13,7 @@ function normalizeRendering(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
   const backend = BACKENDS.includes(value.backend) ? value.backend : 'webgpu';
   const input = Array.isArray(value.fallbacks) ? value.fallbacks : DEFAULT_RENDERING.fallbacks;
-  const fallbacks = [...new Set(input.filter(item => BACKENDS.includes(item) && item !== backend && item !== 'webgpu'))];
+  const fallbacks = [...new Set(input.filter(item => BACKENDS.includes(item) && item !== backend))];
   // A missing GPU must never turn a working IDE into an invisible or unusable UI.
   if (backend !== 'html' && !fallbacks.includes('html')) fallbacks.push('html');
   return {backend, fallbacks: backend === 'html' ? [] : fallbacks, text: value.text === 'gpu' ? 'gpu' : 'native', pixelSnap: value.pixelSnap !== false};
@@ -191,7 +191,8 @@ async function acquireDevice(view, timeout = 3000) {
     pending = (async () => {
       const adapter = await view.navigator.gpu.requestAdapter({powerPreference: 'high-performance'});
       if (!adapter) throw new Error('No WebGPU adapter');
-      const device = await adapter.requestDevice();
+      const requiredFeatures = adapter.features?.has('timestamp-query') ? ['timestamp-query'] : [];
+      const device = await adapter.requestDevice({requiredFeatures});
       const info = adapter.info || {};
       device.lost.then(() => { if (devices.get(view) === pending) devices.delete(view); });
       return {device, info: {vendor: info.vendor || '', architecture: info.architecture || '', description: info.description || '', isFallbackAdapter: info.isFallbackAdapter ?? adapter.isFallbackAdapter ?? null}};
@@ -389,7 +390,7 @@ class WebGPUPainter {
     }
     return record.group;
   }
-  render(scene, {readback = false} = {}) {
+  render(scene, {readback = false, timing = null} = {}) {
     const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { record.texture.destroy(); this.textures.delete(page); }
     if (this.disposed) throw new Error('Renderer disposed');
@@ -407,15 +408,26 @@ class WebGPUPainter {
     if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
     const images = new Map();
     for (const page of usedPages) images.set(page, this.image(page));
-    device.queue.writeBuffer(this.uniform, 0, new Float32Array([scene.width, scene.height, size.scaleX, size.scaleY]));
+    const screen = this.screenData || (this.screenData = new Float32Array(4));
+    const values = [scene.width, scene.height, size.scaleX, size.scaleY];
+    if (!this.screenUploaded || values.some((v, i) => Math.fround(v) !== screen[i])) {
+      screen.set(values); device.queue.writeBuffer(this.uniform, 0, screen); this.screenUploaded = true;
+    }
     if (count && !reuse) { this.stats.instanceUploads++; device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
     rememberInstances(this, scene, size);
     const encoder = device.createCommandEncoder({label: 'VB6 UI frame'});
     const texture = this.context.getCurrentTexture();
-    const pass = encoder.beginRenderPass({colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
+    const pass = encoder.beginRenderPass({...(timing ? {timestampWrites: {querySet: timing.querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1}} : {}), colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
     pass.setBindGroup(0, this.screenGroup); pass.setVertexBuffer(0, this.buffer);
     for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.page ? images.get(group.page) : this.whiteGroup); pass.draw(6, group.count, 0, group.first); }
     pass.end();
+    // Optional diagnostic timestamps are resolved with this pass, not wall-clock
+    // queue completion. Normal frames allocate no queries and perform no waits.
+    // Source: https://www.w3.org/TR/webgpu/#timestamp-query
+    if (timing) {
+      encoder.resolveQuerySet(timing.querySet, 0, 2, timing.resolve, 0);
+      encoder.copyBufferToBuffer(timing.resolve, 0, timing.readback, 0, 16);
+    }
     // Queue the copy in the SAME submission as rendering, before automatic
     // canvas-texture expiry. Do not call getCurrentTexture after an await.
     // Source: https://gpuweb.github.io/gpuweb/#automatic-expiry-task-source
@@ -502,6 +514,7 @@ class WebGLPainter {
     this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0};
     const gl = this.gl = canvas.getContext('webgl2', {alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
     if (!gl) throw new Error('WebGL2 unavailable');
+    this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.lost = event => { event.preventDefault(); if (!this.disposed) onLost('WebGL2 context lost'); }; canvas.addEventListener('webglcontextlost', this.lost);
     const shader = (type, source) => { const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { const log = gl.getShaderInfoLog(s); gl.deleteShader(s); throw new Error(log); } return s; };
     let vertex, fragment;
@@ -535,7 +548,8 @@ class WebGLPainter {
     const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { this.gl.deleteTexture(record.texture); this.textures.delete(page); }
     const gl = this.gl; if (this.disposed || gl.isContextLost()) throw new Error('WebGL2 context lost');
-    const size = physicalSize(scene.width, scene.height, scene.dpr, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    const size = physicalSize(scene.width, scene.height, scene.dpr, this.maxTextureSize);
+    const resized = this.canvas.width !== size.width || this.canvas.height !== size.height;
     if (this.canvas.width !== size.width) this.canvas.width = size.width;
     if (this.canvas.height !== size.height) this.canvas.height = size.height;
     gl.viewport(0, 0, size.width, size.height); gl.disable(gl.DITHER); gl.disable(gl.DEPTH_TEST); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -553,7 +567,7 @@ class WebGLPainter {
       for (let i = 0; i < 6; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 96, group.first * 96 + i * 16);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, group.count);
     }
-    const error = gl.getError(); if (error !== gl.NO_ERROR) throw new Error('WebGL2 rendering error: ' + error);
+    if (!reuse || resized || usedPages.size) { const error = gl.getError(); if (error !== gl.NO_ERROR) throw new Error('WebGL2 rendering error: ' + error); }
     this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
   }
   dispose() {
@@ -656,11 +670,221 @@ function paintBackgroundLayers(scene, rect, clip, layers) {
 return {solidBackgroundLayers,paintBackgroundLayers};
 })();
 
-/* dom-scene.js */
+/* style-activity.js */
 __modules[9]=(()=>{
+
+/** Event-driven CSSOM / Web Animations invalidation, scoped to a Window.
+ * CSSOM mutations do not generate DOM MutationRecords. Subscribe while painting
+ * a canvas backend, restore native descriptors on the last release, and never
+ * poll an idle document. All wrappers preserve receiver, exceptions, return
+ * value (including Promise identity) and third-party descriptor replacements.
+ *
+ * Original implementation; API behavior/reference attribution:
+ * https://drafts.csswg.org/cssom/#the-cssstylesheet-interface
+ * https://drafts.csswg.org/cssom/#the-cssstyledeclaration-interface
+ * https://www.w3.org/TR/web-animations-1/#the-animation-interface
+ * https://www.w3.org/TR/web-animations-1/#extensions-to-the-element-interface
+ */
+const HUB = Symbol.for('vb6.rendering.styleActivity.v1');
+const SHADOW_HOSTS = Symbol.for('vb6.rendering.nativeShadowHosts.v1');
+/** Closed roots are intentionally opaque. Remember roots created while the
+ * renderer observes the realm; custom elements conservatively stay native even
+ * when their closed root predates subscription. No DOM attributes are changed.
+ * Source: https://dom.spec.whatwg.org/#dom-element-attachshadow
+ */
+function requiresNativeShadowPaint(node) {
+  return !!node.shadowRoot || node.localName?.includes('-') ||
+    !!node.ownerDocument?.defaultView?.[SHADOW_HOSTS]?.has(node);
+}
+function subscribeStyleActivity(view, callback) {
+  if (typeof callback !== 'function') throw new TypeError('A style activity callback is required');
+  let hub = view[HUB];
+  if (!hub) {
+    hub = {listeners: new Set(), restore: [], unavailable: [], installed: 0};
+    Object.defineProperty(view, HUB, {configurable: true, value: hub});
+    const notify = (kind, receiver) => {
+      if (kind === 'shadow') {
+        let hosts = view[SHADOW_HOSTS];
+        if (!hosts) {
+          hosts = new WeakSet();
+          Object.defineProperty(view, SHADOW_HOSTS, {configurable: true, value: hosts});
+        }
+        hosts.add(receiver);
+      }
+      // Own canvas style writes must never invalidate the renderer recursively.
+      if (receiver?.nodeType === 1 && receiver.hasAttribute?.('data-vb-render-layer')) return;
+      for (const listener of [...hub.listeners]) {
+        try { listener(kind); } catch { /* Observation cannot change native semantics. */ }
+      }
+    };
+    const patch = (prototype, name, kind, {async = false, ruleOnly = false} = {}) => {
+      if (!prototype) return;
+      const original = Object.getOwnPropertyDescriptor(prototype, name);
+      if (!original || (!original.set && typeof original.value !== 'function')) return;
+      if (!original.configurable) { hub.unavailable.push(name); return; }
+      const operation = original.set || original.value;
+      function observed(...args) {
+        const result = Reflect.apply(operation, this, args); // Native brand checks and throws first.
+        if (ruleOnly && !this.parentRule) return result; // Inline style is already a DOM mutation.
+        if (async) {
+          // Do not substitute a chained Promise or turn a rejection into success.
+          Promise.resolve(result).then(() => notify(kind, this), () => {});
+        } else notify(kind, this);
+        return result;
+      }
+      const installed = original.set ? {...original, set: observed} : {...original, value: observed};
+      try {
+        Object.defineProperty(prototype, name, installed); hub.installed++;
+        hub.restore.push(() => {
+          const current = Object.getOwnPropertyDescriptor(prototype, name);
+          if ((original.set ? current?.set : current?.value) === observed) {
+            Object.defineProperty(prototype, name, original.set ? {...current, set: original.set} : {...current, value: original.value});
+          }
+        });
+      } catch { hub.unavailable.push(name); }
+    };
+    // Chromium exposes named CSS properties as configurable instance properties,
+    // not prototype setters. Instrument only declarations actually accessed by
+    // script after subscription, not every rule in a large loaded stylesheet.
+    // Keep the native declaration object (no Proxy, no identity/brand changes).
+    const seen = new WeakSet(), accessors = new Map();
+    const declarationPrototype = view.CSSStyleDeclaration?.prototype;
+    const getProperty = declarationPrototype?.getPropertyValue;
+    const setProperty = declarationPrototype?.setProperty;
+    const watchDeclaration = declaration => {
+      if (!declaration || seen.has(declaration) || !getProperty || !setProperty) return;
+      seen.add(declaration);
+      const installed = [];
+      for (const name of Object.getOwnPropertyNames(declaration)) {
+        const old = Object.getOwnPropertyDescriptor(declaration,name);
+        if (!old?.configurable || !old.writable || typeof old.value !== 'string' || /^\d+$/.test(name)) continue;
+        const property = name === 'cssFloat' ? 'float' : name.replace(/^webkit(?=[A-Z])/,'Webkit').replace(/[A-Z]/g,c=>'-'+c.toLowerCase());
+        if (!view.CSS?.supports?.(property,'initial')) continue;
+        let pair = accessors.get(name);
+        if (!pair) {
+          pair = {
+            get() { return Reflect.apply(getProperty,this,[property]); },
+            set(value) { Reflect.apply(setProperty,this,[property,value]); notify('stylesheet',this); }
+          }; accessors.set(name,pair);
+        }
+        try { Object.defineProperty(declaration,name,{configurable:true,enumerable:old.enumerable,...pair}); installed.push([name,pair]); } catch {}
+      }
+      // Do not restore an old value: removing our accessor reveals the native
+      // named-property interceptor with the CURRENT declaration's CSS value.
+      const reference = typeof WeakRef === 'function' ? new WeakRef(declaration) : {deref:()=>declaration};
+      hub.restore.push(() => {
+        const object = reference.deref(); if (!object) return;
+        for (const [name,pair] of installed) {
+          const current=Object.getOwnPropertyDescriptor(object,name);
+          if(current?.get===pair.get && current?.set===pair.set) delete object[name];
+        }
+      });
+    };
+    for (const ctor of ['CSSStyleRule','CSSKeyframeRule','CSSPageRule','CSSFontFaceRule']) {
+      const prototype=view[ctor]?.prototype, original=prototype && Object.getOwnPropertyDescriptor(prototype,'style');
+      if (!original?.get || !original.configurable) continue;
+      function get() { const declaration=Reflect.apply(original.get,this,[]);watchDeclaration(declaration);return declaration; }
+      try {
+        Object.defineProperty(prototype,'style',{...original,get}); hub.installed++;
+        hub.restore.push(() => {
+          const current = Object.getOwnPropertyDescriptor(prototype, 'style');
+          if (current?.get === get) Object.defineProperty(prototype, 'style', {...current, get: original.get});
+        });
+      } catch { hub.unavailable.push(ctor+'.style'); }
+    }
+    for (const name of ['insertRule','deleteRule','addRule','removeRule','replaceSync']) patch(view.CSSStyleSheet?.prototype, name, 'stylesheet');
+    patch(view.CSSStyleSheet?.prototype, 'replace', 'stylesheet', {async: true});
+    for (const ctor of ['StyleSheet','HTMLStyleElement','HTMLLinkElement']) patch(view[ctor]?.prototype, 'disabled', 'stylesheet');
+    for (const ctor of ['CSSGroupingRule','CSSKeyframesRule']) {
+      for (const name of ['insertRule','deleteRule','appendRule','name']) patch(view[ctor]?.prototype, name, 'stylesheet');
+    }
+    for (const ctor of ['CSSRule','CSSStyleRule','CSSKeyframeRule']) {
+      for (const name of ['cssText','selectorText','keyText']) patch(view[ctor]?.prototype, name, 'stylesheet');
+    }
+    for (const name of ['appendMedium','deleteMedium','mediaText']) patch(view.MediaList?.prototype, name, 'stylesheet');
+    // Rule declarations expose both setProperty() and generated longhand setters.
+    const declarations = view.CSSStyleDeclaration?.prototype;
+    if (declarations) for (const name of Object.getOwnPropertyNames(declarations)) {
+      if (Object.getOwnPropertyDescriptor(declarations,name)?.set || ['setProperty','removeProperty'].includes(name)) {
+        patch(declarations, name, 'stylesheet', {ruleOnly: true});
+      }
+    }
+    // adoptedStyleSheets is an ObservableArray. Preserve its identity (no
+    // Proxy), its native range/type checks and mutator return values. Getter
+    // access invalidates before a following indexed assignment, and saved array
+    // references keep working through observed push/splice/etc. The explicit
+    // invalidateStyles hook still covers a saved reference's direct index writes.
+    // Source: https://drafts.csswg.org/cssom/#dom-documentorshadowroot-adoptedstylesheets
+    const arrays = new WeakSet();
+    const watchArray = array => {
+      if (!array || arrays.has(array)) return;
+      arrays.add(array);
+      for (const name of ['push','pop','shift','unshift','splice','sort','reverse','fill','copyWithin']) {
+        const original = Object.getOwnPropertyDescriptor(array, name), operation = array[name];
+        if (typeof operation !== 'function' || (original && !original.configurable)) continue;
+        function observed(...args) {
+          // A failed native operation can have partially modified an array.
+          // Invalidating on failure preserves pixels without swallowing errors.
+          try { return Reflect.apply(operation, this, args); }
+          finally { notify('stylesheet', this); }
+        }
+        try {
+          Object.defineProperty(array, name, {configurable: true, writable: true, enumerable: original?.enumerable || false, value: observed});
+          const reference = typeof WeakRef === 'function' ? new WeakRef(array) : {deref: () => array};
+          hub.restore.push(() => {
+            const object = reference.deref();
+            if (object && Object.getOwnPropertyDescriptor(object, name)?.value === observed) {
+              if (original) Object.defineProperty(object, name, original); else delete object[name];
+            }
+          });
+        } catch { hub.unavailable.push('adoptedStyleSheets.' + name); }
+      }
+    };
+    for (const ctor of ['Document','ShadowRoot']) {
+      const prototype = view[ctor]?.prototype;
+      patch(prototype, 'adoptedStyleSheets', 'stylesheet');
+      const descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, 'adoptedStyleSheets');
+      if (!descriptor?.get || !descriptor.configurable) continue;
+      function get() {
+        const result = Reflect.apply(descriptor.get, this, []);
+        watchArray(result); notify('stylesheet', this); return result;
+      }
+      try {
+        Object.defineProperty(prototype, 'adoptedStyleSheets', {...descriptor, get}); hub.installed++;
+        hub.restore.push(() => {
+          const current = Object.getOwnPropertyDescriptor(prototype, 'adoptedStyleSheets');
+          if (current?.get === get) Object.defineProperty(prototype, 'adoptedStyleSheets', {...current, get: descriptor.get});
+        });
+      } catch { hub.unavailable.push(ctor + '.adoptedStyleSheets'); }
+    }
+    patch(view.Element?.prototype, 'attachShadow', 'shadow');
+    patch(view.Element?.prototype, 'animate', 'animation');
+    for (const name of ['play','pause','reverse','finish','cancel','updatePlaybackRate','currentTime','startTime','playbackRate','effect','timeline']) patch(view.Animation?.prototype, name, 'animation');
+    for (const ctor of ['AnimationEffect','KeyframeEffect']) for (const name of ['setKeyframes','updateTiming','target','composite','iterationComposite']) patch(view[ctor]?.prototype, name, 'animation');
+  }
+  hub.listeners.add(callback);
+  let active = true;
+  const release = () => {
+    if (!active) return; active = false; hub.listeners.delete(callback);
+    if (!hub.listeners.size) {
+      for (const restore of hub.restore.splice(0).reverse()) { try { restore(); } catch {} }
+      if (view[HUB] === hub) delete view[HUB];
+    }
+  };
+  Object.defineProperty(release, 'capabilities', {get: () => ({installed: hub.installed, unavailable: [...hub.unavailable]})});
+  return release;
+}
+
+return {requiresNativeShadowPaint,subscribeStyleActivity};
+})();
+
+/* dom-scene.js */
+__modules[10]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
 const {solidBackgroundLayers, paintBackgroundLayers}=__modules[8];
+const {requiresNativeShadowPaint}=__modules[9];
+
 
 
 
@@ -668,7 +892,7 @@ const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE',
 const NATIVE = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'IFRAME', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IMG', 'OBJECT', 'EMBED', 'TABLE', 'METER', 'PROGRESS']);
 const rectOf = rect => [rect.left, rect.top, rect.width, rect.height];
 const number = value => Number.parseFloat(value) || 0;
-const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','backgroundSize','backgroundPosition','backgroundRepeat','backgroundOrigin','backgroundClip','font','fontWeight','fontSize','fontFamily','fontKerning','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
+const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','backgroundSize','backgroundPosition','backgroundRepeat','backgroundOrigin','backgroundClip','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
 function shadowParts(value) {
   if (!value || value === 'none') return [];
   return splitCSS(value).map(part => {
@@ -683,11 +907,16 @@ function shadowParts(value) {
  * not bitmap snapshots of HTML. Unsupported/native subtrees are explicit holes.
  */
 class DOMScene {
-  constructor(document, atlas) { this.document = document; this.view = document.defaultView; this.atlas = atlas; this.styles = new WeakMap(); }
+  constructor(document, atlas) { this.document = document; this.view = document.defaultView; this.atlas = atlas; this.styles = new WeakMap(); this.order = new WeakMap(); this.range = document.createRange(); }
+  clear() {
+    this.styles = new WeakMap(); this.order = new WeakMap(); this.boxes = new WeakMap();
+    this.elements = new Set(); this.scene = null; this.selection = null;
+    this.range = this.document.createRange();
+  }
   build(policy) {
     const view = this.view, width = view.innerWidth, height = view.innerHeight;
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
-    this.elements = new Set();
+    this.elements = new Set(); this.boxes = new WeakMap();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
     let background;
     try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
@@ -696,6 +925,24 @@ class DOMScene {
     scene.add([0, 0, width, height], background);
     this.element(this.document.body, scene.clip, 0);
     return scene;
+  }
+  // One border-box/layout metric read per element per build. Read all required
+  // metrics before painting; never hold geometry across a browser layout change.
+  // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
+  rect(node) {
+    let box = this.boxes.get(node);
+    if (!box) { box = {rect: rectOf(node.getBoundingClientRect())}; this.boxes.set(node,box); }
+    return box.rect;
+  }
+  box(node) {
+    this.rect(node);
+    const box = this.boxes.get(node);
+    if (!box.measured) {
+      box.width = node.offsetWidth; box.height = node.offsetHeight;
+      box.clientWidth = node.clientWidth; box.clientHeight = node.clientHeight;
+      box.clientLeft = node.clientLeft; box.clientTop = node.clientTop; box.measured = true;
+    }
+    return box;
   }
   style(node) {
     let style = this.styles.get(node);
@@ -706,7 +953,18 @@ class DOMScene {
     }
     return style;
   }
+  fontStyle(node, style) {
+    // Native text is drawn by the browser. Reading and serializing the full
+    // computed font shorthand for every geometry node was unnecessary work.
+    // Only atlas-eligible text needs these properties; cache them with its style.
+    if (style.font === undefined) {
+      const computed = this.view.getComputedStyle(node);
+      for (const key of ['font','fontWeight','fontSize','fontFamily','fontKerning']) style[key] = computed[key];
+    }
+    return style;
+  }
   invalidateStyles(node = null) {
+    this.order = new WeakMap();
     if (!node || node === this.document.body || node === this.document.documentElement || node === this.document.head) { this.styles = new WeakMap(); return; }
     if (node.nodeType !== 1) node = node.parentElement;
     if (!node) return;
@@ -728,7 +986,7 @@ class DOMScene {
     this.scene.native([x - pad, y - pad, right - x + pad * 2, bottom - y + pad * 2], clip, reason);
   }
   unsupported(node, style) {
-    if (NATIVE.has(node.tagName.toUpperCase()) || node.isContentEditable || node.matches('[data-vb-native-render],.code-editor,.source-editor,.editor-container,.vb-richtext')) return 'native control, image or editor';
+    if (requiresNativeShadowPaint(node) || NATIVE.has(node.tagName.toUpperCase()) || node.isContentEditable || node.matches('[data-vb-native-render],.code-editor,.source-editor,.editor-container,.vb-richtext')) return 'native control, image or editor';
     if (number(style.opacity) !== 1 || style.filter !== 'none' || (style.backdropFilter && style.backdropFilter !== 'none') || style.mixBlendMode !== 'normal') return 'native compositing';
     if (style.clipPath !== 'none' || (style.maskImage && style.maskImage !== 'none') || style.writingMode !== 'horizontal-tb') return 'native clipping or writing mode';
     if (style.transform !== 'none') {
@@ -751,7 +1009,7 @@ class DOMScene {
     if (style.display === 'none' || node.hidden) return;
     this.elements.add(node);
     // visibility may be overridden by a descendant, so do not drop the subtree.
-    const visible = style.visibility === 'visible', rect = rectOf(node.getBoundingClientRect());
+    const visible = style.visibility === 'visible', rect = this.rect(node);
     const area = intersect(rect, clip), inView = area[2] > 0 && area[3] > 0;
     if (!inView && style.overflowX !== 'visible' && style.overflowY !== 'visible') return;
     this.scene.stats.elements++;
@@ -759,7 +1017,8 @@ class DOMScene {
       const reason = this.unsupported(node, style);
       if (reason) { this.native(node, rect, clip, reason); return; }
     }
-    const scaleX = node.offsetWidth ? rect[2] / node.offsetWidth : 1, scaleY = node.offsetHeight ? rect[3] / node.offsetHeight : 1;
+    const box = this.box(node);
+    const scaleX = box.width ? rect[2] / box.width : 1, scaleY = box.height ? rect[3] / box.height : 1;
     let borders, shadows, background, gradient, layers;
     try {
       if (!style.paint) {
@@ -810,25 +1069,28 @@ class DOMScene {
     }
     let childClip = clip;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {
-      const own = [rect[0] + node.clientLeft * scaleX, rect[1] + node.clientTop * scaleY, node.clientWidth * scaleX, node.clientHeight * scaleY];
+      const own = [rect[0] + box.clientLeft * scaleX, rect[1] + box.clientTop * scaleY, box.clientWidth * scaleX, box.clientHeight * scaleY];
       childClip = intersect(clip, [style.overflowX === 'visible' ? clip[0] : own[0], style.overflowY === 'visible' ? clip[1] : own[1], style.overflowX === 'visible' ? clip[2] : own[2], style.overflowY === 'visible' ? clip[3] : own[3]]);
     }
     this.children(node, childClip, depth);
     // Native scrollbar thumbs/buttons remain interactive and platform accurate.
     if (visible && inView && borders) {
       const [t, r, b, l] = borders.map(item => item.width);
-      const sw = rect[2] - node.clientWidth * scaleX - l - r, sh = rect[3] - node.clientHeight * scaleY - t - b;
-      if (node.clientWidth && sw > .5) this.scene.native([rect[0] + rect[2] - r - sw, rect[1] + t, sw, rect[3] - t - b], clip, 'scrollbar');
-      if (node.clientHeight && sh > .5) this.scene.native([rect[0] + l, rect[1] + rect[3] - b - sh, rect[2] - l - r, sh], clip, 'scrollbar');
+      const sw = rect[2] - box.clientWidth * scaleX - l - r, sh = rect[3] - box.clientHeight * scaleY - t - b;
+      if (box.clientWidth && sw > .5) this.scene.native([rect[0] + rect[2] - r - sw, rect[1] + t, sw, rect[3] - t - b], clip, 'scrollbar');
+      if (box.clientHeight && sh > .5) this.scene.native([rect[0] + l, rect[1] + rect[3] - b - sh, rect[2] - l - r, sh], clip, 'scrollbar');
     }
   }
   children(node, clip, depth) {
     // Stable order for the classic IDE's local stacking contexts, including MDI z-order.
-    const nodes = [...node.childNodes].map((child, index) => {
+    let nodes = this.order.get(node);
+    if (!nodes) { nodes = [...node.childNodes].map((child, index) => {
       let z = 0, positioned = false;
       if (child.nodeType === 1) { const style = this.style(child); z = Number(style.zIndex) || 0; positioned = style.position !== 'static'; }
       return {child, index, z, group: z < 0 ? -1 : z > 0 ? 2 : positioned ? 1 : 0};
     }).sort((a, b) => a.group - b.group || a.z - b.z || a.index - b.index);
+      this.order.set(node, nodes);
+    }
     for (const {child} of nodes) {
       if (child.nodeType === 1) this.element(child, clip, depth + 1);
       else if (child.nodeType === 3 && child.textContent.trim()) this.text(child, clip);
@@ -845,17 +1107,17 @@ class DOMScene {
   }
   text(node, clip) {
     const style = this.style(node.parentElement); if (style.visibility !== 'visible') return;
-    const range = this.document.createRange(); range.selectNodeContents(node);
+    const range = this.range; range.selectNodeContents(node);
     const rectangles = [...range.getClientRects()].map(rectOf).filter(r => r[2] && r[3]);
     if (!rectangles.length) return;
-    const native = this.policy.text !== 'gpu' || style.textShadow !== 'none' || style.textDecorationLine !== 'none' || style.direction !== 'ltr' || style.letterSpacing !== 'normal' || Math.abs((node.parentElement.getBoundingClientRect().width / (node.parentElement.offsetWidth || 1)) - 1) > .01 || (this.selection?.rangeCount && this.selection.containsNode(node, true));
+    const native = this.policy.text !== 'gpu' || style.textShadow !== 'none' || style.textDecorationLine !== 'none' || style.direction !== 'ltr' || style.letterSpacing !== 'normal' || Math.abs((this.box(node.parentElement).rect[2] / (this.box(node.parentElement).width || 1)) - 1) > .01 || (this.selection?.rangeCount && this.selection.containsNode(node, true));
     if (native || rectangles.length !== 1 || style.textOverflow === 'ellipsis' || this.style(node.parentElement).transform !== 'none') {
       for (const rect of rectangles) this.scene.native([rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2], clip, 'native text');
       this.scene.stats.nativeText++; return;
     }
     const rect = rectangles[0]; let text = node.textContent;
     if (!style.whiteSpace.startsWith('pre')) text = text.replace(/\s+/g, ' ');
-    const glyph = this.atlas.text(text, style, rect, this.scene.dpr);
+    const glyph = this.atlas.text(text, this.fontStyle(node.parentElement, style), rect, this.scene.dpr);
     if (!glyph) { this.scene.native(rect, clip, 'text atlas capacity'); return; }
     this.scene.add(glyph.rect, [1, 1, 1, 1], {clip, page: glyph.page, uv: glyph.uv, snap: false}); this.scene.stats.gpuText++;
   }
@@ -865,7 +1127,7 @@ return {DOMScene};
 })();
 
 /* retained-scene.js */
-__modules[10]=(()=>{
+__modules[11]=(()=>{
 
 /** Exact retained-scene comparison, not a probabilistic hash. The UI can receive
  * focus/selection/layout notifications without changing any painted pixels.
@@ -917,14 +1179,16 @@ return {sameGeometry,RetainedScene};
 })();
 
 /* renderer.js */
-__modules[11]=(()=>{
+__modules[12]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
 const {CanvasPainter}=__modules[7];
 const {WebGPUPainter}=__modules[5];
 const {WebGLPainter}=__modules[6];
 const {TextAtlas}=__modules[2];
-const {DOMScene}=__modules[9];
-const {RetainedScene}=__modules[10];
+const {DOMScene}=__modules[10];
+const {RetainedScene}=__modules[11];
+const {subscribeStyleActivity}=__modules[9];
+
 
 
 
@@ -956,10 +1220,10 @@ class UIRenderer {
   observe() {
     const invalidate = event => {
       if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
-      if (event?.type === 'vb-theme-change' || event?.type === 'resize' || /^(animation|transition)/.test(event?.type || '')) this.stylesDirty = true;
-      else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
-        this.stylesDirty = true;
-      }
+      // Resource completion and form validity/checked/active/popover pseudo
+      // classes can change styles without an attribute mutation. Scroll and
+      // selection alone reuse style snapshots; every other wake-up resamples.
+      if (event && !['scroll', 'selectionchange'].includes(event.type)) this.stylesDirty = true;
       this.invalidate();
     };
     this.observer = new this.view.MutationObserver(records => {
@@ -976,7 +1240,7 @@ class UIRenderer {
     });
     // Connected only while a canvas backend is active; native HTML incurs no
     // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
-    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keydown', 'keyup', 'toggle', 'beforetoggle', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
     // ResizeObserver catches layout changes which have no DOM mutation (for
     // example intrinsic image sizing or a container resized by a stylesheet).
     // Source: https://www.w3.org/TR/resize-observer/
@@ -990,12 +1254,20 @@ class UIRenderer {
     this.listen(this.view.visualViewport, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'scroll', invalidate);
     this.listen(this.document, 'visibilitychange', () => { if (this.document.hidden) this.cancelFrame(); else invalidate(); });
-    this.listen(this.view, 'pagehide', () => this.dispose());
+    this.listen(this.view, 'pagehide', event => {
+      if (event.persisted) this.cancelFrame(); else this.dispose();
+    });
+    this.listen(this.view, 'pageshow', event => {
+      if (event.persisted && !this.disposed) this.ready = this.setOptions(this.policy, {force: true});
+    });
     this.listen(this.view, 'beforeprint', () => { this.printing = true; if (this.canvas) this.canvas.style.visibility = 'hidden'; });
     this.listen(this.view, 'afterprint', () => { this.printing = false; invalidate(); });
     this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.stylesDirty = true; invalidate(); });
     this.forcedColors = this.view.matchMedia('(forced-colors: active)');
     this.listen(this.forcedColors, 'change', () => { this.ready = this.setOptions(this.policy, {force: true}); });
+    for (const media of ['(prefers-color-scheme: dark)','(prefers-reduced-motion: reduce)','(prefers-contrast: more)']) {
+      this.listen(this.view.matchMedia(media),'change',()=>this.invalidateStyles());
+    }
     this.armDPR();
   }
   armDPR() {
@@ -1035,6 +1307,7 @@ class UIRenderer {
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
         this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
         this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
+        this.releaseStyleActivity = subscribeStyleActivity(this.view, () => { this.stylesDirty = true; this.invalidate(); });
         this.renderNow();
         if (this.driver === painter) this.publish();
         return this.getStats();
@@ -1043,8 +1316,8 @@ class UIRenderer {
         if (this.disposed || generation !== this.generation) return this.getStats();
         // The first frame can fail after observe() connected. HTML fallback
         // must not retain an observer (or a queued frame) from the failed driver.
-        this.cancelFrame(); this.observer.disconnect(); this.resizeObserver?.disconnect();
-        this.observedElements.clear(); this.retained.clear();
+        this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.resizeObserver?.disconnect();
+        this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
       }
@@ -1057,6 +1330,8 @@ class UIRenderer {
     const generation = ++this.generation;
     this.ready = this.activate(this.candidates || ['html'], this.candidateIndex + 1, generation);
   }
+  /** Explicit integration hook for pre-captured native methods or custom paint. */
+  invalidateStyles() { this.stylesDirty = true; this.invalidate(); }
   invalidate() {
     if (this.disposed || this.printing || this.document.hidden || !this.driver) return;
     this.metrics.invalidations++;
@@ -1103,10 +1378,10 @@ class UIRenderer {
   }
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
-    return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
+    return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();
@@ -1128,15 +1403,106 @@ function rendererForDocument(document) { return sessions.get(document)?.renderer
 return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
+/* benchmark.js */
+__modules[13]=(()=>{
+const {PaintScene}=__modules[1];
+const {createPainter}=__modules[12];
+const {deadline}=__modules[3];
+
+
+
+function timingSummary(samples) {
+  if (!samples.length) return null;
+  const sorted = [...samples].sort((a,b) => a-b);
+  return {samples: [...samples], count: samples.length, p50Ms: sorted[Math.floor(sorted.length*.5)], p95Ms: sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))]};
+}
+/** Diagnostic-only pass timestamps. They are NOT frame latency or FPS.
+ * Sources: https://www.w3.org/TR/webgpu/#timestamp-query
+ * https://www.w3.org/TR/webgpu/#dom-gpurenderpasstimestampwrites
+ * All resources are private to a benchmark; no normal-frame readbacks/waits.
+ */
+class PassTimer {
+  constructor(painter) {
+    this.painter = painter; this.device = painter.device;
+    if (!this.device?.features.has('timestamp-query')) return;
+    const B = painter.view.GPUBufferUsage;
+    try {
+      this.querySet = this.device.createQuerySet({type:'timestamp', count:2});
+      this.resolve = this.device.createBuffer({size:16, usage:B.QUERY_RESOLVE | B.COPY_SRC});
+      this.readback = this.device.createBuffer({size:16, usage:B.COPY_DST | B.MAP_READ});
+    } catch (error) { this.dispose(); throw error; }
+  }
+  async measure(scene) {
+    const p = this.painter, now = () => p.view.performance.now(), start = now();
+    p.render(scene, this.querySet ? {timing:this} : {});
+    const cpuMs = now()-start;
+    if (!this.querySet) return {cpuMs, gpuMs:null};
+    await deadline(this.readback.mapAsync(p.view.GPUMapMode.READ), 3000, 'GPU timestamp readback timed out');
+    try {
+      const data = new BigUint64Array(this.readback.getMappedRange());
+      return {cpuMs, gpuMs: data[1] >= data[0] ? Number(data[1]-data[0])/1e6 : null};
+    } finally { this.readback.unmap(); }
+  }
+  dispose() { this.querySet?.destroy(); this.resolve?.destroy(); this.readback?.destroy(); this.querySet = this.resolve = this.readback = null; }
+}
+/** Run on the actual user's adapter, preserving all IDE/project/render settings.
+ * Opaque sealed primitives isolate painter submission and optional pass time.
+ * The native HTML compositor is not comparable to a canvas submission call, so
+ * this report explicitly does not invent an HTML FPS or whole-IDE speedup.
+ */
+async function benchmarkRendering(document, {frames = 30, quads = 10000, backends = ['webgpu','webgl2','canvas2d'], signal, onProgress = () => {}} = {}) {
+  if (!Number.isInteger(frames) || frames < 1 || frames > 120 || !Number.isInteger(quads) || quads < 1 || quads > 10000) throw new RangeError('Benchmark frames (1–120) and quads (1–10000) must be bounded integers');
+  if (!Array.isArray(backends) || !backends.length || backends.some(b => !['webgpu','webgl2','canvas2d'].includes(b))) throw new TypeError('Invalid benchmark backends');
+  const view = document.defaultView, results = [], now = () => view.performance.now();
+  const abort = () => { if (signal?.aborted) throw new view.DOMException('Rendering measurement cancelled','AbortError'); };
+  const scene = new PaintScene(512,512);
+  for (let i=0;i<quads;i++) scene.add([(i%100)*5,Math.floor(i/100)*5,4,4],[.2,.4,.8,1]);
+  scene.seal();
+  for (const backend of [...new Set(backends)]) {
+    abort(); onProgress(backend);
+    const canvas = document.createElement('canvas'); // Detached: no changes to IDE layout or hit testing.
+    let painter, timer;
+    try {
+      painter = await createPainter(backend,canvas); abort();
+      timer = new PassTimer(painter);
+      const cpu = [], gpu = [];
+      painter.render(scene); // Warm allocation/packing is not mixed into repeated submission timings.
+      if (painter.device) await deadline(painter.device.queue.onSubmittedWorkDone(),3000);
+      for (let i=0;i<frames;i++) {
+        abort();
+        if (i%5 === 0) { await new Promise(resolve => view.setTimeout(resolve,0)); abort(); } // Keep cancellation/UI responsive, including hidden tabs.
+        if (painter.device) {
+          const sample = await timer.measure(scene); cpu.push(sample.cpuMs);
+          if (sample.gpuMs !== null) gpu.push(sample.gpuMs);
+        } else { const start=now(); painter.render(scene); cpu.push(now()-start); }
+      }
+      if (painter.device) await deadline(painter.device.queue.onSubmittedWorkDone(),3000);
+      results.push({backend, available:true, adapter:painter.adapterInfo || null,
+        cpuSubmission:timingSummary(cpu), gpuPass:timingSummary(gpu), counters:{...painter.stats}});
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      results.push({backend, available:false, reason:error.message || String(error)});
+    } finally { timer?.dispose(); painter?.dispose(); canvas.width=canvas.height=1; }
+  }
+  abort();
+  return {schema:1, frames, quads, width:512, height:512, dpr:1, userAgent:view.navigator.userAgent, results,
+    claims:{physicalHardwareCertified:false, nativeVB6PixelParityCertified:false, wholeIDEPerformanceCompared:false},
+    note:'CPU submission and optional GPU pass timestamps for sealed primitives only. No presentation/FPS, input latency, power or native HTML compositor comparison. Adapter may be software. Timestamp values may be quantized.'};
+}
+
+return {timingSummary,PassTimer,benchmarkRendering};
+})();
+
 /* entry.js */
-__modules[12]=(()=>{
+__modules[14]=(()=>{
 const {BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect}=__modules[0];
 const {PaintScene, parseColor}=__modules[1];
 const {TextAtlas}=__modules[2];
 const {WebGPUPainter, UI_SHADER}=__modules[5];
 const {WebGLPainter}=__modules[6];
 const {CanvasPainter}=__modules[7];
-const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[11];
+const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[12];
+const {benchmarkRendering, timingSummary}=__modules[13];
 
 
 
@@ -1145,7 +1511,8 @@ const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules
 
 
 
-return {BACKENDS,DEFAULT_RENDERING,normalizeRendering,renderingCandidates,physicalSize,snapRect,intersect,PaintScene,parseColor,TextAtlas,WebGPUPainter,UI_SHADER,WebGLPainter,CanvasPainter,UIRenderer,createPainter,retainRenderer,rendererForDocument};
+
+return {benchmarkRendering,timingSummary,BACKENDS,DEFAULT_RENDERING,normalizeRendering,renderingCandidates,physicalSize,snapRect,intersect,PaintScene,parseColor,TextAtlas,WebGPUPainter,UI_SHADER,WebGLPainter,CanvasPainter,UIRenderer,createPainter,retainRenderer,rendererForDocument};
 })();
-globalThis["VB6Rendering"]=__modules[12];
+globalThis["VB6Rendering"]=__modules[14];
 })();

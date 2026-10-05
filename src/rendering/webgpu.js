@@ -96,7 +96,7 @@ export class WebGPUPainter {
     }
     return record.group;
   }
-  render(scene, {readback = false} = {}) {
+  render(scene, {readback = false, timing = null} = {}) {
     const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { record.texture.destroy(); this.textures.delete(page); }
     if (this.disposed) throw new Error('Renderer disposed');
@@ -114,15 +114,26 @@ export class WebGPUPainter {
     if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
     const images = new Map();
     for (const page of usedPages) images.set(page, this.image(page));
-    device.queue.writeBuffer(this.uniform, 0, new Float32Array([scene.width, scene.height, size.scaleX, size.scaleY]));
+    const screen = this.screenData || (this.screenData = new Float32Array(4));
+    const values = [scene.width, scene.height, size.scaleX, size.scaleY];
+    if (!this.screenUploaded || values.some((v, i) => Math.fround(v) !== screen[i])) {
+      screen.set(values); device.queue.writeBuffer(this.uniform, 0, screen); this.screenUploaded = true;
+    }
     if (count && !reuse) { this.stats.instanceUploads++; device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
     rememberInstances(this, scene, size);
     const encoder = device.createCommandEncoder({label: 'VB6 UI frame'});
     const texture = this.context.getCurrentTexture();
-    const pass = encoder.beginRenderPass({colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
+    const pass = encoder.beginRenderPass({...(timing ? {timestampWrites: {querySet: timing.querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1}} : {}), colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
     pass.setBindGroup(0, this.screenGroup); pass.setVertexBuffer(0, this.buffer);
     for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.page ? images.get(group.page) : this.whiteGroup); pass.draw(6, group.count, 0, group.first); }
     pass.end();
+    // Optional diagnostic timestamps are resolved with this pass, not wall-clock
+    // queue completion. Normal frames allocate no queries and perform no waits.
+    // Source: https://www.w3.org/TR/webgpu/#timestamp-query
+    if (timing) {
+      encoder.resolveQuerySet(timing.querySet, 0, 2, timing.resolve, 0);
+      encoder.copyBufferToBuffer(timing.resolve, 0, timing.readback, 0, 16);
+    }
     // Queue the copy in the SAME submission as rendering, before automatic
     // canvas-texture expiry. Do not call getCurrentTexture after an await.
     // Source: https://gpuweb.github.io/gpuweb/#automatic-expiry-task-source

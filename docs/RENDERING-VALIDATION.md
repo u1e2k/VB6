@@ -1,9 +1,9 @@
 # Rendering qualification — 2026-10-05
 
-## Current scope
+## Historical qualification and current release scope
 
 **The strict software-GPU pixel gate has passed. The full GPU-only rendering and
-physical-device performance goals have not been certified. PR #21 remains draft.**
+physical-device performance goals have not been certified. The final integration is described in [RENDERING-RELEASE.md](RENDERING-RELEASE.md).**
 
 The attributed classic HTML/CSS improvements are already merged separately in
 [PR #36](https://github.com/wieslawsoltes/VB6/pull/36), commit
@@ -84,10 +84,11 @@ rebuild benchmark that accidentally skips painting: that test uses `force: true`
 3. Complete the remaining GPU-painted surfaces before calling this a fully
    WebGPU-rendered IDE. Layout, accessibility, native editing, text, icons,
    existing graphics canvases and unsupported CSS still rely on DOM/native paint.
-4. Broaden dynamic-style invalidation. CSS transitions/animations and observed
-   geometry changes are covered; arbitrary CSSOM color-only mutations and
-   script-created animations without a wake-up event need explicit invalidation.
+4. The final integration adds CSSOM and script-created animation observation.
+   Pre-captured native references and direct indexed adopted-sheet array edits
+   still require the explicit invalidation hook; see the release document.
 
-See [RENDERING.md](RENDERING.md) for API and settings. Keep the qualification
-boundaries separate: green software-GPU checks are necessary, but not sufficient
-for the user's complete rendering/performance merge conditions.
+See [RENDERING.md](RENDERING.md) for API and settings. Keep the qualification boundaries separate: passing software-GPU cases does not
+constitute physical-hardware or native Windows visual certification. This release
+ships the validated dual-renderer integration, not a claim that these broader
+compatibility goals are complete.

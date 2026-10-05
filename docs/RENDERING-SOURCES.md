@@ -60,3 +60,23 @@ compositor can disable the latter. Each strict job must execute its required
 backend and pass framebuffer/presentation checks without substituting a fallback.
 SwiftShader CPU submission timings are not physical-GPU performance evidence.
 The browser runner also accepts normal unforced adapters for hardware testing.
+
+## CSSOM, scripted animation and timing APIs
+
+`src/rendering/style-activity.js` is original code using the CSSWG CSSOM and W3C
+Web Animations specifications, linked directly in its header. The subscription
+layer preserves native object/Promise identity and restores descriptors on release.
+`src/rendering/benchmark.js` and `webgpu.js` cite W3C WebGPU timestamp-query and
+render-pass timestamp semantics. CPU submission and GPU pass timings are never
+substituted for one another. No third-party implementation or font was imported.
+
+## Runtime observation and measurement
+
+CSSOM rule changes, observable adopted stylesheet arrays and Web Animations are
+observed by original code in `src/rendering/style-activity.js`; native method
+results, exceptions and object identities are preserved, with restoration on the
+last subscriber release. References: https://drafts.csswg.org/cssom/ and
+https://www.w3.org/TR/web-animations-1/. Closed shadow host treatment follows the
+encapsulation contract in https://dom.spec.whatwg.org/#dom-element-attachshadow.
+The local benchmark's optional GPU pass timestamps follow
+https://www.w3.org/TR/webgpu/#timestamp-query and are not CPU-clock estimates.

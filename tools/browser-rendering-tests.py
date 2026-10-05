@@ -7,7 +7,7 @@ backends are explicitly skipped. Reports distinguish functional correctness,
 pixel parity with our HTML path, CPU timing and physical-hardware qualification.
 """
 from __future__ import annotations
-import argparse, base64, functools, http.server, io, json, os, platform, shlex, shutil, threading, time, traceback
+import argparse, base64, functools, http.server, io, json, os, platform, shlex, shutil, subprocess, threading, time, traceback
 from pathlib import Path
 from PIL import Image, ImageChops
 from playwright.sync_api import sync_playwright
@@ -25,6 +25,7 @@ REQUIRED = [name for name, enabled in [('webgpu', args.require_webgpu), ('webgl2
 OUT.mkdir(parents=True, exist_ok=True)
 BUNDLE = (ROOT / 'dist/vb6-rendering.js').read_text()
 IDE = (ROOT / 'dist/VB6-Studio-Web.html').read_text()
+CONTROL_FIXTURE = subprocess.check_output(['node','--input-type=module','-e',"import {bundle} from './tools/bundle.mjs';process.stdout.write(bundle('./tests/fixtures/rendering-controls.mjs','RenderControls'));"],cwd=ROOT,text=True)
 URL = None
 if REQUIRED:
     class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -323,6 +324,219 @@ with sync_playwright() as playwright:
         if backend!='canvas2d': check(result['instanceUploads']==1,'Texture replacement unnecessarily uploaded sealed geometry: '+str(result))
         check(not page.errors,str(page.errors));page.close();return result
     case('replaced texture source has exact new pixels without geometry upload',replacement_texture)
+
+
+    def script_style_activity():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        result = page.evaluate('''async backend=>{
+          document.body.innerHTML='<style id="rules">#target{position:absolute;left:16px;top:16px;width:80px;height:32px;background:rgb(255,0,0)}</style><div id="target"></div>';
+          const target=document.querySelector('#target'),sheet=document.querySelector('#rules').sheet,rule=sheet.cssRules[0];
+          const original={insert:CSSStyleSheet.prototype.insertRule,play:Animation.prototype.play,animate:Element.prototype.animate};
+          const r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
+          const settle=async()=>{for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)};
+          const fill=()=>r.retained.scene.commands.filter(c=>!c.hole&&c.rect[0]===16&&c.rect[1]===16&&c.rect[2]===80&&c.rect[3]===32).at(-1)?.color;
+          const expect=async(color,label)=>{await settle();if(JSON.stringify(fill())!==JSON.stringify(color))throw Error(label+': '+JSON.stringify(fill()));};
+          try{
+            if(r.backend!==backend)throw Error('Required backend fell back');
+            await expect([1,0,0,1],'initial');
+            rule.style.backgroundColor='rgb(0,255,0)';await expect([0,1,0,1],'generated CSSOM property setter');
+            rule.style.setProperty('background-color','rgb(0,0,255)');await expect([0,0,1,1],'CSSOM setProperty');
+            sheet.insertRule('#target{background:rgb(255,0,0)}',1);await expect([1,0,0,1],'insertRule');
+            sheet.deleteRule(1);await expect([0,0,1,1],'deleteRule');
+            const adopted=new CSSStyleSheet();adopted.replaceSync('#target{background:rgb(0,255,0)}');document.adoptedStyleSheets=[adopted];await expect([0,1,0,1],'adopted sheet');
+            const promise=adopted.replace('#target{background:rgb(255,0,0)}');await promise;await expect([1,0,0,1],'async replace');
+            document.adoptedStyleSheets=[];await expect([0,0,1,1],'remove adopted sheet');
+            const animation=target.animate([{background:'rgb(0,255,0)'},{background:'rgb(0,255,0)'}],{duration:50,fill:'forwards'});
+            await animation.finished;await expect([0,1,0,1],'script animate final');
+            animation.pause();animation.currentTime=0;animation.effect.setKeyframes([{background:'rgb(255,0,0)'},{background:'rgb(255,0,0)'}]);await expect([1,0,0,1],'paused scrub and keyframes');
+            animation.cancel();await expect([0,0,1,1],'script cancel');
+            const frames=r.metrics.frames;await new Promise(done=>setTimeout(done,100));if(r.metrics.frames!==frames)throw Error('CSSOM observer left an idle loop');
+            await r.setOptions({backend:'html'});
+            if(CSSStyleSheet.prototype.insertRule!==original.insert||Animation.prototype.play!==original.play||Element.prototype.animate!==original.animate)throw Error('Native APIs not restored on HTML fallback');
+            return {backend,scriptCSSOM:true,adoptedSheets:true,scriptAnimation:true,pausedScrub:true,zeroIdleSubmissions:true,nativeDescriptorsRestored:true};
+          }finally{r.dispose();document.adoptedStyleSheets=[];}
+        }''',backend)
+        check(not page.errors,str(page.errors));page.close();return result
+    case('script CSSOM changes and Web Animations repaint without polling and restore native APIs',script_style_activity)
+
+    def local_measurement():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        report=page.evaluate('''async backend=>{
+          const before=document.body.innerHTML;
+          const report=await VB6Rendering.benchmarkRendering(document,{frames:4,quads:1000,backends:[backend]});
+          if(document.body.innerHTML!==before)throw Error('Benchmark mutated the caller DOM');
+          return report;
+        }''',backend)
+        item=report['results'][0]
+        check(item['backend']==backend and item['available'],str(item))
+        check(item['cpuSubmission']['count']==4,'CPU samples missing')
+        if item['gpuPass'] is not None:
+            check(item['gpuPass']['count']==4 and all(x>=0 for x in item['gpuPass']['samples']),'Invalid GPU timestamps')
+        check(not report['claims']['wholeIDEPerformanceCompared'],'Primitive test falsely claims whole-IDE performance')
+        METRICS['localBenchmark']=report
+        check(not page.errors,str(page.errors));page.close();return item
+    case('local adapter measurement preserves DOM and separates CPU from GPU pass timestamps',local_measurement)
+
+
+    for theme,dpr,mobile in [('classic',1,False),('standard',1.5,False),('contrast',2,False),('classic',2,True)]:
+        def control_states(theme=theme,dpr=dpr,mobile=mobile):
+            page = new_page(browser,dpr)
+            if mobile: page.set_viewport_size({'width':390,'height':760})
+            page.add_style_tag(content=(ROOT/'dist/vb6-controls.css').read_text())
+            page.add_script_tag(content=CONTROL_FIXTURE)
+            page.evaluate("""({theme,mobile})=>{
+              document.body.innerHTML='<div id="test" style="position:absolute;inset:0;overflow:auto"></div>';
+              RenderControls.applyTheme(document.body,theme);
+              const types=['CommandButton','TextBox','CheckBox','OptionButton','ComboBox','ListBox','HScrollBar','VScrollBar','ProgressBar','Label','Frame','UpDown','PictureBox','TabStrip','TreeView'];
+              window.controls=types.map((type,i)=>{
+                const columns=mobile?1:4,model=RenderControls.createControl(type,'Control'+i, (16+i%columns*224)*15,(16+Math.floor(i/columns)*100)*15);
+                Object.assign(model.properties,{Width:196*15,Height:64*15,Text:'Edit text',Caption:type,Min:0,Max:100,Value:30,List:['First','Second']});
+                const c=new RenderControls.BrowserControl(model,{backend:'canvas2d'});document.querySelector('#test').append(c.node);return c;
+              });
+              controls[12].draw('line',[0,0,1200,500],255);
+              window.fixtureRenderer=new VB6Rendering.UIRenderer(document,{backend:'html'});
+            }""",dict(theme=theme,mobile=mobile))
+            backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+            comparisons=[]
+            for phase in ['normal','changed','selection']:
+                if phase=='changed': page.evaluate("controls[0].Enabled=0;controls[2].Value=1;controls[3].Value=-1;controls[4].ListIndex=1;controls[6].Value=60;controls[8].Value=70;controls[1].Text='Updated Unicode: αβ';undefined")
+                if phase=='selection': page.evaluate("controls[1].input.focus();controls[1].input.setSelectionRange(0,7);undefined")
+                page.evaluate('fixtureRenderer.setOptions({backend:"html"})')
+                page.evaluate('async()=>{await document.fonts.ready;for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)}')
+                baseline=page.screenshot()
+                page.evaluate('backend=>fixtureRenderer.setOptions({backend,fallbacks:["html"]})',backend)
+                page.evaluate('async()=>{for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)}')
+                check(page.evaluate('fixtureRenderer.backend')==backend,'Control-state backend fell back')
+                image=page.screenshot();comparison=pixels(baseline,image)
+                label=f'controls-{theme}-{dpr}-{mobile}-{phase}'
+                (OUT/(label+'-html.png')).write_bytes(baseline);(OUT/(label+'-'+backend+'.png')).write_bytes(image)
+                comparisons.append(dict(phase=phase,**comparison))
+                check(comparison['changedPixels']==0,'Control-state pixels differ: '+label+': '+str(comparison))
+            # Native editing remains genuinely editable through the GPU layer.
+            page.locator('[data-control="Control1"] input').fill('Keyboard works')
+            check(page.evaluate('controls[1].Text')=='Keyboard works','Input model stopped updating')
+            page.evaluate('fixtureRenderer.dispose();controls.forEach(c=>c.dispose());undefined')
+            check(not page.errors,str(page.errors));page.close()
+            return dict(backend=backend,theme=theme,dpr=dpr,mobile=mobile,controls=15,states=comparisons)
+        case(f'runtime control states / theme {theme} / DPR {dpr} / mobile {mobile}',control_states)
+
+
+    def detached_window():
+        page=new_page(browser,1,ide=True)
+        backend=REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',backend)
+        with page.expect_popup() as opened:
+            page.get_by_label('Float Properties in Browser Window',exact=True).click()
+        popup=opened.value;popup.wait_for_selector('.browser-window-root[data-ready="true"]')
+        popup.on('pageerror',lambda error:page.errors.append(str(error)))
+        page.wait_for_function('vb6Studio.browserWindows.windows.size === 1')
+        state=page.evaluate("""async()=>{
+          const record=[...vb6Studio.browserWindows.windows.values()][0],r=VB6Studio.rendererForDocument?.(record.doc);
+          // The renderer belongs to the installer's bundle, not a second copy
+          // injected into the popup. Query observable status through its owner.
+          return {canvas:record.doc.querySelectorAll('[data-vb-render-layer]').length,main:vb6Studio.rendering.backend};
+        }""")
+        popup.wait_for_selector('[data-vb-render-layer]',state='attached')
+        page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})')
+        popup.wait_for_function('!document.querySelector("[data-vb-render-layer]")')
+        page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',backend)
+        popup.wait_for_selector('[data-vb-render-layer]',state='attached')
+        popup.close();page.wait_for_function('vb6Studio.browserWindows.windows.size === 0')
+        check(page.evaluate('vb6Studio.rendering.backend')==backend,'Closing detached owner disposed main renderer')
+        check(state['main']==backend,str(state));check(not page.errors,str(page.errors));page.close()
+        return dict(backend=backend,detached=True,liveSwitch=True,mainSurvived=True)
+    case('real detached Properties window inherits live backend policy and releases independently',detached_window)
+
+    def standalone_runtime():
+        page=browser.new_page(viewport={'width':800,'height':600});page.errors=[]
+        page.on('pageerror',lambda error:page.errors.append(str(error)))
+        if URL: page.goto(URL+'dist/examples/calculator.html')
+        else: page.set_content((ROOT/'dist/examples/calculator.html').read_text())
+        page.wait_for_function('window.vb6Application?.renderer');page.evaluate('vb6Application.renderer.ready')
+        backend=REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate('backend=>vb6Application.renderer.setOptions({backend,fallbacks:["html"]})',backend)
+        check(page.evaluate('vb6Application.renderer.backend')==backend,'Standalone app did not activate required backend')
+        check(page.evaluate('vb6Application.renderer.policy.backend')==backend,'Standalone rendering policy not applied')
+        page.evaluate('vb6Application.renderer.setOptions({backend:"html"})');page.wait_for_timeout(100)
+        before=page.screenshot()
+        page.evaluate('backend=>vb6Application.renderer.setOptions({backend,fallbacks:["html"]})',backend);page.wait_for_timeout(100)
+        after=page.screenshot();comparison=pixels(before,after)
+        (OUT/'standalone-html.png').write_bytes(before);(OUT/('standalone-'+backend+'.png')).write_bytes(after)
+        check(comparison['changedPixels']==0,'Standalone calculator differs: '+str(comparison))
+        buttons=page.locator('.vb-command');check(buttons.count()>0,'Standalone has no controls');buttons.first.click()
+        check(page.evaluate('vb6Application.vm.state')!='error','Standalone input produced a runtime error')
+        page.evaluate('vb6Application.dispose();undefined');check(page.locator('[data-vb-render-layer]').count()==0,'Standalone teardown leaked a renderer')
+        check(not page.errors,str(page.errors));page.close();return dict(backend=backend,pixels=comparison,executable=True,cleanup=True)
+    case('shipped standalone calculator executes with required renderer and exact pixels',standalone_runtime)
+
+    def paint_wakeups():
+        page=new_page(browser)
+        backend=REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate('''async backend=>{
+          document.head.insertAdjacentHTML('beforeend',`<style id="activity-style">
+            #activity-panel { position:absolute;left:16px;top:16px;width:240px;height:100px;background:rgb(255,0,0) }
+            #activity-panel:has(input:valid) { background:rgb(0,255,0) }
+            #activity-key { position:absolute;left:16px;top:130px;background:white;border:0;outline:none;width:120px;height:30px }
+            #activity-key:active {background:rgb(0,0,255)}
+            #activity-color {position:absolute;left:300px;top:16px;width:80px;height:80px;background:white}
+            #activity-shadow {position:absolute;left:420px;top:16px;width:100px;height:60px;background:white}
+          </style>`);
+          document.body.innerHTML='<div id="activity-panel"><input required></div><button id="activity-key">Key</button><div id="activity-color"></div><div id="activity-shadow"></div><div id="activity-popover" popover>Native popover</div>';
+          window.nativeRuleInsert=CSSStyleSheet.prototype.insertRule;
+          window.activityRenderer=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await activityRenderer.ready;
+        }''',backend)
+        check(page.evaluate('activityRenderer.backend')==backend,'Lifecycle backend fell back')
+        page.locator('#activity-panel input').fill('Valid')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-panel')).backgroundColor==='rgb(0, 255, 0)'")
+        page.locator('#activity-key').focus();page.keyboard.down('Space')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-key')).backgroundColor==='rgb(0, 0, 255)'")
+        page.keyboard.up('Space')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-key')).backgroundColor==='rgb(255, 255, 255)'")
+        page.evaluate('''()=>{nativeRuleInsert.call(document.querySelector('#activity-style').sheet,'#activity-color{background:rgb(255,0,255)}',document.querySelector('#activity-style').sheet.cssRules.length);document.querySelector('#activity-style').dispatchEvent(new Event('load'));}''')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-color')).backgroundColor==='rgb(255, 0, 255)'")
+        page.evaluate('''()=>{const sheet=new CSSStyleSheet();sheet.replaceSync('#activity-color{background:rgb(0,255,255)}');window.adopted=document.adoptedStyleSheets;window.adoptedSheet=sheet;adopted.push(sheet)}''')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-color')).backgroundColor==='rgb(0, 255, 255)'")
+        page.evaluate('adopted.pop();undefined')
+        page.wait_for_function("activityRenderer.adapter.style(document.querySelector('#activity-color')).backgroundColor==='rgb(255, 0, 255)'")
+        page.evaluate('document.querySelector("#activity-popover").showPopover();undefined')
+        page.wait_for_function('activityRenderer.adapter.elements.has(document.querySelector("#activity-popover"))')
+        page.evaluate('document.querySelector("#activity-popover").hidePopover();undefined')
+        page.wait_for_function('!activityRenderer.adapter.elements.has(document.querySelector("#activity-popover"))')
+        page.evaluate('''()=>{const root=document.querySelector('#activity-shadow').attachShadow({mode:'closed'});root.innerHTML='<div style="background:#00ff00;height:60px">Closed root</div>';}''')
+        page.wait_for_function('''()=>{const r=activityRenderer,host=document.querySelector('#activity-shadow'),s=r.adapter.style(host);return r.adapter.unsupported(host,s)==='native control, image or editor'}''')
+        page.evaluate('dispatchEvent(new PageTransitionEvent("pagehide",{persisted:true}));undefined')
+        check(not page.evaluate('activityRenderer.disposed'),'Persisted pagehide destroyed the live renderer')
+        page.evaluate('dispatchEvent(new PageTransitionEvent("pageshow",{persisted:true}));undefined');page.evaluate('activityRenderer.ready')
+        check(page.evaluate('activityRenderer.backend')==backend,'Persisted pageshow did not restore renderer')
+        # Once detached from the renderer, adopted arrays retain ordinary native
+        # mutators and current contents; observation never changes array identity.
+        page.evaluate('activityRenderer.setOptions({backend:"html"})')
+        check(page.evaluate('!Object.hasOwn(adopted,"push") && document.adoptedStyleSheets===adopted'),'Adopted-sheet observation leaked or replaced array identity')
+        baseline=page.screenshot();page.evaluate('backend=>activityRenderer.setOptions({backend,fallbacks:["html"]})',backend)
+        page.wait_for_timeout(100);rendered=page.screenshot();comparison=pixels(baseline,rendered)
+        (OUT/'activity-html.png').write_bytes(baseline);(OUT/('activity-'+backend+'.png')).write_bytes(rendered)
+        check(comparison['changedPixels']==0,'Lifecycle/shadow pixels differ: '+str(comparison))
+        page.evaluate('activityRenderer.dispose();undefined');check(not page.errors,str(page.errors));page.close()
+        return dict(backend=backend,inputValidity=True,keyboardActive=True,resourceEvent=True,adoptedSavedMutators=True,popover=True,closedShadow=True,persistedLifecycleEvents=True,pixels=comparison)
+    case('pseudo-class, resource, adopted-sheet, shadow and persisted-page lifecycle invalidation',paint_wakeups)
+
+    def options_measurement():
+        page=new_page(browser,ide=True)
+        before=page.evaluate('JSON.stringify({policy:vb6Studio.rendering.policy,settings:vb6Studio.project.settings})')
+        page.evaluate('vb6Studio.optionsDialog();undefined');page.get_by_role('tab',name='Rendering',exact=True).click()
+        # Invoke both real button handlers in one task. On a fast software
+        # adapter the complete measurement can finish before Playwright's next
+        # actionability round; waiting to click a then-disabled Cancel is a race.
+        page.evaluate('''()=>{const buttons=[...document.querySelectorAll('button')];buttons.find(n=>n.textContent==='Measure Rendering').click();const cancel=buttons.find(n=>n.textContent==='Cancel Measurement');if(cancel.disabled)throw Error('Cancel was not enabled');cancel.click();}''')
+        page.wait_for_function('!Array.from(document.querySelectorAll("button")).find(n=>n.textContent==="Measure Rendering").disabled')
+        check('cancelled' in page.locator('pre[aria-live]').inner_text().lower(),'Measurement did not report cancellation')
+        check(page.evaluate('JSON.stringify({policy:vb6Studio.rendering.policy,settings:vb6Studio.project.settings})')==before,'Measurement changed settings')
+        page.get_by_role('button',name='Cancel',exact=True).click()
+        check(page.evaluate('JSON.stringify({policy:vb6Studio.rendering.policy,settings:vb6Studio.project.settings})')==before,'Options Cancel changed measurement policy')
+        check(not page.errors,str(page.errors));page.close();return {'cancelled':True,'settingsPreserved':True}
+    case('classic Options measurement can cancel without changing renderer or export settings',options_measurement)
 
     def benchmark():
         page=new_page(browser,ide=True)

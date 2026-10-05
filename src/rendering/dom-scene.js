@@ -1,11 +1,12 @@
 import {PaintScene, parseColor, splitCSS} from './scene.js';
 import {intersect} from './policy.js';
 import {solidBackgroundLayers, paintBackgroundLayers} from './background.js';
+import {requiresNativeShadowPaint} from './style-activity.js';
 const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 const NATIVE = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'IFRAME', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IMG', 'OBJECT', 'EMBED', 'TABLE', 'METER', 'PROGRESS']);
 const rectOf = rect => [rect.left, rect.top, rect.width, rect.height];
 const number = value => Number.parseFloat(value) || 0;
-const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','backgroundSize','backgroundPosition','backgroundRepeat','backgroundOrigin','backgroundClip','font','fontWeight','fontSize','fontFamily','fontKerning','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
+const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','backgroundSize','backgroundPosition','backgroundRepeat','backgroundOrigin','backgroundClip','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
 function shadowParts(value) {
   if (!value || value === 'none') return [];
   return splitCSS(value).map(part => {
@@ -20,11 +21,16 @@ function shadowParts(value) {
  * not bitmap snapshots of HTML. Unsupported/native subtrees are explicit holes.
  */
 export class DOMScene {
-  constructor(document, atlas) { this.document = document; this.view = document.defaultView; this.atlas = atlas; this.styles = new WeakMap(); }
+  constructor(document, atlas) { this.document = document; this.view = document.defaultView; this.atlas = atlas; this.styles = new WeakMap(); this.order = new WeakMap(); this.range = document.createRange(); }
+  clear() {
+    this.styles = new WeakMap(); this.order = new WeakMap(); this.boxes = new WeakMap();
+    this.elements = new Set(); this.scene = null; this.selection = null;
+    this.range = this.document.createRange();
+  }
   build(policy) {
     const view = this.view, width = view.innerWidth, height = view.innerHeight;
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
-    this.elements = new Set();
+    this.elements = new Set(); this.boxes = new WeakMap();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
     let background;
     try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
@@ -33,6 +39,24 @@ export class DOMScene {
     scene.add([0, 0, width, height], background);
     this.element(this.document.body, scene.clip, 0);
     return scene;
+  }
+  // One border-box/layout metric read per element per build. Read all required
+  // metrics before painting; never hold geometry across a browser layout change.
+  // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
+  rect(node) {
+    let box = this.boxes.get(node);
+    if (!box) { box = {rect: rectOf(node.getBoundingClientRect())}; this.boxes.set(node,box); }
+    return box.rect;
+  }
+  box(node) {
+    this.rect(node);
+    const box = this.boxes.get(node);
+    if (!box.measured) {
+      box.width = node.offsetWidth; box.height = node.offsetHeight;
+      box.clientWidth = node.clientWidth; box.clientHeight = node.clientHeight;
+      box.clientLeft = node.clientLeft; box.clientTop = node.clientTop; box.measured = true;
+    }
+    return box;
   }
   style(node) {
     let style = this.styles.get(node);
@@ -43,7 +67,18 @@ export class DOMScene {
     }
     return style;
   }
+  fontStyle(node, style) {
+    // Native text is drawn by the browser. Reading and serializing the full
+    // computed font shorthand for every geometry node was unnecessary work.
+    // Only atlas-eligible text needs these properties; cache them with its style.
+    if (style.font === undefined) {
+      const computed = this.view.getComputedStyle(node);
+      for (const key of ['font','fontWeight','fontSize','fontFamily','fontKerning']) style[key] = computed[key];
+    }
+    return style;
+  }
   invalidateStyles(node = null) {
+    this.order = new WeakMap();
     if (!node || node === this.document.body || node === this.document.documentElement || node === this.document.head) { this.styles = new WeakMap(); return; }
     if (node.nodeType !== 1) node = node.parentElement;
     if (!node) return;
@@ -65,7 +100,7 @@ export class DOMScene {
     this.scene.native([x - pad, y - pad, right - x + pad * 2, bottom - y + pad * 2], clip, reason);
   }
   unsupported(node, style) {
-    if (NATIVE.has(node.tagName.toUpperCase()) || node.isContentEditable || node.matches('[data-vb-native-render],.code-editor,.source-editor,.editor-container,.vb-richtext')) return 'native control, image or editor';
+    if (requiresNativeShadowPaint(node) || NATIVE.has(node.tagName.toUpperCase()) || node.isContentEditable || node.matches('[data-vb-native-render],.code-editor,.source-editor,.editor-container,.vb-richtext')) return 'native control, image or editor';
     if (number(style.opacity) !== 1 || style.filter !== 'none' || (style.backdropFilter && style.backdropFilter !== 'none') || style.mixBlendMode !== 'normal') return 'native compositing';
     if (style.clipPath !== 'none' || (style.maskImage && style.maskImage !== 'none') || style.writingMode !== 'horizontal-tb') return 'native clipping or writing mode';
     if (style.transform !== 'none') {
@@ -88,7 +123,7 @@ export class DOMScene {
     if (style.display === 'none' || node.hidden) return;
     this.elements.add(node);
     // visibility may be overridden by a descendant, so do not drop the subtree.
-    const visible = style.visibility === 'visible', rect = rectOf(node.getBoundingClientRect());
+    const visible = style.visibility === 'visible', rect = this.rect(node);
     const area = intersect(rect, clip), inView = area[2] > 0 && area[3] > 0;
     if (!inView && style.overflowX !== 'visible' && style.overflowY !== 'visible') return;
     this.scene.stats.elements++;
@@ -96,7 +131,8 @@ export class DOMScene {
       const reason = this.unsupported(node, style);
       if (reason) { this.native(node, rect, clip, reason); return; }
     }
-    const scaleX = node.offsetWidth ? rect[2] / node.offsetWidth : 1, scaleY = node.offsetHeight ? rect[3] / node.offsetHeight : 1;
+    const box = this.box(node);
+    const scaleX = box.width ? rect[2] / box.width : 1, scaleY = box.height ? rect[3] / box.height : 1;
     let borders, shadows, background, gradient, layers;
     try {
       if (!style.paint) {
@@ -147,25 +183,28 @@ export class DOMScene {
     }
     let childClip = clip;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {
-      const own = [rect[0] + node.clientLeft * scaleX, rect[1] + node.clientTop * scaleY, node.clientWidth * scaleX, node.clientHeight * scaleY];
+      const own = [rect[0] + box.clientLeft * scaleX, rect[1] + box.clientTop * scaleY, box.clientWidth * scaleX, box.clientHeight * scaleY];
       childClip = intersect(clip, [style.overflowX === 'visible' ? clip[0] : own[0], style.overflowY === 'visible' ? clip[1] : own[1], style.overflowX === 'visible' ? clip[2] : own[2], style.overflowY === 'visible' ? clip[3] : own[3]]);
     }
     this.children(node, childClip, depth);
     // Native scrollbar thumbs/buttons remain interactive and platform accurate.
     if (visible && inView && borders) {
       const [t, r, b, l] = borders.map(item => item.width);
-      const sw = rect[2] - node.clientWidth * scaleX - l - r, sh = rect[3] - node.clientHeight * scaleY - t - b;
-      if (node.clientWidth && sw > .5) this.scene.native([rect[0] + rect[2] - r - sw, rect[1] + t, sw, rect[3] - t - b], clip, 'scrollbar');
-      if (node.clientHeight && sh > .5) this.scene.native([rect[0] + l, rect[1] + rect[3] - b - sh, rect[2] - l - r, sh], clip, 'scrollbar');
+      const sw = rect[2] - box.clientWidth * scaleX - l - r, sh = rect[3] - box.clientHeight * scaleY - t - b;
+      if (box.clientWidth && sw > .5) this.scene.native([rect[0] + rect[2] - r - sw, rect[1] + t, sw, rect[3] - t - b], clip, 'scrollbar');
+      if (box.clientHeight && sh > .5) this.scene.native([rect[0] + l, rect[1] + rect[3] - b - sh, rect[2] - l - r, sh], clip, 'scrollbar');
     }
   }
   children(node, clip, depth) {
     // Stable order for the classic IDE's local stacking contexts, including MDI z-order.
-    const nodes = [...node.childNodes].map((child, index) => {
+    let nodes = this.order.get(node);
+    if (!nodes) { nodes = [...node.childNodes].map((child, index) => {
       let z = 0, positioned = false;
       if (child.nodeType === 1) { const style = this.style(child); z = Number(style.zIndex) || 0; positioned = style.position !== 'static'; }
       return {child, index, z, group: z < 0 ? -1 : z > 0 ? 2 : positioned ? 1 : 0};
     }).sort((a, b) => a.group - b.group || a.z - b.z || a.index - b.index);
+      this.order.set(node, nodes);
+    }
     for (const {child} of nodes) {
       if (child.nodeType === 1) this.element(child, clip, depth + 1);
       else if (child.nodeType === 3 && child.textContent.trim()) this.text(child, clip);
@@ -182,17 +221,17 @@ export class DOMScene {
   }
   text(node, clip) {
     const style = this.style(node.parentElement); if (style.visibility !== 'visible') return;
-    const range = this.document.createRange(); range.selectNodeContents(node);
+    const range = this.range; range.selectNodeContents(node);
     const rectangles = [...range.getClientRects()].map(rectOf).filter(r => r[2] && r[3]);
     if (!rectangles.length) return;
-    const native = this.policy.text !== 'gpu' || style.textShadow !== 'none' || style.textDecorationLine !== 'none' || style.direction !== 'ltr' || style.letterSpacing !== 'normal' || Math.abs((node.parentElement.getBoundingClientRect().width / (node.parentElement.offsetWidth || 1)) - 1) > .01 || (this.selection?.rangeCount && this.selection.containsNode(node, true));
+    const native = this.policy.text !== 'gpu' || style.textShadow !== 'none' || style.textDecorationLine !== 'none' || style.direction !== 'ltr' || style.letterSpacing !== 'normal' || Math.abs((this.box(node.parentElement).rect[2] / (this.box(node.parentElement).width || 1)) - 1) > .01 || (this.selection?.rangeCount && this.selection.containsNode(node, true));
     if (native || rectangles.length !== 1 || style.textOverflow === 'ellipsis' || this.style(node.parentElement).transform !== 'none') {
       for (const rect of rectangles) this.scene.native([rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2], clip, 'native text');
       this.scene.stats.nativeText++; return;
     }
     const rect = rectangles[0]; let text = node.textContent;
     if (!style.whiteSpace.startsWith('pre')) text = text.replace(/\s+/g, ' ');
-    const glyph = this.atlas.text(text, style, rect, this.scene.dpr);
+    const glyph = this.atlas.text(text, this.fontStyle(node.parentElement, style), rect, this.scene.dpr);
     if (!glyph) { this.scene.native(rect, clip, 'text atlas capacity'); return; }
     this.scene.add(glyph.rect, [1, 1, 1, 1], {clip, page: glyph.page, uv: glyph.uv, snap: false}); this.scene.stats.gpuText++;
   }
