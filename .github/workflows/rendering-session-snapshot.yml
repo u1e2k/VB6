@@ -1,0 +1,23 @@
+name: Rendering session snapshot
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-session-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git fetch origin main fix/classic-bevels-and-list-reuse
+          git bundle create /tmp/rendering-session.bundle HEAD refs/remotes/origin/main refs/remotes/origin/fix/classic-bevels-and-list-reuse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-session-source
+          path: /tmp/rendering-session.bundle
+          retention-days: 3
