@@ -1,55 +1,93 @@
 # Rendering qualification — 2026-10-05
 
-## Continuation results (latest implementation awaiting strict CI)
+## Current scope
 
-The original failures below are historical, not the latest GPU capability result.
-A coherent Vulkan/ANGLE software configuration in run
-[37325885950](https://github.com/wieslawsoltes/VB6/actions/runs/37325885950)
-produced **zero differing WebGPU framebuffer and presentation pixels at all six
-tested DPR values**. That whole run still failed: WebGL2 was unavailable under
-those forced flags, one whole-IDE image differed by two pixels at DPR 1.5, and
-the old coupled harness required both APIs in the same browser.
+**The strict software-GPU pixel gate has passed. The full GPU-only rendering and
+physical-device performance goals have not been certified. PR #21 remains draft.**
 
-The continuation adds separate strict WebGPU/WebGL2 headless/headed jobs; every
-required backend must execute actual draws, readback and screenshots. It also
-adds direct GPU painting of the attributed classic bevel background layers,
-first-draw observer cleanup and independent device/context loss tests. The
-combined debugger/HTML/rendering source passed **2,147 Node tests** locally.
-These are implementation/unit results; current strict CI must still pass before
-changing this draft status. The whole-IDE screenshot requirement remains zero
-differing pixels, without a relaxed error threshold.
+The attributed classic HTML/CSS improvements are already merged separately in
+[PR #36](https://github.com/wieslawsoltes/VB6/pull/36), commit
+`2b4f9dd50fc20c36f2a48d3c8586e4063277ff69`. This rendering branch incorporates that
+release without losing its current debugger, form-input, native-call or region
+changes. Main's UI renderer preference was not changed by PR #36.
 
-The coherent software-GPU 10,000-quad retained workload demonstrated one draw
-per frame and one geometry pack/upload/buffer allocation across 60 frames.
-It is **not physical-hardware performance qualification**. The current UI is
-still hybrid: native input, text, unsupported CSS and accessibility use DOM.
+## First complete strict GPU pass
 
-## Original qualification record
+[Run 37356581025](https://github.com/wieslawsoltes/VB6/actions/runs/37356581025),
+source `37e94823d0c8811dcd17a5cc0e642176362d033e`, passed all four independent jobs:
+WebGPU/headless, WebGPU/headed, WebGL2/headless and WebGL2/headed. Each job requires
+its selected backend to execute rather than accepting a fallback as success.
+Generated distributions were reproducible in all four jobs.
 
+The downloaded WebGPU/headless report contains **18 passed, 0 failed, 0 skipped**
+browser cases. It records:
 
-**Status: draft; not approved for merge.** The implementation is a WebGPU-first hybrid UI renderer, not a full independent GPU UI. Physical-hardware performance and complete pixel parity are not certified.
+- Exact solid, clip, transparent-hole and texture framebuffer/presentation pixels
+  at DPR 1, 1.25, 1.5, 2, 3 and 4. Direct texture readback is separate from the
+  screenshot check, so a blank overlay cannot pass solely by exposing HTML.
+- Zero changed pixels in all 12 IDE comparisons: Canvas2D, WebGL2 and WebGPU
+  against the existing HTML fixture at DPR 1, 1.25, 1.5 and 2.
+- Options cancel/apply/export, ordered fallback, asynchronous startup ownership,
+  actual device/context loss and final cleanup.
+- One hundred unchanged UI render requests with **zero submitted frames**, the
+  same retained geometry snapshot and 100 recorded unchanged-frame skips.
+- A forced render submits once; CSSOM width changes trigger resize observation;
+  a finite CSS background animation reaches its correct final color and returns
+  to zero idle submissions. Switching to HTML clears observed-node resources.
 
-## Verified implementation
+The historical initialization/blank-frame failures in runs 37300456342 and
+37299509999 do not describe this passing source. The last two-pixel fractional
+IDE discrepancy also existed with the overlay hidden. A scoped classic mnemonic
+`text-decoration-skip-ink: none` rule fixed it; the pixel comparison still requires
+**zero** changed pixels. General prose underlines and native fonts were not replaced.
 
-WebGPU is the requested default in the feature branch. The classic Tools → Options → Rendering tab retains HTML/CSS, offers WebGL2 and Canvas2D fallbacks, applies settings live, and separately controls embedding settings in exported applications. The renderer is integrated with the IDE, runtime, detached documents and generated standalone apps. See [RENDERING.md](RENDERING.md) for architecture, API and boundaries.
+## Retained texture-source follow-up
 
-The full integrated Node suite passed **1,460 tests** locally and in the source-publication workflow. Local browser checks confirm settings cancel/apply/export, asynchronous failure handling, ownership cleanup and demand-driven idle behavior. Canvas2D versus the existing HTML IDE fixture had **zero changed pixels at DPR 1, 1.25, 1.5 and 2**. Local WebGPU/WebGL2 are unavailable and must not be counted as successful GPU executions; reference-only pixel cases are reported as skipped.
+Source `ff944059d27f2188071faedddf45af47e31516c7` additionally fixes stale images
+when a page's canvas is replaced without changing its dimensions or revision.
+Both GPU texture caches now compare the source object as well as revision and
+size. Two unit regressions and a nineteenth browser case require exact red-to-green
+texture replacement while sealed geometry is uploaded only once.
 
-## Strict GPU execution remains blocked
+The integrated source passes **2,386 Node tests** locally; the texture-publication
+workflow also passed its full build and Node suite. Inspect the GPU workflow on
+the PR's current head for the follow-up's complete 19-case backend results. The
+18-case run above is explicitly the earlier retained-scene baseline, not evidence
+that the subsequent texture case ran there.
 
-The completed strict run [37300456342](https://github.com/wieslawsoltes/VB6/actions/runs/37300456342), testing source `ee96a9928368d57257765df93c23f92df4e2898e`, failed. Its downloaded `rendering-framebuffer-evidence` artifact reports **2 passed / 14 failed** test cases. The WebGPU availability case returned `A valid external Instance reference no longer exists.` Required WebGPU pixel and performance cases consequently failed; they did not pass using a fallback.
+## Performance evidence and limitations
 
-An earlier explicit-Vulkan-compositor run [37299509999](https://github.com/wieslawsoltes/VB6/actions/runs/37299509999) successfully initialized WebGPU on **SwiftShader**, compiled the shader and exercised real device/context loss. However, its WebGPU primitive screenshots were blank and failed exact comparison at all six tested DPR values. Its idle and 10,000-quad checks also failed. This is software-GPU evidence, not physical-device qualification.
+All measurements below are from the first passing WebGPU/headless report,
+Chromium 143.0.7499.4 on Linux, **Google SwiftShader software adapter**. They are
+not physical GPU timing, presentation latency, sustained FPS or power measurements.
 
-The later strict run retained exact Canvas2D-versus-HTML images at all four IDE DPI settings. WebGL2 matched at DPR 1, 1.25 and 2, but **two pixels differed at DPR 1.5**. Earlier zero-difference captures therefore do not establish universal exact parity.
+| Workload | Recorded result |
+| --- | --- |
+| 10,000 sealed opaque quads, 60 frames | One draw per frame; one buffer allocation, geometry pack, batch build and geometry upload across all frames |
+| CPU submission for that workload | Median about 0.10 ms; 95th percentile about 0.30 ms |
+| Actual 1,498-command IDE, forced scene rebuild | CPU build median about 11.4 ms; 95th percentile about 21.9 ms |
+| Unchanged live UI fixture | Zero GPU submissions for 100 identical render requests |
 
-The test harness now includes direct GPU texture-to-buffer readback, independently of compositor screenshots, plus explicit initialization errors and skip counts. The latest strict run did not reach successful WebGPU readback because initialization failed. A visually identical IDE screenshot with a blank overlay is not proof that WebGPU painted the interface.
+The forced whole-IDE build cost is material. Avoiding redundant submissions and
+uploads is useful, but these results do **not** establish a whole-IDE speedup over
+HTML/CSS or a high-refresh-rate frame budget. No speedup is inferred from a forced
+rebuild benchmark that accidentally skips painting: that test uses `force: true`.
 
-## Merge gates still open
+## Remaining acceptance gates
 
-1. Resolve WebGPU adapter/device/presentation failures and pass the strict primitive, texture, clipping, loss and workload tests without fallback.
-2. Validate all runtime controls and states, editor selection/IME, menus/popups, scrolling, themes and detached windows against approved visual references. The current HTML fixture is not a native Microsoft VB6 Windows reference.
-3. Measure representative physical desktop/mobile GPUs against HTML/CSS: frame pacing, interaction latency, CPU and GPU time, memory and sustained performance. CPU submission timings on SwiftShader are insufficient.
-4. Finish remaining native-painted surfaces before describing the renderer as fully WebGPU-rendered. Native text, editors, controls, icons and unsupported CSS currently remain DOM-painted.
+1. Qualify complete runtime/control states, themes, editor selection/IME,
+   popups, scrolling, detached windows and mobile layouts against approved
+   references. Existing HTML screenshots are not native Microsoft VB6 goldens.
+2. Measure representative physical desktop/mobile GPUs against HTML/CSS for
+   scene/layout CPU cost, GPU time, frame pacing, interaction latency, memory and
+   sustained performance. Software adapter CPU timings cannot substitute.
+3. Complete the remaining GPU-painted surfaces before calling this a fully
+   WebGPU-rendered IDE. Layout, accessibility, native editing, text, icons,
+   existing graphics canvases and unsupported CSS still rely on DOM/native paint.
+4. Broaden dynamic-style invalidation. CSS transitions/animations and observed
+   geometry changes are covered; arbitrary CSSOM color-only mutations and
+   script-created animations without a wake-up event need explicit invalidation.
 
-No physical-GPU speedup or complete pixel-perfect rendering is claimed. Keep PR #21 in draft until the requested gates are met.
+See [RENDERING.md](RENDERING.md) for API and settings. Keep the qualification
+boundaries separate: green software-GPU checks are necessary, but not sufficient
+for the user's complete rendering/performance merge conditions.
