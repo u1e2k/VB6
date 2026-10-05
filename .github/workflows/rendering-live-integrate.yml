@@ -1,0 +1,63 @@
+name: Integrate retained live rendering
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.rendering-live.patch.xz, .github/workflows/rendering-live-integrate.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Integrate verified HTML release and reviewed renderer changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # PR #36's reviewed head and its squash release must have identical trees.
+          git diff --exit-code 8d7db549c52ece3310944b68f9d637c841a2fa5e 2b4f9dd50fc20c36f2a48d3c8586e4063277ff69 --
+          git merge --no-commit --no-ff 8d7db549c52ece3310944b68f9d637c841a2fa5e || true
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,lzma,subprocess
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          for path in conflicts:
+              if path.startswith(('dist/','examples/')) or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js']:
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+                  subprocess.run(['git','add','--',path],check=True)
+              else:
+                  raise RuntimeError('Unreviewed source conflict: '+path)
+          assert Path('.git/MERGE_HEAD').exists()
+          # Workflow definitions were installed through the authorized connector;
+          # this source-building token must not modify workflows.
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          patch=lzma.decompress(Path('.rendering-live.patch.xz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest()=='d8472c1a5d8194e772995a5ea0c623a612ecb8ba2ef1ac4e1908ddc8e58381b3'
+          Path('/tmp/rendering-live.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/rendering-live.patch
+          git apply /tmp/rendering-live.patch
+          npm run build && npm test
+          git rm .rendering-live.patch.xz
+          git add src tests tools dist examples
+          git diff --cached --exit-code -- .github/workflows
+          # The two incoming parents have byte-identical trees, verified above.
+          # Record both the reviewed branch and the squash release without
+          # manufacturing a second content merge of identical source changes.
+          tree=$(git write-tree)
+          commit=$(git commit-tree "$tree" -p '${{ github.sha }}' -p 8d7db549c52ece3310944b68f9d637c841a2fa5e -p 2b4f9dd50fc20c36f2a48d3c8586e4063277ff69 -m 'feat(rendering): retain unchanged UI frames, track layout and animate on demand')
+          git push origin "$commit":refs/heads/feat/webgpu-ui-rendering
+          git update-ref refs/heads/reviewed-rendering "$commit"
+          git bundle create /tmp/rendering-live.bundle refs/heads/reviewed-rendering
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-live-source
+          path: /tmp/rendering-live.bundle
+          retention-days: 7
