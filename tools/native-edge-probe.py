@@ -17,7 +17,7 @@ def diff(a,b):
      n+=1
      if len(points)<8:points.append([x,y,a.getpixel((x,y)),b.getpixel((x,y))])
  return {'count':n,'bounds':box,'points':points}
-variants=[('unchanged','',None),('text-pad-2','',1),('all-pad-1','',2),('thin-underline','u{text-decoration-thickness:1px!important}',None),('offset-underline','u{text-underline-offset:1px!important}',None),('explicit-underline','u{text-decoration-thickness:1px!important;text-underline-offset:1px!important}',None),('atomic-mnemonic','u{display:inline-block!important}',None)]
+variants=[('native-control','',None),('painted-underline','u{text-decoration-line:none!important;background-image:linear-gradient(currentColor,currentColor);background-size:100% 1px;background-position:left bottom 1px;background-repeat:no-repeat}',None),('native-repeat','',None),('painted-repeat','u{text-decoration-line:none!important;background-image:linear-gradient(currentColor,currentColor);background-size:100% 1px;background-position:left bottom 1px;background-repeat:no-repeat}',None)]
 results=[]
 try:
  with sync_playwright() as pw:
@@ -27,12 +27,11 @@ try:
    page.goto(f'http://127.0.0.1:{server.server_port}/dist/VB6-Studio-Web.html');page.wait_for_function('window.vb6Studio?.rendering');page.evaluate('vb6Studio.rendering.ready')
    page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})')
    if css:page.add_style_tag(content=css)
-   if kind:page.evaluate('''kind=>{const adapter=vb6Studio.rendering.adapter,native=adapter.text; if(kind===1){adapter.text=function(node,clip){const start=this.scene.commands.length;native.call(this,node,clip);for(const c of this.scene.commands.slice(start))if(c.hole)c.rect=[c.rect[0]-1,c.rect[1]-1,c.rect[2]+2,c.rect[3]+2];}}else{const build=adapter.build;adapter.build=function(p){const s=build.call(this,p);for(const c of s.commands)if(c.hole)c.rect=[c.rect[0]-1,c.rect[1]-1,c.rect[2]+2,c.rect[3]+2];return s;};}}''',kind)
    page.evaluate('async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}');page.wait_for_timeout(100)
    baseline=page.screenshot();(OUT/f'{name}-html.png').write_bytes(baseline)
    info=page.evaluate('''()=>{const n=[...document.querySelectorAll('.vb-label u')].find(n=>n.parentElement.textContent==='Order number:');const s=getComputedStyle(n);return {rect:n.getBoundingClientRect().toJSON(),decoration:s.textDecoration,skip:s.textDecorationSkipInk,offset:s.textUnderlineOffset,font:s.font};}''')
    for backend in ['canvas2d','webgpu']:
-    for repeat in range(2):
+    for repeat in range(4):
      page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})');page.wait_for_timeout(100)
      nativeBefore=page.screenshot()
      page.evaluate('b=>vb6Studio.setRenderingPolicy({backend:b,fallbacks:["html"],text:"native"})',backend);page.wait_for_timeout(150)
