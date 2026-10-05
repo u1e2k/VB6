@@ -2,8 +2,10 @@
 
 ## Historical qualification and current release scope
 
-**The strict software-GPU pixel gate has passed. The full GPU-only rendering and
-physical-device performance goals have not been certified. The final integration is described in [RENDERING-RELEASE.md](RENDERING-RELEASE.md).**
+**The historical strict software-GPU pixel gate passed. The current expanded
+release requires its own 30-case runs; the earlier 18/19-case results are not
+current-source certification. Full GPU-only rendering and physical-device
+performance have not been certified. See [RENDERING-RELEASE.md](RENDERING-RELEASE.md).**
 
 The attributed classic HTML/CSS improvements are already merged separately in
 [PR #36](https://github.com/wieslawsoltes/VB6/pull/36), commit
@@ -38,8 +40,9 @@ browser cases. It records:
 The historical initialization/blank-frame failures in runs 37300456342 and
 37299509999 do not describe this passing source. The last two-pixel fractional
 IDE discrepancy also existed with the overlay hidden. A scoped classic mnemonic
-`text-decoration-skip-ink: none` rule fixed it; the pixel comparison still requires
-**zero** changed pixels. General prose underlines and native fonts were not replaced.
+`text-decoration-skip-ink: none` rule passed that initial sequence. Expanded
+repeated captures later exposed residual native underline drift; see the current
+correction below. The pixel gate still requires **zero** changed pixels.
 
 ## Retained texture-source follow-up
 
@@ -92,3 +95,31 @@ See [RENDERING.md](RENDERING.md) for API and settings. Keep the qualification bo
 constitute physical-hardware or native Windows visual certification. This release
 ships the validated dual-renderer integration, not a claim that these broader
 compatibility goals are complete.
+
+## Current expanded integration and mnemonic regression
+
+The source includes main `f4ee8d47` and its coding-agent conversation work. Local
+validation passes **2,606 Node tests** and **22 rendering browser cases**, with
+**eight explicitly skipped GPU-dependent cases** in the restricted local browser.
+The permanent GPU matrices require **30 passed, zero failed and zero skipped**
+for each WebGPU/WebGL2 headed/headless configuration, plus reproducible outputs.
+Check the workflow on the PR's exact head for its completed current-source result.
+
+The earlier expanded 29-case source `846ce81` exposed a two-pixel mismatch at
+DPR 1.5; a separate x64 job happened to pass the same sequence. Direct framebuffer
+readback at those pixels was transparent. Repeated native HTML/hidden-overlay
+captures demonstrated that automatic mnemonic underline coverage itself varied.
+Neither wider native holes nor explicit underline thickness reliably corrected it.
+
+[Investigation run 37379475588](https://github.com/wieslawsoltes/VB6/actions/runs/37379475588)
+alternated native underline controls with an explicit filled background strip.
+All 16 strip-based renderer switches, their hidden-overlay comparisons and native
+baseline captures were pixel-identical; the native controls still varied.
+The implementation therefore paints only classic mnemonic marks as filled strips,
+retains native glyph/layout/color behavior, and restores native underlines for
+forced colors. The permanent thirtieth case checks repeated full-IDE pixels,
+geometry, disabled/larger text, untouched prose and high-contrast visibility.
+
+The drawing-command/pixel tests and local-adapter measurement tool cover a bounded
+dual-renderer implementation. They are not evidence of a complete DOM-free UI,
+native Windows VB6 golden-image equivalence or a physical-GPU speedup.
