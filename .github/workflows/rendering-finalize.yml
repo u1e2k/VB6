@@ -10,7 +10,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   source:
-    runs-on: macos-14
+    # macOS 14 is in an announced October 5 brownout; use a supported image.
+    # https://github.com/actions/runner-images/issues/13518
+    runs-on: macos-26
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
