@@ -35,7 +35,10 @@
     "test:data": "node --test tests/data-*.test.mjs",
     "test:data:browser": "python tools/browser-data-sources.py",
     "data:examples": "node tools/data-example-server.mjs",
-    "data:gateway": "node tools/data-gateway.mjs"
+    "data:gateway": "node tools/data-gateway.mjs",
+    "test:rendering": "node --test tests/rendering-*.test.mjs",
+    "test:rendering:browser": "python tools/browser-rendering-tests.py",
+    "test:rendering:gpu": "python tools/browser-rendering-tests.py --require-webgpu"
   },
   "engines": {
     "node": ">=22"

@@ -19,3 +19,6 @@ reports/native-projects/
 reports/data-sources/
 server-profiles.local.json
 *.sqlite
+
+# Rendering validation images and adapter/CPU reports.
+reports/rendering/

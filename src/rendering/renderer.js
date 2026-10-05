@@ -1,0 +1,158 @@
+import {normalizeRendering, renderingCandidates} from './policy.js';
+import {CanvasPainter} from './canvas2d.js';
+import {WebGPUPainter} from './webgpu.js';
+import {WebGLPainter} from './webgl2.js';
+import {TextAtlas} from './atlas.js';
+import {DOMScene} from './dom-scene.js';
+const sessions = new WeakMap();
+export async function createPainter(name, canvas, options = {}) {
+  if (name === 'webgpu') return WebGPUPainter.create(canvas, options);
+  if (name === 'webgl2') return new WebGLPainter(canvas, options);
+  if (name === 'canvas2d') return new CanvasPainter(canvas);
+  if (name === 'html') return null;
+  throw new TypeError('Unknown rendering backend: ' + name);
+}
+/** One demand-rendered visual layer per Document. The semantic DOM never moves,
+ * becomes inert, or loses its hit targets, selection, IME, forms or accessibility.
+ */
+export class UIRenderer {
+  constructor(document, policy = {}, {factory = createPainter, sceneFactory} = {}) {
+    this.document = document; this.view = document.defaultView; this.factory = factory; this.generation = 0; this.disposed = false;
+    this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
+    this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
+    this.observe(); this.ready = this.setOptions(policy, {force: true});
+  }
+  listen(target, type, listener, options) { target?.addEventListener(type, listener, options); this.listeners.push(() => target?.removeEventListener(type, listener, options)); }
+  observe() {
+    const invalidate = event => {
+      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.adapter.invalidateStyles();
+      else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
+        const scope = event.target.closest('button,[role=treeitem],.tree-row,.property-row,.vb-control,.tool-caption') || event.target;
+        this.adapter.invalidateStyles(scope.parentElement);
+        if (event.relatedTarget?.nodeType === 1) this.adapter.invalidateStyles(event.relatedTarget.parentElement);
+      }
+      this.invalidate();
+    };
+    this.observer = new this.view.MutationObserver(records => {
+      let changed = false;
+      for (const r of records) {
+        const node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+        if (node?.closest('[data-vb-render-layer]')) continue;
+        changed = true;
+        if (r.type !== 'characterData') this.adapter.invalidateStyles(node);
+      }
+      if (changed) this.invalidate();
+    });
+    this.observer.observe(this.document.body, {childList: true, subtree: true, attributes: true, characterData: true});
+    for (const event of ['input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    this.listen(this.document, 'scroll', invalidate, true);
+    this.listen(this.view, 'resize', invalidate);
+    this.listen(this.view.visualViewport, 'resize', invalidate);
+    this.listen(this.view.visualViewport, 'scroll', invalidate);
+    this.listen(this.document, 'visibilitychange', () => { if (this.document.hidden) this.cancelFrame(); else invalidate(); });
+    this.listen(this.view, 'pagehide', () => this.dispose());
+    this.listen(this.view, 'beforeprint', () => { this.printing = true; if (this.canvas) this.canvas.style.visibility = 'hidden'; });
+    this.listen(this.view, 'afterprint', () => { this.printing = false; invalidate(); });
+    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.adapter.invalidateStyles(); invalidate(); });
+    this.forcedColors = this.view.matchMedia('(forced-colors: active)');
+    this.listen(this.forcedColors, 'change', () => { this.ready = this.setOptions(this.policy, {force: true}); });
+    this.armDPR();
+  }
+  armDPR() {
+    this.dprCleanup?.();
+    const query = this.view.matchMedia(`(resolution: ${this.view.devicePixelRatio || 1}dppx)`);
+    const changed = () => { this.atlas.reset(); this.armDPR(); this.invalidate(); };
+    query.addEventListener('change', changed); this.dprCleanup = () => query.removeEventListener('change', changed);
+  }
+  canvasForBackend() {
+    const canvas = this.document.createElement('canvas'); canvas.dataset.vbRenderLayer = ''; canvas.setAttribute('aria-hidden', 'true');
+    canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;margin:0;padding:0;border:0;pointer-events:none;z-index:2147483000;visibility:hidden;contain:strict';
+    this.document.documentElement.append(canvas); return canvas;
+  }
+  async setOptions(value, {force = false} = {}) {
+    if (this.disposed) return this.getStats();
+    const next = normalizeRendering(value), old = this.policy;
+    this.policy = next;
+    this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-policy', {detail: {...next, fallbacks: [...next.fallbacks]}}));
+    if (!force && old.backend === next.backend && JSON.stringify(old.fallbacks) === JSON.stringify(next.fallbacks) && this.driver) {
+      this.atlas.reset(); this.invalidate(); return this.getStats();
+    }
+    const generation = ++this.generation; this.cancelFrame(); this.releaseDriver(); this.attempts = [];
+    const candidates = this.forcedColors.matches ? ['html'] : renderingCandidates(next);
+    this.candidates = candidates; this.candidateIndex = -1;
+    return this.activate(candidates, 0, generation);
+  }
+  async activate(candidates, start, generation) {
+    for (let index = start; index < candidates.length; index++) {
+      if (this.disposed || generation !== this.generation) return this.getStats();
+      const name = candidates[index]; this.candidateIndex = index;
+      if (name === 'html') { this.backend = 'html'; this.publish(); return this.getStats(); }
+      const canvas = this.canvasForBackend(); let painter;
+      try {
+        painter = await this.factory(name, canvas, {onLost: reason => {
+          if (!this.disposed && this.generation === generation && this.driver === painter) this.fallback(reason);
+        }});
+        if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
+        this.canvas = canvas; this.driver = painter; this.backend = name;
+        this.renderNow();
+        if (this.driver === painter) this.publish();
+        return this.getStats();
+      } catch (error) {
+        painter?.dispose(); canvas.remove();
+        if (this.disposed || generation !== this.generation) return this.getStats();
+        this.driver = null; this.canvas = null; this.backend = 'html';
+        this.attempts.push({backend: name, reason: error.message || String(error)});
+      }
+    }
+    this.backend = 'html'; this.publish(); return this.getStats();
+  }
+  fallback(reason) {
+    if (this.disposed) return;
+    this.attempts.push({backend: this.backend, reason}); this.cancelFrame(); this.releaseDriver();
+    const generation = ++this.generation;
+    this.ready = this.activate(this.candidates || ['html'], this.candidateIndex + 1, generation);
+  }
+  invalidate() {
+    if (this.disposed || this.printing || this.document.hidden || !this.driver) return;
+    this.metrics.invalidations++;
+    if (this.frame) return;
+    this.frame = this.view.requestAnimationFrame(() => { this.frame = 0; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
+  }
+  renderNow() {
+    if (this.disposed || !this.driver || this.printing) return;
+    this.cancelFrame();
+    const start = this.view.performance.now(), scene = this.sceneFactory(this.policy), built = this.view.performance.now();
+    this.driver.render(scene);
+    const submitted = this.view.performance.now();
+    this.canvas.style.visibility = 'visible'; this.metrics.frames++;
+    this.metrics.builds.push(built - start); this.metrics.submissions.push(submitted - built);
+    if (this.metrics.builds.length > 120) { this.metrics.builds.shift(); this.metrics.submissions.shift(); }
+    this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
+  }
+  cancelFrame() { if (this.frame) this.view.cancelAnimationFrame(this.frame); this.frame = 0; }
+  publish() {
+    this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-status', {detail: this.getStats()}));
+  }
+  getStats() {
+    const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
+    return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
+      frames: this.metrics.frames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+  }
+  releaseDriver() { this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  dispose() {
+    if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
+    for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();
+  }
+}
+/** Reference-counted integration: multiple runtime hosts can share one document. */
+export function retainRenderer(document, policy = {}) {
+  let session = sessions.get(document);
+  if (!session || session.renderer.disposed) { session = {renderer: new UIRenderer(document, policy), count: 0}; sessions.set(document, session); }
+  session.count++;
+  let released = false;
+  return {renderer: session.renderer, release() {
+    if (released) return; released = true;
+    if (--session.count === 0) { session.renderer.dispose(); if (sessions.get(document) === session) sessions.delete(document); }
+  }};
+}
+export function rendererForDocument(document) { return sessions.get(document)?.renderer || null; }
