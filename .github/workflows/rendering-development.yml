@@ -1,0 +1,21 @@
+name: Rendering development snapshot
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Snapshot exact integrated sources
+        run: |
+          git archive --format=tar.gz -o /tmp/vb6-rendering-base.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-integrated-source
+          path: /tmp/vb6-rendering-base.tar.gz
+          retention-days: 3
