@@ -49,9 +49,9 @@ export class WebGLPainter {
     if (!page) return this.white;
     const gl = this.gl; let record = this.textures.get(page);
     if (!record) { record = {texture: this.texture(), revision: -1}; this.textures.set(page, record); }
-    if (record.revision !== page.revision || record.width !== page.width || record.height !== page.height) {
+    if (record.revision !== page.revision || record.source !== page.canvas || record.width !== page.width || record.height !== page.height) {
       gl.bindTexture(gl.TEXTURE_2D, record.texture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.source = page.canvas; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
     }
     return record.texture;
   }

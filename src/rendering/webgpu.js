@@ -90,9 +90,9 @@ export class WebGPUPainter {
       const texture = this.device.createTexture({size: [page.width, page.height], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST | T.RENDER_ATTACHMENT});
       record = {texture, width: page.width, height: page.height, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
     }
-    if (record.revision !== page.revision) {
+    if (record.revision !== page.revision || record.source !== page.canvas) {
       this.device.queue.copyExternalImageToTexture({source: page.canvas}, {texture: record.texture, premultipliedAlpha: false}, [page.width, page.height]);
-      record.revision = page.revision; this.stats.uploadedBytes += page.width * page.height * 4;
+      record.revision = page.revision; record.source = page.canvas; this.stats.uploadedBytes += page.width * page.height * 4;
     }
     return record.group;
   }

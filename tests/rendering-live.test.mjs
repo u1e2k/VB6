@@ -58,3 +58,20 @@ test('classic mnemonic continuity is explicit and does not change general prose 
   assert.doesNotMatch(css,/(?:^|\n)u\s*\{/);
   assert.match(css,/https:\/\/drafts\.csswg\.org\/css-text-decor-4\//);
 });
+
+for (const backend of ['webgpu','webgl2']) test(`${backend} reuploads a replaced canvas even when dimensions and revision are unchanged`, async()=>{
+  let uploads=0;const source={},page={canvas:source,width:2,height:2,revision:1};let painter;
+  if(backend==='webgpu'){
+    const {WebGPUPainter}=await import('../src/rendering/webgpu.js');
+    painter=Object.create(WebGPUPainter.prototype);
+    Object.assign(painter,{textures:new Map(),stats:{uploadedBytes:0},view:{GPUTextureUsage:{TEXTURE_BINDING:1,COPY_DST:2,RENDER_ATTACHMENT:4}},device:{createTexture:()=>({createView:()=>({}),destroy(){}}),createBindGroup:()=>({}),queue:{copyExternalImageToTexture(){uploads++;}}}});
+  }else{
+    const {WebGLPainter}=await import('../src/rendering/webgl2.js');
+    painter=Object.create(WebGLPainter.prototype);
+    Object.assign(painter,{textures:new Map(),stats:{uploadedBytes:0},texture:()=>({}),gl:{bindTexture(){},pixelStorei(){},texImage2D(){uploads++;}}});
+  }
+  const resource=painter.image(page);painter.image(page);assert.equal(uploads,1);
+  page.canvas={};assert.equal(painter.image(page),resource);assert.equal(uploads,2);
+  painter.image(page);assert.equal(uploads,2);
+  page.revision++;painter.image(page);assert.equal(uploads,3);assert.equal(painter.stats.uploadedBytes,48);
+});

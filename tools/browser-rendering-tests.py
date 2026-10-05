@@ -297,6 +297,33 @@ with sync_playwright() as playwright:
         check(not page.errors,str(page.errors));page.close();return result
     case('retained live UI, CSSOM resize, animation completion and idle cleanup', live_invalidation)
 
+    def replacement_texture():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        result = page.evaluate('''async backend=>{
+          const canvas=document.createElement('canvas');document.body.append(canvas);
+          const painter=await VB6Rendering.createPainter(backend,canvas);
+          const make=color=>{const c=document.createElement('canvas');c.width=c.height=2;const ctx=c.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,2,2);return c};
+          const page={canvas:make('#ff0000'),width:2,height:2,revision:1};
+          const scene=new VB6Rendering.PaintScene(32,32);scene.add([0,0,32,32],[1,1,1,1],{page});scene.seal();
+          const read=async()=>{
+            if(painter.device)return (await painter.render(scene,{readback:true})).data;
+            painter.render(scene);const gl=painter.gl;
+            if(gl){const data=new Uint8Array(32*32*4);gl.readPixels(0,0,32,32,gl.RGBA,gl.UNSIGNED_BYTE,data);return data;}
+            return painter.context.getImageData(0,0,32,32).data;
+          };
+          const exact=(data,color)=>{for(let i=0;i<data.length;i++)if(data[i]!==color[i%4])return false;return data.length===32*32*4};
+          try{
+            const red=exact(await read(),[255,0,0,255]);page.canvas=make('#00ff00');
+            const green=exact(await read(),[0,255,0,255]);
+            return {backend:painter.name,red,green,instanceUploads:painter.stats.instanceUploads};
+          }finally{painter.dispose();canvas.remove();}
+        }''',backend)
+        check(result['backend']==backend and result['red'] and result['green'],str(result))
+        if backend!='canvas2d': check(result['instanceUploads']==1,'Texture replacement unnecessarily uploaded sealed geometry: '+str(result))
+        check(not page.errors,str(page.errors));page.close();return result
+    case('replaced texture source has exact new pixels without geometry upload',replacement_texture)
+
     def benchmark():
         page=new_page(browser,ide=True)
         if REQUIRED: page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',REQUIRED[0])
