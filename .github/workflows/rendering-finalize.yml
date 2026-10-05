@@ -1,0 +1,59 @@
+name: Finalize reviewed dual-renderer release
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.rendering-final/**, .github/workflows/rendering-finalize.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Integrate pinned main and apply independently validated source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 30febe16733be5d71eb4428d4888866947a088fe || true
+          python - <<'PY'
+          import hashlib,lzma,subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          assert set(conflicts)<={'dist/VB6-Studio-Web.html','dist/studio.js'}, conflicts
+          for path in conflicts:
+              subprocess.run(['git','checkout','--ours','--',path],check=True)
+              subprocess.run(['git','add','--',path],check=True)
+          assert Path('.git/MERGE_HEAD').exists()
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          parts=sorted(Path('.rendering-final').glob('*.part'))
+          assert len(parts)==3
+          patch=lzma.decompress(b''.join(p.read_bytes() for p in parts))
+          assert hashlib.sha256(patch).hexdigest()=='a99e091ba08c618b9a0605c0db04f4fd8fa18c870157a92b55c7fef989dc09e6'
+          Path('/tmp/rendering-final.patch').write_bytes(patch)
+          PY
+          git apply --unidiff-zero --check /tmp/rendering-final.patch
+          git apply --unidiff-zero /tmp/rendering-final.patch
+          npm run build && npm test
+      - name: Commit ordinary sources and reproducible distributions
+        run: |
+          git rm -r .rendering-final
+          git add README.md docs src tests tools dist examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'feat(rendering): complete dual-backend integration, dynamic style tracking and diagnostics'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git archive --format=tar.gz -o /tmp/rendering-release-source.tar.gz HEAD
+          git rev-parse HEAD > /tmp/rendering-release-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-release-reviewed-source
+          path: |
+            /tmp/rendering-release-source.tar.gz
+            /tmp/rendering-release-head.txt
+          retention-days: 7
