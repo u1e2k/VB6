@@ -2,7 +2,7 @@ name: UI rendering
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feat/webgpu-ui-rendering]
   workflow_dispatch:
 permissions:
   contents: read
