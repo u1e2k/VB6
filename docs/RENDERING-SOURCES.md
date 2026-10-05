@@ -1,22 +1,41 @@
 # Rendering and HTML performance sources
 
-These are references for design decisions, not imported implementations. The
-changes in this repository are original application-specific code under its MIT
-license; no third-party source snippets or font files were copied.
+## Classic staircase bevels and attribution
+
+Jordan Scales' comment at <https://news.ycombinator.com/item?id=49963404>
+recommends inset shadows instead of four-color border joins for classic beveled
+corners. The linked implementation and author's discussion are
+<https://jdan.github.io/98.css/> and
+<https://notes.jordanscales.com/98-css-reflections#when-buttons-were-good>.
+
+`src/theme/bevels.css` adapts this technique to this project's authored controls.
+Its source header preserves the full **Copyright 2020 Jordan Scales / MIT**
+notice, also retained in `LICENSES/98.css.txt` and shipped CSS/standalone apps.
+No third-party font files or unrelated 98.css components are included. Container
+chrome uses equivalent border-box strips while retaining its original border
+metrics: replacing a fractional-DPI border with nominal padding shifted WebKit
+content. See `CLASSIC-HTML-RENDERING.md` for the exact tested scope.
+
+The GPU adapter emits the supported solid background layers as ordered quads.
+CSS background stacking, list repetition and percentage placement follow W3C
+**CSS Backgrounds and Borders Level 3**:
+<https://www.w3.org/TR/css-backgrounds-3/#layering> and
+<https://www.w3.org/TR/css-backgrounds-3/#background-position>.
+Unsupported background effects explicitly retain native paint.
 
 ## Read/write batching and stable HTML nodes
 
 Jeremy Wagner, Paul Lewis and Barry Pollard, **Avoid large, complex layouts and
-layout thrashing**, web.dev, published March 20, 2015, updated May 7, 2025:
+layout thrashing**, web.dev:
 <https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing>.
 
-The form designer measures selection rectangles before inserting overlays.
-ToolList retains visible rows instead of recreating their DOM on every paint.
-Control captions and native select options keep existing nodes while unchanged.
-The canvas renderer batches style-cache invalidation with frame construction and
-disconnects its MutationObserver in HTML-only mode. These changes apply the
-article's read-before-write guidance; the article does not establish performance
-numbers or visual compatibility for this application.
+ToolList reads viewport geometry before DOM writes and retains visible rows and
+SVG nodes instead of recreating them on every paint. The renderer batches
+style-cache invalidation with frame construction and disconnects observers in
+HTML-only mode, including a failed first draw. Source comments credit this
+read-before-write guidance separately: the HN comment is about bevels, not list
+performance. The benchmark compares the exact previous ToolList paint routine
+with the retained implementation; it does not measure whole-IDE speed.
 
 ## WebGPU pixel coordinates and canvas texture lifetime
 
@@ -28,23 +47,16 @@ The two GPU painters clip at physical pixel centers. WebGPU readback is encoded
 in the same command submission as its draw, using the same canvas texture before
 its automatic expiry. Startup checks actual pixels, not just API availability.
 
-## Headless GPU testing
+## GPU test driver and presentation isolation
 
 Jason Mayes and François Beaufort, **Supercharge Web AI testing**, Chrome for
-Developers, updated January 16, 2024:
-<https://developer.chrome.com/blog/supercharge-web-ai-testing>.
+Developers: <https://developer.chrome.com/blog/supercharge-web-ai-testing>.
+The upstream vgpu investigation at <https://github.com/vercel-labs/vgpu/issues/109>
+provided a coherent Vulkan compositor/ANGLE configuration for software WebGPU.
 
-GPU driver and compositor flags are confined to the test runner. The software
-adapter mode is explicit and recorded in reports. Successful SwiftShader tests
-are not evidence of physical-hardware speed or full native VB6 pixel parity.
-The browser runner supports headed execution for presentation checks and a
-normal, non-software-forced mode for hardware qualification.
-
-## User-supplied Hacker News reference
-
-Requested source: <https://news.ycombinator.com/item?id=49963404>.
-The comment body and author were not retrievable during this implementation.
-No statement or implementation is attributed to its author, and this document
-does not claim that the specific HN recommendations have been implemented.
-The independently verified references above are cited beside the code they
-informed. The original HN URL is retained here for a subsequent verifiable review.
+Driver flags are test-only and recorded in reports. WebGPU and WebGL2 are tested
+in separate browser configurations because forcing the former's Vulkan
+compositor can disable the latter. Each strict job must execute its required
+backend and pass framebuffer/presentation checks without substituting a fallback.
+SwiftShader CPU submission timings are not physical-GPU performance evidence.
+The browser runner also accepts normal unforced adapters for hardware testing.

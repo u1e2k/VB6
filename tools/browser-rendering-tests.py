@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rendering integration and real-backend readback tests.
 
---require-webgpu serves localhost and refuses to count a fallback as WebGPU.
+--require-webgpu / --require-webgl2 serve localhost and reject backend fallbacks.
 Without that flag, set_content supports restricted environments; unavailable GPU
 backends are explicitly skipped. Reports distinguish functional correctness,
 pixel parity with our HTML path, CPU timing and physical-hardware qualification.
@@ -17,14 +17,16 @@ OUT = ROOT / 'reports/rendering'
 RESULTS, METRICS, VISUAL = [], {}, []
 ARGS = argparse.ArgumentParser()
 ARGS.add_argument('--require-webgpu', action='store_true')
+ARGS.add_argument('--require-webgl2', action='store_true')
 ARGS.add_argument('--headed', action='store_true')
 ARGS.add_argument('--software-gpu', action='store_true', help='Explicit CI software adapter, never physical-GPU qualification')
 args = ARGS.parse_args()
+REQUIRED = [name for name, enabled in [('webgpu', args.require_webgpu), ('webgl2', args.require_webgl2)] if enabled]
 OUT.mkdir(parents=True, exist_ok=True)
 BUNDLE = (ROOT / 'dist/vb6-rendering.js').read_text()
 IDE = (ROOT / 'dist/VB6-Studio-Web.html').read_text()
 URL = None
-if args.require_webgpu:
+if REQUIRED:
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args): pass
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=ROOT))
@@ -82,16 +84,15 @@ with sync_playwright() as playwright:
         launch_flags += ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--use-vulkan=swiftshader']
     launch_flags += shlex.split(os.environ.get('RENDERING_BROWSER_FLAGS', ''))
     browser = playwright.chromium.launch(executable_path=executable, headless=not args.headed, args=launch_flags)
-    METRICS.update(browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False, headed=args.headed, softwareGpuRequested=args.software_gpu)
+    METRICS.update(requiredBackends=REQUIRED, browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False, headed=args.headed, softwareGpuRequested=args.software_gpu)
 
     def backend_execution():
         page = new_page(browser)
         outcome = page.evaluate('''async()=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c);const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,adapter:p.adapterInfo||null,outputVerified:p.stats.outputVerified??null};}catch(e){result[backend]={available:false,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''')
         METRICS['backends'] = outcome
         check(outcome['canvas2d']['available'], 'Canvas2D missing')
-        if args.require_webgpu:
-            check(outcome['webgpu']['available'], 'REAL WebGPU required, no fallback accepted: ' + str(outcome))
-            check(outcome['webgl2']['available'], 'REAL WebGL2 required: ' + str(outcome))
+        for backend in REQUIRED:
+            check(outcome[backend]['available'], 'REAL '+backend+' required, no fallback accepted: ' + str(outcome))
         METRICS['backends'] = outcome; page.close(); return outcome
     case('real backend initialization and shader execution', backend_execution)
 
@@ -130,10 +131,11 @@ with sync_playwright() as playwright:
                 (OUT / f'primitives-{backend}-{dpr}.png').write_bytes(images[backend])
                 check(info[backend]['width'] == round(256*dpr), 'DPR was capped or ignored')
             check('canvas2d' in images, 'Reference backend did not execute')
-            if args.require_webgpu: check('webgpu' in images and 'webgl2' in images, 'Required GPU backend did not execute')
+            for backend in REQUIRED: check(backend in images, 'Required '+backend+' did not execute')
             comparisons = {backend: pixels(images['canvas2d'], image) for backend, image in images.items() if backend != 'canvas2d'}
             if not comparisons:
                 page.close();return {'skipped':'No second renderer available for a cross-backend pixel comparison','info':info}
+            METRICS.setdefault('presentationPixels', []).extend({'backend':backend,'dpr':dpr,**comparison} for backend,comparison in comparisons.items())
             for backend, comparison in comparisons.items():
                 check(comparison['changedPixels'] == 0, f'{backend} solid/clip/texture pixel mismatch at DPR {dpr}: {comparison}')
             check(not page.errors, str(page.errors)); page.close(); return {'info': info, 'comparisons': comparisons}
@@ -159,7 +161,29 @@ with sync_playwright() as playwright:
         # Background IDE analysis may finish after the settings dialog closes.
         # A draw caused by real DOM changes is not idle. Conversely, canvas-layer
         # writes are excluded so a self-triggered render loop still fails.
-        idle=page.evaluate('''async()=>{const r=vb6Studio.rendering;await document.fonts.ready;const observer=new MutationObserver(()=>{});observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});let busyIntervals=0;try{for(let i=0;i<10;i++){observer.takeRecords();const frames=r.metrics.frames;await new Promise(done=>setTimeout(done,350));const records=observer.takeRecords().filter(change=>{const n=change.target.nodeType===1?change.target:change.target.parentElement;return !n?.closest('[data-vb-render-layer]')});if(records.length){busyIntervals++;continue;}return {busyIntervals,idleFrames:r.metrics.frames-frames}}throw Error('IDE remained busy for every observation interval')}finally{observer.disconnect()}}''')
+        idle=page.evaluate('''async()=>{
+          const r=vb6Studio.rendering;await document.fonts.ready;
+          let changes=[];
+          const observer=new MutationObserver(records=>changes.push(...records));
+          observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
+          let busyIntervals=0;
+          try {
+            for(let i=0;i<20;i++) {
+              // Let pending invalidations settle; retain delivered records instead
+              // of losing them in an empty MutationObserver callback.
+              await new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));
+              changes=[];observer.takeRecords();const frames=r.metrics.frames;
+              await new Promise(done=>setTimeout(done,350));
+              const records=[...changes,...observer.takeRecords()].filter(change=>{
+                const n=change.target.nodeType===1?change.target:change.target.parentElement;
+                return !n?.closest('[data-vb-render-layer]');
+              });
+              if(records.length){busyIntervals++;continue;}
+              return {busyIntervals,idleFrames:r.metrics.frames-frames};
+            }
+            throw Error('IDE remained busy for every observation interval');
+          } finally {observer.disconnect();}
+        }''')
         check(idle['idleFrames']==0,'Idle UI continuously redraws: '+str(idle))
         METRICS['idleObservation']=idle
         page.evaluate('vb6Studio.optionsDialog();undefined');page.get_by_role('tab', name='Rendering', exact=True).click();page.screenshot(path=OUT/'options.png')
@@ -183,14 +207,37 @@ with sync_playwright() as playwright:
         check(race == {'active':'html','canvases':0,'disposed':1}, 'Stale initialization won: '+str(race));page.close();return {'loss':result,'race':race}
     case('ordered failure, context loss, cleanup and stale-start race', fallback_lifecycle)
 
-    def live_loss():
-        if not args.require_webgpu: return {'skipped': 'Real GPU loss requires GPU-enabled browser; not simulated certification'}
-        page = new_page(browser)
-        result=page.evaluate('''async()=>{const r=window.r=new VB6Rendering.UIRenderer(document,{fallbacks:['webgl2','canvas2d','html']});await r.ready;if(r.backend!=='webgpu')throw Error(JSON.stringify(r.getStats()));r.driver.device.destroy();await new Promise(resolve=>setTimeout(resolve,250));await r.ready;return r.getStats()}''')
-        check(result['active']=='webgl2','WebGPU loss did not select WebGL2: '+str(result))
-        page.evaluate("r.driver.gl.getExtension('WEBGL_lose_context').loseContext()")
-        page.wait_for_function('r.backend === "canvas2d"');page.evaluate('r.dispose()');page.close();return result
-    case('actual GPUDevice destruction and WebGL context loss', live_loss)
+    def live_gpu_loss():
+        if not METRICS.get('backends',{}).get('webgpu',{}).get('available'):
+            check('webgpu' not in REQUIRED, 'Required WebGPU loss test cannot execute')
+            return {'skipped':'WebGPU unavailable; required in the separate WebGPU CI job'}
+        page=new_page(browser)
+        result=page.evaluate('''async()=>{
+          const r=window.r=new VB6Rendering.UIRenderer(document,{fallbacks:['webgl2','canvas2d','html']});
+          await r.ready;if(r.backend!=='webgpu')throw Error(JSON.stringify(r.getStats()));
+          r.driver.device.destroy();
+          await new Promise(resolve=>setTimeout(resolve,250));await r.ready;
+          return r.getStats();
+        }''')
+        expected='webgl2' if METRICS['backends'].get('webgl2',{}).get('available') else 'canvas2d'
+        check(result['active']==expected,'Device loss did not choose first available fallback: '+str(result))
+        page.evaluate('r.dispose()');page.close();return result
+    case('actual GPUDevice destruction and ordered available fallback',live_gpu_loss)
+
+    def live_gl_loss():
+        if not METRICS.get('backends',{}).get('webgl2',{}).get('available'):
+            check('webgl2' not in REQUIRED,'Required WebGL2 loss test cannot execute')
+            return {'skipped':'WebGL2 unavailable; required in the separate WebGL2 CI job'}
+        page=new_page(browser)
+        page.evaluate('''async()=>{
+          const r=window.r=new VB6Rendering.UIRenderer(document,{backend:'webgl2',fallbacks:['canvas2d','html']});
+          await r.ready;if(r.backend!=='webgl2')throw Error(JSON.stringify(r.getStats()));
+          const extension=r.driver.gl.getExtension('WEBGL_lose_context');
+          if(!extension)throw Error('WEBGL_lose_context missing');extension.loseContext();
+        }''')
+        page.wait_for_function('r.backend === "canvas2d"');result=page.evaluate('r.getStats()');
+        page.evaluate('r.dispose()');page.close();return result
+    case('actual WebGL2 context loss and Canvas2D recovery',live_gl_loss)
 
     def reference_counts():
         page = new_page(browser)
@@ -213,12 +260,13 @@ with sync_playwright() as playwright:
                 check(comparison['changedPixels']==0,'IDE pixels differ: '+str(comparison))
             comparisons = [v for v in VISUAL if v['dpr']==dpr]
             check(bool(comparisons), 'No visual backends executed')
-            if args.require_webgpu: check(any(v['backend']=='webgpu' for v in comparisons), 'GPU visual comparison did not execute')
+            for backend in REQUIRED: check(any(v['backend']==backend for v in comparisons), backend+' visual comparison did not execute')
             check(not page.errors,str(page.errors));page.close();return comparisons
         case(f'HTML-vs-renderer visual evidence at DPR {dpr}',ide_visual)
 
     def benchmark():
         page=new_page(browser,ide=True)
+        if REQUIRED: page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',REQUIRED[0])
         stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow();return r.getStats()}''')
         METRICS['ideForcedRebuildCpu']=stats
         # Complete this workload before initializing a second renderer; otherwise
@@ -228,10 +276,10 @@ with sync_playwright() as playwright:
         page.context.close()
         page=new_page(browser)
         # A reusable library workload: all opaque quads must batch to one draw.
-        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;let initializationError=null;try{p=await VB6Rendering.createPainter(backend,c)}catch(error){initializationError=String(error);c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);s.seal();const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t);if(p.device&&(i+1)%4===0)await p.device.queue.onSubmittedWorkDone()}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,initializationError,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
+        batch=page.evaluate('''async backend=>{let c=document.createElement('canvas');document.body.append(c);let p;let initializationError=null;try{p=await VB6Rendering.createPainter(backend,c)}catch(error){initializationError=String(error);c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);s.seal();const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t);if(p.device&&(i+1)%4===0)await p.device.queue.onSubmittedWorkDone()}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,initializationError,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''', REQUIRED[0] if REQUIRED else next((b for b in ['webgpu','webgl2','canvas2d'] if METRICS.get('backends',{}).get(b,{}).get('available')), 'canvas2d'))
         METRICS['batch10000Quads']=batch
-        if args.require_webgpu: check(batch['backend']=='webgpu', 'Batch workload silently fell back: '+str(batch))
-        if batch['backend']=='webgpu':
+        if REQUIRED: check(batch['backend']==REQUIRED[0], 'Batch workload silently fell back: '+str(batch))
+        if batch['backend'] in ['webgpu','webgl2']:
             check(batch['stats']['drawCalls']==1,'Opaque quads were not batched')
             check(batch['stats']['bufferAllocations']==1,'Buffer was reallocated every frame')
             check(batch['stats']['instanceUploads']==1,'Sealed geometry was uploaded every frame')

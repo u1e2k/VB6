@@ -48,6 +48,9 @@
     "test:interop:windows": "node tools/interop/test-native.mjs",
     "verify:classic": "node tools/verify-classic-roundtrip.mjs",
     "snapshot:native": "node tools/native-snapshot.mjs",
+    "test:rendering": "node --test tests/rendering-*.test.mjs",
+    "test:rendering:browser": "python tools/browser-rendering-tests.py",
+    "test:rendering:gpu": "python tools/browser-rendering-tests.py --require-webgpu",
     "test:classic-html": "python tools/browser-classic-html.py"
   },
   "engines": {

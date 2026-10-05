@@ -103,6 +103,9 @@ export class UIRenderer {
       } catch (error) {
         painter?.dispose(); canvas.remove();
         if (this.disposed || generation !== this.generation) return this.getStats();
+        // The first frame can fail after observe() connected. HTML fallback
+        // must not retain an observer (or a queued frame) from the failed driver.
+        this.cancelFrame(); this.observer.disconnect();
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
       }

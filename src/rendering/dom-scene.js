@@ -1,10 +1,11 @@
 import {PaintScene, parseColor, splitCSS} from './scene.js';
 import {intersect} from './policy.js';
+import {solidBackgroundLayers, paintBackgroundLayers} from './background.js';
 const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 const NATIVE = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'IFRAME', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IMG', 'OBJECT', 'EMBED', 'TABLE', 'METER', 'PROGRESS']);
 const rectOf = rect => [rect.left, rect.top, rect.width, rect.height];
 const number = value => Number.parseFloat(value) || 0;
-const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','font','fontWeight','fontSize','fontFamily','fontKerning','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
+const STYLE_KEYS = ['color','display','visibility','position','zIndex','overflowX','overflowY','boxShadow','outlineWidth','outlineStyle','opacity','filter','backdropFilter','mixBlendMode','clipPath','maskImage','writingMode','transform','borderImageSource','backgroundColor','backgroundImage','backgroundSize','backgroundPosition','backgroundRepeat','backgroundOrigin','backgroundClip','font','fontWeight','fontSize','fontFamily','fontKerning','direction','letterSpacing','textShadow','textDecorationLine','textOverflow','whiteSpace', ...['Top','Right','Bottom','Left'].flatMap(s=>['Width','Style','Color'].map(p=>'border'+s+p)), ...['TopLeft','TopRight','BottomLeft','BottomRight'].map(s=>'border'+s+'Radius')];
 function shadowParts(value) {
   if (!value || value === 'none') return [];
   return splitCSS(value).map(part => {
@@ -94,21 +95,23 @@ export class DOMScene {
       if (reason) { this.native(node, rect, clip, reason); return; }
     }
     const scaleX = node.offsetWidth ? rect[2] / node.offsetWidth : 1, scaleY = node.offsetHeight ? rect[3] / node.offsetHeight : 1;
-    let borders, shadows, background, gradient;
+    let borders, shadows, background, gradient, layers;
     try {
       if (!style.paint) {
         const sourceBorders = ['Top', 'Right', 'Bottom', 'Left'].map(side => ({width: number(style['border' + side + 'Width']), style: style['border' + side + 'Style'], color: parseColor(style['border' + side + 'Color'])}));
         if (sourceBorders.some(b => b.width && !['solid', 'none', 'hidden'].includes(b.style))) throw new Error('non-solid border');
         if (sourceBorders.some(b => b.width && b.color[3] === 0) && sourceBorders.some(b => b.width && b.color[3] > 0)) throw new Error('CSS border wedge');
-        style.paint = {borders: sourceBorders, shadows: shadowParts(style.boxShadow), background: parseColor(style.backgroundColor), gradient: this.gradient(style.backgroundImage)};
+        const layered = splitCSS(style.backgroundImage || 'none').length > 1;
+        style.paint = {borders: sourceBorders, shadows: shadowParts(style.boxShadow), background: parseColor(style.backgroundColor), gradient: layered ? null : this.gradient(style.backgroundImage), layers: layered ? solidBackgroundLayers(style) : null};
       }
       borders = scaleX === 1 && scaleY === 1 ? style.paint.borders : style.paint.borders.map((b, i) => ({...b, width: b.width * (i % 2 ? scaleX : scaleY)}));
-      ({shadows, background, gradient} = style.paint);
+      ({shadows, background, gradient, layers} = style.paint);
     } catch (error) { if (visible && inView) this.native(node, rect, clip, error.message); else this.children(node, clip, depth); return; }
     if (visible && inView) {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
       this.scene.add(rect, background, {clip});
       if (gradient) this.scene.add(rect, gradient.start, {clip, color2: gradient.end, vertical: gradient.vertical});
+      if (layers) { paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
       const [t, r, b, l] = borders.map(item => item.width), [x, y, w, h] = rect;
       // CSS solid border corners are split diagonally. Use native corner squares
       // for multicolor bevels; long edges remain native GPU primitives.
@@ -116,7 +119,7 @@ export class DOMScene {
       this.scene.add([x + w - r, y + t, r, h - t - b], borders[1].color, {clip});
       this.scene.add([x + l, y + h - b, w - l - r, b], borders[2].color, {clip});
       this.scene.add([x, y + t, l, h - t - b], borders[3].color, {clip});
-      for (const corner of [[x, y, l, t], [x + w - r, y, r, t], [x, y + h - b, l, b], [x + w - r, y + h - b, r, b]]) if (corner[2] && corner[3]) this.scene.add(corner, [0, 0, 0, 0], {clip, hole: true});
+      for (const corner of [[x, y, l, t], [x + w - r, y, r, t], [x, y + h - b, l, b], [x + w - r, y + h - b, r, b]]) if (corner[2] && corner[3] && borders.some(edge=>edge.color[3]>0)) this.scene.add(corner, [0, 0, 0, 0], {clip, hole: true});
       const inner = [x + l, y + t, w - l - r, h - t - b];
       for (const s of [...shadows].reverse()) if (s.inset) {
         const sx = s.x * scaleX, sy = s.y * scaleY;

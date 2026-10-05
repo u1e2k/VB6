@@ -1,5 +1,32 @@
 # Rendering qualification — 2026-10-05
 
+## Continuation results (latest implementation awaiting strict CI)
+
+The original failures below are historical, not the latest GPU capability result.
+A coherent Vulkan/ANGLE software configuration in run
+[37325885950](https://github.com/wieslawsoltes/VB6/actions/runs/37325885950)
+produced **zero differing WebGPU framebuffer and presentation pixels at all six
+tested DPR values**. That whole run still failed: WebGL2 was unavailable under
+those forced flags, one whole-IDE image differed by two pixels at DPR 1.5, and
+the old coupled harness required both APIs in the same browser.
+
+The continuation adds separate strict WebGPU/WebGL2 headless/headed jobs; every
+required backend must execute actual draws, readback and screenshots. It also
+adds direct GPU painting of the attributed classic bevel background layers,
+first-draw observer cleanup and independent device/context loss tests. The
+combined debugger/HTML/rendering source passed **2,147 Node tests** locally.
+These are implementation/unit results; current strict CI must still pass before
+changing this draft status. The whole-IDE screenshot requirement remains zero
+differing pixels, without a relaxed error threshold.
+
+The coherent software-GPU 10,000-quad retained workload demonstrated one draw
+per frame and one geometry pack/upload/buffer allocation across 60 frames.
+It is **not physical-hardware performance qualification**. The current UI is
+still hybrid: native input, text, unsupported CSS and accessibility use DOM.
+
+## Original qualification record
+
+
 **Status: draft; not approved for merge.** The implementation is a WebGPU-first hybrid UI renderer, not a full independent GPU UI. Physical-hardware performance and complete pixel parity are not certified.
 
 ## Verified implementation

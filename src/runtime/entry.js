@@ -1,3 +1,5 @@
+import {UIRenderer, retainRenderer, rendererForDocument} from '../rendering/renderer.js';
+import {normalizeRendering, DEFAULT_RENDERING} from '../rendering/policy.js';
 import {createWin32,Win32Browser,WIN32_CONSTANTS} from '../../packages/win32-browser/src/index.js';
 import {AutomationRegistry} from './automation.js';
 import {ControlAdapterRegistry} from '../controls/adapters.js';
@@ -22,4 +24,4 @@ import { VirtualFileSystem } from './filesystem.js';
 import { BrowserControl, BrowserForm } from '../controls/controls.js';
 import { GraphicsSurface } from '../graphics/surface.js';
 export async function mountApplication(project,container=document.body,options={}){const host=new ApplicationHost(project,container,options);if(options.nativeWindows!==false)installNativeHost(host);await host.start();return host;}
-export const RuntimeAPI={AutomationRegistry,ControlAdapterRegistry,createWin32,Win32Browser,WIN32_CONSTANTS,DataContext,ADOConnection,ADOCommand,ConnectedRecordset,DATA_CONSTANTS,installNativeHost,ResourceStore,readRES,writeRES,setResource,setResourceString,THEMES,applyTheme,colorValue,NOTHING,MISSING,VBErrorValue,asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,serialToDate,dateToSerial,Cell,Ref,MemoryRecordset,RichTextDocument,parseRTF,writeRTF,ApplicationHost,VirtualMachine,compileProject,compileModule,parseExpression,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,FINANCIAL_FUNCTIONS,VirtualFileSystem,BrowserControl,BrowserForm,GraphicsSurface};
+export const RuntimeAPI={UIRenderer,retainRenderer,rendererForDocument,normalizeRendering,DEFAULT_RENDERING,AutomationRegistry,ControlAdapterRegistry,createWin32,Win32Browser,WIN32_CONSTANTS,DataContext,ADOConnection,ADOCommand,ConnectedRecordset,DATA_CONSTANTS,installNativeHost,ResourceStore,readRES,writeRES,setResource,setResourceString,THEMES,applyTheme,colorValue,NOTHING,MISSING,VBErrorValue,asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,serialToDate,dateToSerial,Cell,Ref,MemoryRecordset,RichTextDocument,parseRTF,writeRTF,ApplicationHost,VirtualMachine,compileProject,compileModule,parseExpression,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,FINANCIAL_FUNCTIONS,VirtualFileSystem,BrowserControl,BrowserForm,GraphicsSurface};
