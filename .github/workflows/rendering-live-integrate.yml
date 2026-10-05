@@ -2,7 +2,7 @@ name: Integrate retained live rendering
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
-    paths: [.rendering-live.patch.xz, .github/workflows/rendering-live-integrate.yml]
+    paths: [.rendering-live.patch.xz, .github/workflows/rendering-live-integrate.yml, tests/rendering-background.test.mjs]
 permissions:
   contents: write
 jobs:
