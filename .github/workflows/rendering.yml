@@ -13,6 +13,10 @@ jobs:
   webgpu:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        display: [headless, headed]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: npm run build && npm run test:rendering
+      - run: npm run build && node --test tests/rendering-*.test.mjs
       - run: python -m pip install playwright==1.57.0 Pillow
       - run: python -m playwright install --with-deps chromium
       - name: Resolve test browser
@@ -31,11 +35,20 @@ jobs:
           with sync_playwright() as p:
               print('CHROMIUM_PATH=' + p.chromium.executable_path)
           PY
-      - name: Actual WebGPU/WebGL2 execution, pixels, loss and CPU metrics
-        run: npm run test:rendering:gpu
+      - name: Actual software-GPU execution, exact framebuffer and presentation pixels
+        env:
+          DISPLAY_MODE: ${{ matrix.display }}
+        run: |
+          if [ "$DISPLAY_MODE" = headed ]; then
+            xvfb-run -a python tools/browser-rendering-tests.py --require-webgpu --software-gpu --headed
+          else
+            python tools/browser-rendering-tests.py --require-webgpu --software-gpu
+          fi
+      - name: Verify reproducible generated distributions
+        run: git diff --exit-code -- dist src/exporter/runtime-payload.js examples
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: rendering-pixels-and-metrics
+          name: rendering-pixels-and-metrics-${{ matrix.display }}
           path: reports/rendering
           retention-days: 14
