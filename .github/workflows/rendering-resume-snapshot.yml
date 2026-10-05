@@ -1,0 +1,41 @@
+name: Rendering resume snapshot
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-resume-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Archive sources and refs
+        run: |
+          mkdir -p /tmp/rendering-resume
+          git bundle create /tmp/rendering-resume/repository.bundle HEAD refs/remotes/origin/main
+          git rev-parse HEAD origin/main > /tmp/rendering-resume/refs.txt
+      - name: Fetch user-referenced public feedback for attribution
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          from pathlib import Path
+          def read(i):
+              with urllib.request.urlopen('https://hacker-news.firebaseio.com/v0/item/'+str(i)+'.json', timeout=20) as r:
+                  return json.load(r)
+          items=[];queue=[49963404]
+          while queue and len(items)<200:
+              item=read(queue.pop(0))
+              if item:
+                  items.append(item);queue.extend(item.get('kids',[]))
+          Path('/tmp/rendering-resume/hn-feedback.json').write_text(json.dumps(items,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-resume-sources
+          path: /tmp/rendering-resume
+          retention-days: 3
