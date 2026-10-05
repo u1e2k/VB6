@@ -1,0 +1,57 @@
+name: Reconcile classic HTML with debugger update
+on:
+  push:
+    branches: [fix/classic-bevels-and-list-reuse]
+    paths: [.github/workflows/classic-html-sync.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge pinned main and regenerate derived files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 605fc10bcef483a52c9d50eddfd5ba5036eea04d || true
+          python - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          def blob(stage,path):
+              return subprocess.check_output(['git','show',f':{stage}:{path}']).decode()
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          for path in conflicts:
+              if path=='package.json':
+                  main=json.loads(blob(3,path));ours=json.loads(blob(2,path))
+                  main['scripts']['test:classic-html']=ours['scripts']['test:classic-html']
+                  Path(path).write_text(json.dumps(main,indent=2)+'\n')
+              elif path=='.gitignore':
+                  a=blob(2,path).splitlines();b=blob(3,path).splitlines()
+                  Path(path).write_text('\n'.join(dict.fromkeys(a+b))+'\n')
+              elif path.startswith('dist/') or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js'] or path.startswith('examples/'):
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+              else:
+                  raise RuntimeError('Unreviewed authored conflict: '+path)
+              subprocess.run(['git','add','--',path],check=True)
+          assert Path('.git/MERGE_HEAD').exists(), 'Expected a merge of pinned main'
+          PY
+          npm run build
+          npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git commit -m 'merge: retain debugger updates and regenerate classic HTML distributions'
+          git push origin HEAD:refs/heads/fix/classic-bevels-and-list-reuse
+          git bundle create /tmp/classic-html-combined.bundle HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: classic-html-combined-source
+          path: /tmp/classic-html-combined.bundle
+          retention-days: 3
