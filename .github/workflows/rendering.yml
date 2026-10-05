@@ -52,6 +52,9 @@ jobs:
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
+      - name: Diagnose fractional-DPI native text versus overlay pixels
+        if: always() && matrix.backend == 'webgpu' && matrix.display == 'headed'
+        run: xvfb-run -a python tools/browser-rendering-diagnostics.py
       - name: Verify reproducible generated distributions
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
