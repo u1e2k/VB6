@@ -1349,9 +1349,29 @@ html:has(.browser-window-root), body:has(> .browser-window-root) { width:100%; h
 }
 
 /* Mnemonic marks are continuous classic UI underlines, not prose decoration.
-   Disable glyph-avoidance segmentation for these marks in BOTH backends. Keep
-   browser shaping, font metrics, selection and the native glyphs unchanged.
-   Property semantics: https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property
+   Paint the one-pixel mark as a filled background strip: native automatic
+   underline strokes changed their fractional-edge coverage during compositing
+   at DPR 1.5, even across HTML-only captures. An inset clip/padding change did
+   not fix that native drift. The strip preserves the inline box, native glyphs,
+   shaping, selection and inherited enabled/disabled/hover color in BOTH paths.
+   Decoration semantics: https://drafts.csswg.org/css-text-decor-4/
+   Background placement: https://www.w3.org/TR/css-backgrounds-3/#background-position
    Original rule; independent of the attributed 98.css bevel technique above. */
 .menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,
-.vb-option u,.vb-frame-legend u,.vb-form-title u { text-decoration-skip-ink:none; }
+.vb-option u,.vb-frame-legend u,.vb-form-title u {
+  text-decoration-skip-ink:none;
+  text-decoration-line:none;
+  background-image:linear-gradient(currentColor,currentColor);
+  background-size:100% 1px;
+  background-position:left bottom 1px;
+  background-repeat:no-repeat;
+}
+/* Forced colors can suppress background images. Preserve native mnemonic
+   visibility and system color handling rather than forcing author paint. */
+@media (forced-colors: active) {
+ .menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,
+ .vb-option u,.vb-frame-legend u,.vb-form-title u {
+   text-decoration-line:underline;
+   background-image:none;
+ }
+}

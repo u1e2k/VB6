@@ -54,7 +54,9 @@ test('custom mutable scenes cannot claim retained-pixel reuse',()=>{
 test('classic mnemonic continuity is explicit and does not change general prose styling', async()=>{
   const {readFile}=await import('node:fs/promises');
   const css=await readFile(new URL('../src/theme/bevels.css',import.meta.url),'utf8');
-  assert.match(css,/\.menubar u[^{}]*\{ text-decoration-skip-ink:none; \}/);
+  assert.match(css,/\.menubar u[^{}]*\{[^}]*text-decoration-skip-ink:none;[^}]*text-decoration-line:none;[^}]*background-image:linear-gradient\(currentColor,currentColor\);/);
+  assert.match(css,/background-size:100% 1px;\s*background-position:left bottom 1px;/);
+  assert.match(css,/@media \(forced-colors: active\)\s*\{\s*\.menubar u[^{}]*\{[^}]*text-decoration-line:underline;\s*background-image:none;/);
   assert.doesNotMatch(css,/(?:^|\n)u\s*\{/);
   assert.match(css,/https:\/\/drafts\.csswg\.org\/css-text-decor-4\//);
 });

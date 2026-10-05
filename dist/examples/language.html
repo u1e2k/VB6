@@ -653,12 +653,32 @@
 }
 
 /* Mnemonic marks are continuous classic UI underlines, not prose decoration.
-   Disable glyph-avoidance segmentation for these marks in BOTH backends. Keep
-   browser shaping, font metrics, selection and the native glyphs unchanged.
-   Property semantics: https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property
+   Paint the one-pixel mark as a filled background strip: native automatic
+   underline strokes changed their fractional-edge coverage during compositing
+   at DPR 1.5, even across HTML-only captures. An inset clip/padding change did
+   not fix that native drift. The strip preserves the inline box, native glyphs,
+   shaping, selection and inherited enabled/disabled/hover color in BOTH paths.
+   Decoration semantics: https://drafts.csswg.org/css-text-decor-4/
+   Background placement: https://www.w3.org/TR/css-backgrounds-3/#background-position
    Original rule; independent of the attributed 98.css bevel technique above. */
 .menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,
-.vb-option u,.vb-frame-legend u,.vb-form-title u { text-decoration-skip-ink:none; }
+.vb-option u,.vb-frame-legend u,.vb-form-title u {
+  text-decoration-skip-ink:none;
+  text-decoration-line:none;
+  background-image:linear-gradient(currentColor,currentColor);
+  background-size:100% 1px;
+  background-position:left bottom 1px;
+  background-repeat:no-repeat;
+}
+/* Forced colors can suppress background images. Preserve native mnemonic
+   visibility and system color handling rather than forcing author paint. */
+@media (forced-colors: active) {
+ .menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,
+ .vb-option u,.vb-frame-legend u,.vb-form-title u {
+   text-decoration-line:underline;
+   background-image:none;
+ }
+}
 </style></head><body><div id="app"></div><script id="vb6-project" type="application/json">{"schema":1,"id":"example_language_1","name":"LanguageLab","description":"","startup":"Sub Main","modules":[{"id":"example_language_2","name":"modMain","kind":"module","code":"Option Explicit\n\nPublic Sub Main()\n    Dim values(1 To 5) As Long\n    Dim i As Long\n    Dim total As Long\n    Debug.Print \"VB6 Studio Web - Language Lab\"\n    Debug.Print String$(36, \"-\")\n    For i = 1 To 5\n        values(i) = Factorial(i)\n        total = total + values(i)\n        Debug.Print CStr(i) \u0026 \"! = \" \u0026 CStr(values(i))\n    Next i\n    Debug.Print \"Total: \" \u0026 CStr(total)\n    Debug.Print \"Banker's rounding: \" \u0026 CStr(CInt(2.5)) \u0026 \", \" \u0026 CStr(CInt(3.5))\n    Debug.Print \"Collection:\"\n    Dim names As New Collection\n    Dim item As Variant\n    names.Add \"Ada\"\n    names.Add \"Grace\"\n    names.Add \"Alan\"\n    For Each item In names\n        Debug.Print \"  \" \u0026 item\n    Next item\n    On Error Resume Next\n    Dim quotient As Double\n    quotient = 1 / 0\n    Debug.Print \"Handled error: \" \u0026 Err.Description\n    Debug.Print \"Complete.\"\nEnd Sub\n\nPrivate Function Factorial(ByVal n As Long) As Long\n    If n \u003c= 1 Then\n        Factorial = 1\n    Else\n        Factorial = n * Factorial(n - 1)\n    End If\nEnd Function\n"}],"settings":{"snapToGrid":true,"gridSize":120,"showGrid":true,"renderer":"auto","tabWidth":4,"requireVariableDeclaration":true},"references":[],"assets":{},"vfs":{"files":{},"directories":["/"]},"appSettings":{}}</script><script>/* VB6 Studio Web 0.5.0 - MIT. Generated from modular sources. */
 (()=>{'use strict';
 const __modules=[];
