@@ -1,0 +1,42 @@
+name: Integrate reviewed main for HTML rendering
+on:
+  push:
+    branches: [perf/html-rendering-retention]
+    paths: [.github/workflows/refresh-html-main.yml]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge reviewed main commit without overwriting source conflicts
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Reviewed diff from 48442f0: editor/documents event-list fixes and
+          # their tests; rendering source changes do not overlap.
+          git merge --no-commit --no-ff 523da10a94f3ed70708ff25d309921baaca7278e || true
+          test -f .git/MERGE_HEAD
+          python - <<'PY'
+          import subprocess
+          conflicts = subprocess.check_output(['git','diff','--name-only','--diff-filter=U'], text=True).splitlines()
+          generated = {'dist/VB6-Studio-Web.html','dist/studio.js','src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js'}
+          assert all(path in generated or path.startswith('dist/examples/') for path in conflicts), conflicts
+          for path in conflicts:
+              subprocess.run(['git','checkout','--ours','--',path],check=True)
+              subprocess.run(['git','add','--',path],check=True)
+          PY
+          npm run build
+          npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git commit -m 'merge: retain latest editor and event-list fixes alongside HTML rendering optimizations'
+          git push origin HEAD:refs/heads/perf/html-rendering-retention
