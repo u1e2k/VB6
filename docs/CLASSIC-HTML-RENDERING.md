@@ -20,10 +20,16 @@ removed button borders are compensated by padding. Container chrome retains
 its original border widths and padding, drawing the equivalent staircase in
 border-box background layers: nominal border widths and padding do not round
 identically on WebKit at fractional DPI. This preserves actual authored outer
-bounds and content origins without per-control JavaScript measurements. Native radio circles, user-authored shapes, editor text,
-flat menu items and selection/focus behavior are not globally replaced.
-Forced-colors mode keeps real borders rather than relying on suppressed shadows.
-Theme tokens are redeclared at every theme boundary for embedded runtime forms.
+bounds and content origins without per-control JavaScript measurements.
+Native radio circles, user-authored shapes, editor text, flat menu items and
+selection/focus behavior are not globally replaced. Theme tokens are redeclared
+at every theme boundary for embedded runtime forms.
+
+Forced-colors mode retains the original real borders, native colors and focus
+outlines. It explicitly suppresses box/text shadows, including on engines which
+expose the media query without suppressing computed author shadows themselves.
+The three-engine tests found both the fractional-border and high-contrast issues;
+the implementation was corrected rather than relaxing the geometry or pixel gates.
 
 ## Stable HTML list rows
 
@@ -48,6 +54,21 @@ IDE operations or GPU rendering have the same speedup.
 geometry comparisons, theme nesting, focus/disabled/pressed and forced-colors
 checks, retained-list behavior and a same-browser comparison with the former
 list paint implementation. Reports go to `reports/classic-html`.
+
+The 14-case browser suite includes independently generated normal/pressed/disabled
+button and container staircase pixels at DPR 1, 2, 3 and 4, and exact before/after
+box/content geometry at DPR 1, 1.25, 1.5, 1.75 and 2. One hundred unchanged ToolList
+paints must produce **zero DOM mutations**. The benchmark alternates the old/new
+implementations six times in one browser and preserves its raw samples.
+
+After integrating debugger main `605fc10`, local validation passed **2,125 Node
+tests and 14 Chromium browser cases**. The corrected WebKit and Firefox jobs in
+[run 37332237893](https://github.com/wieslawsoltes/VB6/actions/runs/37332237893)
+passed their browser and reproducible-build checks at source `3f35001`.
+The permanent CI matrix independently tests Chromium, Firefox and WebKit; inspect
+the run associated with the PR's current head for its final merged-source results.
+Unsupported browser emulation is reported as skipped rather than a successful test.
+
 The integer-DPI fixtures test exact staircase pixels. Fractional-DPI tests check
 geometry and provide screenshots; browser font rasterization and native widget
 popups are not claimed to be universal native Windows VB6 golden matches.
