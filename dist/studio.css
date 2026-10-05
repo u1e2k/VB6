@@ -1320,3 +1320,17 @@ html:has(.browser-window-root), body:has(> .browser-window-root) { width:100%; h
  *::-webkit-scrollbar-button:single-button:active { box-shadow:var(--vb-bevel-pressed); }
  .vb-range::-webkit-slider-thumb { border:0;box-shadow:var(--vb-bevel-raised); }
 }
+
+/* Explicit high-contrast suppression also covers engines which expose the
+   forced-colors media query without suppressing computed author shadows.
+   Keep the original real borders, native colors and keyboard focus outlines. */
+@media (forced-colors: active) {
+ .classic-bevel-raised,.classic-bevel-sunken,.vb-command,
+ .vb-form:not(.vb-borderless),.vb-dialog,.ide-dialog,.classic-menu,
+ .vb-popup-menu.classic-menu,.ide-dialog-footer button,.vb-dialog-actions button,
+ .window-buttons button,.caption-close,.tool-caption button,.vb-window-button,
+ .vb-combo-arrow,.vb-spin-button,.vb-scroll-arrow,.vb-scroll-thumb,
+ .vb-control input,.vb-control textarea,.vb-control select,.vb-dialog input {
+   box-shadow:none!important;text-shadow:none!important;
+ }
+}

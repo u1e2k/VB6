@@ -637,6 +637,20 @@
  *::-webkit-scrollbar-button:single-button:active { box-shadow:var(--vb-bevel-pressed); }
  .vb-range::-webkit-slider-thumb { border:0;box-shadow:var(--vb-bevel-raised); }
 }
+
+/* Explicit high-contrast suppression also covers engines which expose the
+   forced-colors media query without suppressing computed author shadows.
+   Keep the original real borders, native colors and keyboard focus outlines. */
+@media (forced-colors: active) {
+ .classic-bevel-raised,.classic-bevel-sunken,.vb-command,
+ .vb-form:not(.vb-borderless),.vb-dialog,.ide-dialog,.classic-menu,
+ .vb-popup-menu.classic-menu,.ide-dialog-footer button,.vb-dialog-actions button,
+ .window-buttons button,.caption-close,.tool-caption button,.vb-window-button,
+ .vb-combo-arrow,.vb-spin-button,.vb-scroll-arrow,.vb-scroll-thumb,
+ .vb-control input,.vb-control textarea,.vb-control select,.vb-dialog input {
+   box-shadow:none!important;text-shadow:none!important;
+ }
+}
 </style></head><body><div id="app"></div><script id="vb6-project" type="application/json">{"schema":1,"id":"example_language_1","name":"LanguageLab","description":"","startup":"Sub Main","modules":[{"id":"example_language_2","name":"modMain","kind":"module","code":"Option Explicit\n\nPublic Sub Main()\n    Dim values(1 To 5) As Long\n    Dim i As Long\n    Dim total As Long\n    Debug.Print \"VB6 Studio Web - Language Lab\"\n    Debug.Print String$(36, \"-\")\n    For i = 1 To 5\n        values(i) = Factorial(i)\n        total = total + values(i)\n        Debug.Print CStr(i) \u0026 \"! = \" \u0026 CStr(values(i))\n    Next i\n    Debug.Print \"Total: \" \u0026 CStr(total)\n    Debug.Print \"Banker's rounding: \" \u0026 CStr(CInt(2.5)) \u0026 \", \" \u0026 CStr(CInt(3.5))\n    Debug.Print \"Collection:\"\n    Dim names As New Collection\n    Dim item As Variant\n    names.Add \"Ada\"\n    names.Add \"Grace\"\n    names.Add \"Alan\"\n    For Each item In names\n        Debug.Print \"  \" \u0026 item\n    Next item\n    On Error Resume Next\n    Dim quotient As Double\n    quotient = 1 / 0\n    Debug.Print \"Handled error: \" \u0026 Err.Description\n    Debug.Print \"Complete.\"\nEnd Sub\n\nPrivate Function Factorial(ByVal n As Long) As Long\n    If n \u003c= 1 Then\n        Factorial = 1\n    Else\n        Factorial = n * Factorial(n - 1)\n    End If\nEnd Function\n"}],"settings":{"snapToGrid":true,"gridSize":120,"showGrid":true,"renderer":"auto","tabWidth":4,"requireVariableDeclaration":true},"references":[],"assets":{},"vfs":{"files":{},"directories":["/"]},"appSettings":{}}</script><script>/* VB6 Studio Web 0.5.0 - MIT. Generated from modular sources. */
 (()=>{'use strict';
 const __modules=[];
