@@ -24,3 +24,6 @@ server-profiles.local.json
 
 # Coding-agent browser validation reports and screenshots (CI artifacts).
 reports/coding-agents/
+
+# Classic HTML pixel fixtures and benchmark evidence
+reports/classic-html/
