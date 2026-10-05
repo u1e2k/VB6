@@ -5,9 +5,12 @@ on:
     paths: [.rendering-final/**, .github/workflows/rendering-finalize.yml]
 permissions:
   contents: write
+concurrency:
+  group: rendering-final-source
+  cancel-in-progress: true
 jobs:
   source:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
