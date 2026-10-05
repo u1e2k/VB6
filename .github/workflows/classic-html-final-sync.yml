@@ -1,0 +1,39 @@
+name: Reconcile classic HTML final candidate
+on:
+  push:
+    branches: [fix/classic-bevels-and-list-reuse]
+    paths: [.github/workflows/classic-html-final-sync.yml]
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge locally verified source combination
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 29c77082c9bf854c7f6fbbf3ed63d5277036b761 || true
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          allowed={'dist/VB6-Studio-Web.html','dist/examples/win32.html','dist/studio.js','src/exporter/runtime-payload.js'}
+          assert set(conflicts)<=allowed, conflicts
+          for path in conflicts:
+              subprocess.run(['git','checkout','--ours','--',path],check=True)
+              subprocess.run(['git','add','--',path],check=True)
+          assert Path('.git/MERGE_HEAD').exists()
+          PY
+          npm run build && npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git commit -m 'merge: preserve native calls and regions in classic HTML renderer'
+          git push origin HEAD:refs/heads/fix/classic-bevels-and-list-reuse
