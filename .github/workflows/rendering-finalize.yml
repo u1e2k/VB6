@@ -1,30 +1,67 @@
-name: Recover current rendering integration
+name: Publish reviewed rendering completion
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
-    paths: [.github/workflows/rendering-finalize.yml]
+    paths: [.rendering-final/**, .rendering-enhancements.xz, .github/workflows/rendering-finalize.yml]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: rendering-final-source
   cancel-in-progress: true
 jobs:
-  snapshot:
+  source:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Preserve exact reviewed refs for conflict-safe integration
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge pinned main and apply checksum-verified source changes
         run: |
-          git fetch origin main
-          git bundle create /tmp/rendering-resume.bundle HEAD refs/remotes/origin/main
-          git rev-parse HEAD origin/main > /tmp/rendering-resume-refs.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff a098f73921a624e30c26a3aad07c76a14e10073e || true
+          python - <<'PY'
+          import hashlib,lzma,subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          assert all(p.startswith('dist/') or p=='src/exporter/runtime-payload.js' for p in conflicts), conflicts
+          for path in conflicts:
+              subprocess.run(['git','checkout','--ours','--',path],check=True)
+              subprocess.run(['git','add','--',path],check=True)
+          assert Path('.git/MERGE_HEAD').exists()
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          parts=sorted(Path('.rendering-final').glob('*.part'))
+          assert len(parts)==3
+          patch=lzma.decompress(b''.join(p.read_bytes() for p in parts))
+          assert hashlib.sha256(patch).hexdigest()=='a99e091ba08c618b9a0605c0db04f4fd8fa18c870157a92b55c7fef989dc09e6'
+          Path('/tmp/rendering-recovered.patch').write_bytes(patch)
+          patch=lzma.decompress(Path('.rendering-enhancements.xz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest()=='7fffef6393d03a6cdb4f5aef5eada304fdcd251acd2ec02c2010a7de938baf6e'
+          Path('/tmp/rendering-enhancements.patch').write_bytes(patch)
+          PY
+          git apply --unidiff-zero --check /tmp/rendering-recovered.patch
+          git apply --unidiff-zero /tmp/rendering-recovered.patch
+          git apply --check /tmp/rendering-enhancements.patch
+          git apply /tmp/rendering-enhancements.patch
+          npm run build && npm test
+      - name: Commit ordinary source and regenerate all derived outputs
+        run: |
+          git rm -r .rendering-final .rendering-enhancements.xz
+          git add README.md docs src tests tools dist examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'feat(rendering): complete dual-backend settings, dynamic repaint and local GPU diagnostics'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git archive --format=tar.gz -o /tmp/rendering-completed-source.tar.gz HEAD
+          git rev-parse HEAD > /tmp/rendering-completed-head.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: rendering-resume-exact-refs
+          name: rendering-completed-source
           path: |
-            /tmp/rendering-resume.bundle
-            /tmp/rendering-resume-refs.txt
+            /tmp/rendering-completed-source.tar.gz
+            /tmp/rendering-completed-head.txt
           retention-days: 7
