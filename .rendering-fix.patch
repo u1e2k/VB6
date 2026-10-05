@@ -1,0 +1,31 @@
+--- a/tools/browser-rendering-tests.py
++++ b/tools/browser-rendering-tests.py
+@@ -7,7 +7,7 @@
+ pixel parity with our HTML path, CPU timing and physical-hardware qualification.
+ """
+ from __future__ import annotations
+-import argparse, functools, http.server, io, json, os, platform, shutil, threading, time, traceback
++import argparse, functools, http.server, io, json, os, platform, shlex, shutil, threading, time, traceback
+ from pathlib import Path
+ from PIL import Image, ImageChops
+ from playwright.sync_api import sync_playwright
+@@ -52,6 +52,7 @@
+     page = browser.new_page(viewport={'width': 1280, 'height': 800}, device_scale_factor=dpr)
+     page.errors = []
+     page.on('pageerror', lambda error: page.errors.append(str(error)))
++    page.on('console', lambda message: METRICS.setdefault('browserWarnings', []).append(message.text) if message.type in ('warning', 'error') and len(METRICS.get('browserWarnings', [])) < 100 else None)
+     if URL: page.goto(URL + ('dist/VB6-Studio-Web.html' if ide else ''))
+     if ide:
+         if not URL: page.set_content(IDE)
+@@ -72,7 +73,10 @@
+ 
+ with sync_playwright() as playwright:
+     executable = os.environ.get('CHROMIUM_PATH') or shutil.which('chromium') or playwright.chromium.executable_path
+-    launch_flags = ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader']
++    # Select the Vulkan driver explicitly: ANGLE flags alone configure WebGL,
++    # not Dawn's WebGPU adapter. These switches are test-only.
++    launch_flags = ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--use-vulkan=swiftshader', '--enable-features=Vulkan', '--disable-vulkan-surface']
++    launch_flags += shlex.split(os.environ.get('RENDERING_BROWSER_FLAGS', ''))
+     browser = playwright.chromium.launch(executable_path=executable, headless=True, args=launch_flags)
+     METRICS.update(browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False)
+ 
