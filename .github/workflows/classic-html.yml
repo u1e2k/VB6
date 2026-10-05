@@ -2,7 +2,7 @@ name: Classic HTML rendering
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, fix/classic-bevels-and-list-reuse]
   workflow_dispatch:
 permissions:
   contents: read
