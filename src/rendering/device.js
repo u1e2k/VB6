@@ -23,3 +23,22 @@ export async function acquireDevice(view, timeout = 3000) {
   }
   return deadline(pending, timeout);
 }
+
+// One promise continuation per shared device, not one retained closure per
+// disposed painter. Unsubscribing releases detached documents immediately.
+const losses = new WeakMap();
+export function subscribeDeviceLoss(device, callback) {
+  let record = losses.get(device);
+  if (!record) {
+    record = {listeners: new Set(), info: null}; losses.set(device, record);
+    device.lost.then(info => {
+      record.info = info;
+      const callbacks = [...record.listeners]; record.listeners.clear();
+      for (const listener of callbacks) { try { listener(info); } catch (error) { globalThis.reportError?.(error); } }
+    });
+  }
+  let active = true;
+  if (record.info) queueMicrotask(() => { if (active) callback(record.info); });
+  else record.listeners.add(callback);
+  return () => { active = false; record.listeners.delete(callback); };
+}

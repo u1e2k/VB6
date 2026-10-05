@@ -1,4 +1,5 @@
 import {physicalSize} from './policy.js';
+import {encodeInstances, canReuseInstances, rememberInstances, prepareBatches} from './instances.js';
 const VERTEX = `#version 300 es
 precision highp float;
 layout(location=0) in vec4 rect; layout(location=1) in vec4 clipping;
@@ -15,14 +16,14 @@ const FRAGMENT = `#version 300 es
 precision highp float; uniform sampler2D image; uniform vec4 screen;
 in vec2 uv; in vec4 tint; flat in vec4 clip; flat in float mode; out vec4 outputColor;
 void main(){
- vec2 xy=vec2(gl_FragCoord.x/screen.z,screen.y-gl_FragCoord.y/screen.w);
+ vec2 xy=floor(vec2(gl_FragCoord.x,screen.y*screen.w-gl_FragCoord.y));
  if(any(lessThan(xy,clip.xy))||any(greaterThanEqual(xy,clip.xy+clip.zw)))discard;
  if(mode>1.5){outputColor=vec4(0);return;}
  vec4 c=mode>.5?texture(image,uv)*tint:tint; outputColor=vec4(c.rgb*c.a,c.a);
 }`;
 export class WebGLPainter {
   constructor(canvas, {onLost = () => {}} = {}) {
-    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0};
+    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0};
     const gl = this.gl = canvas.getContext('webgl2', {alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
     if (!gl) throw new Error('WebGL2 unavailable');
     this.lost = event => { event.preventDefault(); if (!this.disposed) onLost('WebGL2 context lost'); }; canvas.addEventListener('webglcontextlost', this.lost);
@@ -48,14 +49,14 @@ export class WebGLPainter {
     if (!page) return this.white;
     const gl = this.gl; let record = this.textures.get(page);
     if (!record) { record = {texture: this.texture(), revision: -1}; this.textures.set(page, record); }
-    if (record.revision !== page.revision) {
+    if (record.revision !== page.revision || record.width !== page.width || record.height !== page.height) {
       gl.bindTexture(gl.TEXTURE_2D, record.texture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; this.stats.uploadedBytes += page.width * page.height * 4;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
     }
     return record.texture;
   }
   render(scene) {
-    const usedPages = new Set(scene.commands.map(command => command.page).filter(Boolean));
+    const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { this.gl.deleteTexture(record.texture); this.textures.delete(page); }
     const gl = this.gl; if (this.disposed || gl.isContextLost()) throw new Error('WebGL2 context lost');
     const size = physicalSize(scene.width, scene.height, scene.dpr, gl.getParameter(gl.MAX_TEXTURE_SIZE));
@@ -65,15 +66,14 @@ export class WebGLPainter {
     gl.useProgram(this.program); gl.uniform4f(this.uniform, scene.width, scene.height, size.scaleX, size.scaleY); gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     const required = Math.max(24, scene.commands.length * 24);
     if (!this.data || this.data.length < required) { this.data = new Float32Array(Math.max(1024, 2 ** Math.ceil(Math.log2(required)))); gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW); this.stats.bufferAllocations++; }
-    const groups = []; let at = 0;
-    for (const c of scene.commands) {
-      this.data.set(c.rect, at); this.data.set(c.clip, at + 4); this.data.set(c.color, at + 8); this.data.set(c.color2, at + 12); this.data.set(c.uv, at + 16); this.data.set([c.hole ? 2 : c.page ? 1 : 0, c.vertical ? 1 : 0, 0, 0], at + 20); at += 24;
-      const image = this.image(c.page), previous = groups.at(-1);
-      if (previous && previous.image === image && previous.hole === c.hole) previous.count++; else groups.push({first: at / 24 - 1, count: 1, image, hole: c.hole});
-    }
-    if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4;
+    const reuse = canReuseInstances(this, scene, size);
+    if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
+    const at = scene.commands.length * 24, images = new Map();
+    for (const page of usedPages) images.set(page, this.image(page));
+    if (at && !reuse) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4; this.stats.instanceUploads++; }
+    rememberInstances(this, scene, size);
     for (const group of groups) {
-      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.image);
+      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.page ? images.get(group.page) : this.white);
       for (let i = 0; i < 6; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 96, group.first * 96 + i * 16);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, group.count);
     }
@@ -81,7 +81,7 @@ export class WebGLPainter {
     this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
   }
   dispose() {
-    if (this.disposed) return; this.disposed = true; this.canvas.removeEventListener('webglcontextlost', this.lost);
+    if (this.disposed) return; this.disposed = true; this.encodedScene = null; this.batchedScene = null; this.batches = null; this.canvas.removeEventListener('webglcontextlost', this.lost);
     const gl = this.gl; if (!gl) return;
     for (const record of this.textures.values()) gl.deleteTexture(record.texture); this.textures.clear();
     gl.deleteTexture(this.white); gl.deleteBuffer(this.buffer); gl.deleteVertexArray(this.vao); gl.deleteProgram(this.program);

@@ -25,26 +25,28 @@ export class UIRenderer {
   listen(target, type, listener, options) { target?.addEventListener(type, listener, options); this.listeners.push(() => target?.removeEventListener(type, listener, options)); }
   observe() {
     const invalidate = event => {
-      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.adapter.invalidateStyles();
+      if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
+      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.stylesDirty = true;
       else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
-        const scope = event.target.closest('button,[role=treeitem],.tree-row,.property-row,.vb-control,.tool-caption') || event.target;
-        this.adapter.invalidateStyles(scope.parentElement);
-        if (event.relatedTarget?.nodeType === 1) this.adapter.invalidateStyles(event.relatedTarget.parentElement);
+        this.stylesDirty = true;
       }
       this.invalidate();
     };
     this.observer = new this.view.MutationObserver(records => {
+      if (!this.driver) return;
       let changed = false;
       for (const r of records) {
         const node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
         if (node?.closest('[data-vb-render-layer]')) continue;
+        if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        if (r.type !== 'characterData') this.adapter.invalidateStyles(node);
+        this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
-    this.observer.observe(this.document.body, {childList: true, subtree: true, attributes: true, characterData: true});
-    for (const event of ['input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    // Connected only while a canvas backend is active; native HTML incurs no
+    // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
+    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
     this.listen(this.document, 'scroll', invalidate, true);
     this.listen(this.view, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'resize', invalidate);
@@ -53,7 +55,7 @@ export class UIRenderer {
     this.listen(this.view, 'pagehide', () => this.dispose());
     this.listen(this.view, 'beforeprint', () => { this.printing = true; if (this.canvas) this.canvas.style.visibility = 'hidden'; });
     this.listen(this.view, 'afterprint', () => { this.printing = false; invalidate(); });
-    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.adapter.invalidateStyles(); invalidate(); });
+    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.stylesDirty = true; invalidate(); });
     this.forcedColors = this.view.matchMedia('(forced-colors: active)');
     this.listen(this.forcedColors, 'change', () => { this.ready = this.setOptions(this.policy, {force: true}); });
     this.armDPR();
@@ -93,7 +95,8 @@ export class UIRenderer {
           if (!this.disposed && this.generation === generation && this.driver === painter) this.fallback(reason);
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
-        this.canvas = canvas; this.driver = painter; this.backend = name;
+        this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
         this.renderNow();
         if (this.driver === painter) this.publish();
         return this.getStats();
@@ -121,7 +124,12 @@ export class UIRenderer {
   renderNow() {
     if (this.disposed || !this.driver || this.printing) return;
     this.cancelFrame();
-    const start = this.view.performance.now(), scene = this.sceneFactory(this.policy), built = this.view.performance.now();
+    // Batch cache invalidation with painting, rather than repeatedly walking
+    // overlapping mutated subtrees from a MutationObserver callback.
+    // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
+    const start = this.view.performance.now();
+    if (this.stylesDirty) { this.adapter.invalidateStyles(); this.stylesDirty = false; }
+    const scene = this.sceneFactory(this.policy), built = this.view.performance.now();
     this.driver.render(scene);
     const submitted = this.view.performance.now();
     this.canvas.style.visibility = 'visible'; this.metrics.frames++;
@@ -138,7 +146,7 @@ export class UIRenderer {
     return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.observer?.disconnect(); this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();

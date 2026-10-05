@@ -56,11 +56,13 @@ const {intersect, snapRect}=__modules[0];
 /** A retained paint list. Commands are in CSS pixels, colors are unpremultiplied sRGB. */
 class PaintScene {
   constructor(width, height, {dpr = 1, pixelSnap = true, maxCommands = 100000} = {}) {
+    this.sealed = false;
     this.width = width; this.height = height; this.dpr = dpr; this.pixelSnap = pixelSnap;
     this.clip = [0, 0, width, height]; this.commands = []; this.maxCommands = maxCommands;
     this.stats = {elements: 0, nativeIslands: 0, nativeText: 0, gpuText: 0, reasons: {}};
   }
   add(rect, color, {clip = this.clip, color2 = color, vertical = false, page = null, uv = [0, 0, 1, 1], hole = false, snap = true} = {}) {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     if (!rect.every(Number.isFinite) || rect[2] <= 0 || rect[3] <= 0) return;
     rect = this.pixelSnap && snap ? snapRect(rect, this.dpr) : rect;
     clip = intersect(clip, this.clip);
@@ -69,7 +71,22 @@ class PaintScene {
     if (this.commands.length >= this.maxCommands) throw new RangeError('UI paint command budget exceeded.');
     this.commands.push({rect, clip, color, color2, vertical, page, uv, hole});
   }
+  /** Opt-in immutable geometry for static/repeated GPU draws. Atlas pages remain
+   * revisioned resources, so updating their pixels still triggers an upload. */
+  seal() {
+    if (this.sealed) return this;
+    this.commands = Object.freeze(this.commands.map(command => {
+      const color = Object.freeze(Array.from(command.color));
+      return Object.freeze({...command, rect: Object.freeze(Array.from(command.rect)),
+        clip: Object.freeze(Array.from(command.clip)), color,
+        color2: command.color === command.color2 ? color : Object.freeze(Array.from(command.color2)),
+        uv: Object.freeze(Array.from(command.uv))});
+    }));
+    this.clip = Object.freeze(Array.from(this.clip)); this.sealed = true;
+    return Object.freeze(this);
+  }
   native(rect, clip, reason = 'native') {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     this.stats.nativeIslands++;
     this.stats.reasons[reason] = (this.stats.reasons[reason] || 0) + 1;
     const outward = r => { const x = Math.floor(r[0] * this.dpr) / this.dpr, y = Math.floor(r[1] * this.dpr) / this.dpr; return [x, y, Math.ceil((r[0] + r[2]) * this.dpr) / this.dpr - x, Math.ceil((r[1] + r[3]) * this.dpr) / this.dpr - y]; };
@@ -185,13 +202,97 @@ async function acquireDevice(view, timeout = 3000) {
   return deadline(pending, timeout);
 }
 
-return {deadline,acquireDevice};
+// One promise continuation per shared device, not one retained closure per
+// disposed painter. Unsubscribing releases detached documents immediately.
+const losses = new WeakMap();
+function subscribeDeviceLoss(device, callback) {
+  let record = losses.get(device);
+  if (!record) {
+    record = {listeners: new Set(), info: null}; losses.set(device, record);
+    device.lost.then(info => {
+      record.info = info;
+      const callbacks = [...record.listeners]; record.listeners.clear();
+      for (const listener of callbacks) { try { listener(info); } catch (error) { globalThis.reportError?.(error); } }
+    });
+  }
+  let active = true;
+  if (record.info) queueMicrotask(() => { if (active) callback(record.info); });
+  else record.listeners.add(callback);
+  return () => { active = false; record.listeners.delete(callback); };
+}
+
+return {deadline,acquireDevice,subscribeDeviceLoss};
+})();
+
+/* instances.js */
+__modules[4]=(()=>{
+
+/** Shared WebGPU/WebGL2 instance encoder. Colors remain unpremultiplied sRGB.
+ * Clip against physical pixel centers, not CSS coordinates divided in a shader:
+ * division introduced edge disagreements at fractional DPI.
+ * Source: WebGPU fragment position and pixel-coordinate conventions:
+ * https://gpuweb.github.io/gpuweb/#coordinate-systems
+ * Original implementation; no third-party code copied.
+ */
+const INSTANCE_FLOATS = 24;
+const INSTANCE_BYTES = INSTANCE_FLOATS * 4;
+function encodeInstances(commands, data, scaleX, scaleY) {
+  let at = 0;
+  for (const c of commands) {
+    data.set(c.rect, at);
+    const [x, y, w, h] = c.clip;
+    const left = Math.ceil(x * scaleX - .5), top = Math.ceil(y * scaleY - .5);
+    const right = Math.ceil((x + w) * scaleX - .5), bottom = Math.ceil((y + h) * scaleY - .5);
+    data[at + 4] = left; data[at + 5] = top;
+    data[at + 6] = right - left; data[at + 7] = bottom - top;
+    data.set(c.color, at + 8); data.set(c.color2, at + 12); data.set(c.uv, at + 16);
+    data[at + 20] = c.hole ? 2 : c.page ? 1 : 0;
+    data[at + 21] = c.vertical ? 1 : 0;
+    data[at + 22] = data[at + 23] = 0;
+    at += INSTANCE_FLOATS;
+  }
+  return at;
+}
+/** Only sealed scenes can reuse encoded geometry; mutable public command arrays
+ * continue to be observed on every draw. Image pixels are revisioned separately.
+ */
+function canReuseInstances(painter, scene, size) {
+  return scene.sealed === true && painter.encodedScene === scene &&
+    painter.encodedWidth === size.width && painter.encodedHeight === size.height;
+}
+function rememberInstances(painter, scene, size) {
+  painter.encodedScene = scene.sealed ? scene : null;
+  painter.encodedWidth = size.width; painter.encodedHeight = size.height;
+}
+
+/** Ordered batches keep page identities, not GPU handles, so a resized/revised
+ * atlas page can refresh its texture without repacking immutable geometry. */
+function prepareBatches(painter, scene) {
+  if (scene.sealed && painter.batchedScene === scene) return painter.batches;
+  const groups = [], pages = new Set();
+  for (let index = 0; index < scene.commands.length; index++) {
+    const command = scene.commands[index], page = command.page || null;
+    if (page) pages.add(page);
+    const previous = groups.at(-1), hole = Boolean(command.hole);
+    if (previous && previous.page === page && previous.hole === hole) previous.count++;
+    else groups.push({first: index, count: 1, page, hole});
+  }
+  painter.batches = {groups, pages}; painter.batchedScene = scene.sealed ? scene : null;
+  painter.stats.batchBuilds = (painter.stats.batchBuilds || 0) + 1;
+  return painter.batches;
+}
+
+return {INSTANCE_FLOATS,INSTANCE_BYTES,encodeInstances,canReuseInstances,rememberInstances,prepareBatches};
 })();
 
 /* webgpu.js */
-__modules[4]=(()=>{
-const {acquireDevice, deadline}=__modules[3];
+__modules[5]=(()=>{
+const {acquireDevice, deadline, subscribeDeviceLoss}=__modules[3];
 const {physicalSize}=__modules[0];
+const {PaintScene}=__modules[1];
+const {encodeInstances, canReuseInstances, rememberInstances, prepareBatches}=__modules[4];
+
+
 
 
 const UI_SHADER = `
@@ -218,7 +319,7 @@ struct Output {
  return out;
 }
 @fragment fn fs(input: Output) -> @location(0) vec4f {
- let xy = input.position.xy / screen.scale;
+ let xy = floor(input.position.xy);
  if (any(xy < input.clip.xy) || any(xy >= input.clip.xy + input.clip.zw)) { discard; }
  if (input.mode > 1.5) { return vec4f(0); }
  var color = input.color;
@@ -233,12 +334,12 @@ struct Output {
 class WebGPUPainter {
   static async create(canvas, {onLost = () => {}, timeout = 3000} = {}) {
     const painter = new WebGPUPainter(canvas, onLost);
-    try { await deadline(painter.initialize(timeout), timeout * 2); return painter; }
+    try { await deadline(painter.initialize(timeout), timeout * 2); await painter.verifyOutput(timeout); return painter; }
     catch (error) { painter.dispose(); throw error; }
   }
   constructor(canvas, onLost) {
     this.canvas = canvas; this.view = canvas.ownerDocument.defaultView; this.onLost = onLost; this.name = 'webgpu'; this.disposed = false;
-    this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0};
+    this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0, readbacks: 0, outputVerified: false};
   }
   async initialize(timeout) {
     const {device, info} = await acquireDevice(this.view, timeout);
@@ -271,15 +372,16 @@ class WebGPUPainter {
     if (this.disposed) { this.disposeResources(); return; }
     this.errorHandler = event => { if (!this.disposed) this.onLost('WebGPU error: ' + event.error.message); };
     device.addEventListener('uncapturederror', this.errorHandler);
-    device.lost.then(info => { if (!this.disposed) this.onLost('WebGPU device lost: ' + (info.message || info.reason)); });
+    this.unsubscribeLoss = subscribeDeviceLoss(device, info => { if (!this.disposed) this.onLost('WebGPU device lost: ' + (info.message || info.reason)); });
   }
   image(page) {
     if (!page) return this.whiteGroup;
     let record = this.textures.get(page);
+    if (record && (record.width !== page.width || record.height !== page.height)) { record.texture.destroy(); this.textures.delete(page); record = null; }
     if (!record) {
       const T = this.view.GPUTextureUsage;
       const texture = this.device.createTexture({size: [page.width, page.height], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST | T.RENDER_ATTACHMENT});
-      record = {texture, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
+      record = {texture, width: page.width, height: page.height, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
     }
     if (record.revision !== page.revision) {
       this.device.queue.copyExternalImageToTexture({source: page.canvas}, {texture: record.texture, premultipliedAlpha: false}, [page.width, page.height]);
@@ -287,8 +389,8 @@ class WebGPUPainter {
     }
     return record.group;
   }
-  render(scene) {
-    const usedPages = new Set(scene.commands.map(command => command.page).filter(Boolean));
+  render(scene, {readback = false} = {}) {
+    const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { record.texture.destroy(); this.textures.delete(page); }
     if (this.disposed) throw new Error('Renderer disposed');
     const device = this.device, size = physicalSize(scene.width, scene.height, scene.dpr, device.limits.maxTextureDimension2D);
@@ -301,23 +403,62 @@ class WebGPUPainter {
       this.buffer = device.createBuffer({size: this.capacity, usage: this.view.GPUBufferUsage.VERTEX | this.view.GPUBufferUsage.COPY_DST});
       this.data = new Float32Array(this.capacity / 4); this.stats.bufferAllocations++;
     }
-    const groups = []; let at = 0;
-    for (const command of scene.commands) {
-      this.data.set(command.rect, at); this.data.set(command.clip, at + 4); this.data.set(command.color, at + 8); this.data.set(command.color2, at + 12); this.data.set(command.uv, at + 16);
-      this.data.set([command.hole ? 2 : command.page ? 1 : 0, command.vertical ? 1 : 0, 0, 0], at + 20); at += 24;
-      const image = this.image(command.page), previous = groups.at(-1);
-      if (previous && previous.image === image && previous.hole === command.hole) previous.count++;
-      else groups.push({image, hole: command.hole, first: at / 24 - 1, count: 1});
-    }
+    const reuse = canReuseInstances(this, scene, size);
+    if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
+    const images = new Map();
+    for (const page of usedPages) images.set(page, this.image(page));
     device.queue.writeBuffer(this.uniform, 0, new Float32Array([scene.width, scene.height, size.scaleX, size.scaleY]));
-    if (count) { device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
+    if (count && !reuse) { this.stats.instanceUploads++; device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
+    rememberInstances(this, scene, size);
     const encoder = device.createCommandEncoder({label: 'VB6 UI frame'});
-    const pass = encoder.beginRenderPass({colorAttachments: [{view: this.context.getCurrentTexture().createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
+    const texture = this.context.getCurrentTexture();
+    const pass = encoder.beginRenderPass({colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
     pass.setBindGroup(0, this.screenGroup); pass.setVertexBuffer(0, this.buffer);
-    for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.image); pass.draw(6, group.count, 0, group.first); }
-    pass.end(); device.queue.submit([encoder.finish()]); this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
+    for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.page ? images.get(group.page) : this.whiteGroup); pass.draw(6, group.count, 0, group.first); }
+    pass.end();
+    // Queue the copy in the SAME submission as rendering, before automatic
+    // canvas-texture expiry. Do not call getCurrentTexture after an await.
+    // Source: https://gpuweb.github.io/gpuweb/#automatic-expiry-task-source
+    let capture;
+    if (readback) {
+      const stride = Math.ceil(size.width * 4 / 256) * 256;
+      const buffer = device.createBuffer({label: 'VB6 UI readback', size: stride * size.height,
+        usage: this.view.GPUBufferUsage.COPY_DST | this.view.GPUBufferUsage.MAP_READ});
+      capture = {buffer, stride};
+      try { encoder.copyTextureToBuffer({texture}, {buffer, bytesPerRow: stride}, {width: size.width, height: size.height}); }
+      catch (error) { buffer.destroy(); throw error; }
+    }
+    try { device.queue.submit([encoder.finish()]); } catch (error) { capture?.buffer.destroy(); throw error; }
+    this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
+    if (capture) { this.stats.readbacks++; return this.decodeReadback(capture, size); }
+  }
+  async decodeReadback({buffer, stride}, size) {
+    try {
+      await deadline(buffer.mapAsync(this.view.GPUMapMode.READ), 5000, 'GPU readback timed out');
+      const bytes = new Uint8Array(buffer.getMappedRange()), data = new Uint8Array(size.width * size.height * 4);
+      const bgra = this.format.startsWith('bgra');
+      for (let y = 0; y < size.height; y++) {
+        const row = bytes.subarray(y * stride, y * stride + size.width * 4), at = y * size.width * 4;
+        data.set(row, at);
+        if (bgra) for (let x = 0; x < row.length; x += 4) { data[at + x] = row[x + 2]; data[at + x + 2] = row[x]; }
+      }
+      return {width: size.width, height: size.height, data};
+    } finally { if (buffer.mapState === 'mapped') buffer.unmap(); buffer.destroy(); }
+  }
+  async verifyOutput(timeout) {
+    const scene = new PaintScene(2, 2);
+    scene.add([0, 0, 2, 2], [1, 0, 0, 1]); scene.add([1, 0, 1, 2], [0, 1, 0, 1]);
+    const image = await deadline(this.render(scene, {readback: true}), timeout, 'WebGPU output verification timed out');
+    if (this.disposed) throw new Error('Renderer disposed during output verification');
+    const expected = [255,0,0,255,0,255,0,255,255,0,0,255,0,255,0,255];
+    if (image.width !== 2 || image.height !== 2 || image.data.length !== expected.length || image.data.some((channel, index) => channel !== expected[index])) throw new Error('WebGPU output verification failed');
+    this.stats.outputVerified = true;
+    // Startup diagnostics must not inflate workload frames/uploads/allocations.
+    this.buffer?.destroy(); this.buffer = null; this.encodedScene = null; this.batchedScene = null; this.batches = null;
+    for (const name of ['frames','drawCalls','uploadedBytes','bufferAllocations','geometryPacks','instanceUploads','readbacks','batchBuilds']) this.stats[name] = 0;
   }
   disposeResources() {
+    this.unsubscribeLoss?.(); this.unsubscribeLoss = null; this.encodedScene = null; this.batchedScene = null; this.batches = null;
     this.device?.removeEventListener('uncapturederror', this.errorHandler);
     this.buffer?.destroy(); this.uniform?.destroy(); this.white?.destroy();
     for (const record of this.textures.values()) record.texture.destroy(); this.textures.clear();
@@ -330,8 +471,10 @@ return {UI_SHADER,WebGPUPainter};
 })();
 
 /* webgl2.js */
-__modules[5]=(()=>{
+__modules[6]=(()=>{
 const {physicalSize}=__modules[0];
+const {encodeInstances, canReuseInstances, rememberInstances, prepareBatches}=__modules[4];
+
 
 const VERTEX = `#version 300 es
 precision highp float;
@@ -349,14 +492,14 @@ const FRAGMENT = `#version 300 es
 precision highp float; uniform sampler2D image; uniform vec4 screen;
 in vec2 uv; in vec4 tint; flat in vec4 clip; flat in float mode; out vec4 outputColor;
 void main(){
- vec2 xy=vec2(gl_FragCoord.x/screen.z,screen.y-gl_FragCoord.y/screen.w);
+ vec2 xy=floor(vec2(gl_FragCoord.x,screen.y*screen.w-gl_FragCoord.y));
  if(any(lessThan(xy,clip.xy))||any(greaterThanEqual(xy,clip.xy+clip.zw)))discard;
  if(mode>1.5){outputColor=vec4(0);return;}
  vec4 c=mode>.5?texture(image,uv)*tint:tint; outputColor=vec4(c.rgb*c.a,c.a);
 }`;
 class WebGLPainter {
   constructor(canvas, {onLost = () => {}} = {}) {
-    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0};
+    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0};
     const gl = this.gl = canvas.getContext('webgl2', {alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
     if (!gl) throw new Error('WebGL2 unavailable');
     this.lost = event => { event.preventDefault(); if (!this.disposed) onLost('WebGL2 context lost'); }; canvas.addEventListener('webglcontextlost', this.lost);
@@ -382,14 +525,14 @@ class WebGLPainter {
     if (!page) return this.white;
     const gl = this.gl; let record = this.textures.get(page);
     if (!record) { record = {texture: this.texture(), revision: -1}; this.textures.set(page, record); }
-    if (record.revision !== page.revision) {
+    if (record.revision !== page.revision || record.width !== page.width || record.height !== page.height) {
       gl.bindTexture(gl.TEXTURE_2D, record.texture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; this.stats.uploadedBytes += page.width * page.height * 4;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
     }
     return record.texture;
   }
   render(scene) {
-    const usedPages = new Set(scene.commands.map(command => command.page).filter(Boolean));
+    const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { this.gl.deleteTexture(record.texture); this.textures.delete(page); }
     const gl = this.gl; if (this.disposed || gl.isContextLost()) throw new Error('WebGL2 context lost');
     const size = physicalSize(scene.width, scene.height, scene.dpr, gl.getParameter(gl.MAX_TEXTURE_SIZE));
@@ -399,15 +542,14 @@ class WebGLPainter {
     gl.useProgram(this.program); gl.uniform4f(this.uniform, scene.width, scene.height, size.scaleX, size.scaleY); gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     const required = Math.max(24, scene.commands.length * 24);
     if (!this.data || this.data.length < required) { this.data = new Float32Array(Math.max(1024, 2 ** Math.ceil(Math.log2(required)))); gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW); this.stats.bufferAllocations++; }
-    const groups = []; let at = 0;
-    for (const c of scene.commands) {
-      this.data.set(c.rect, at); this.data.set(c.clip, at + 4); this.data.set(c.color, at + 8); this.data.set(c.color2, at + 12); this.data.set(c.uv, at + 16); this.data.set([c.hole ? 2 : c.page ? 1 : 0, c.vertical ? 1 : 0, 0, 0], at + 20); at += 24;
-      const image = this.image(c.page), previous = groups.at(-1);
-      if (previous && previous.image === image && previous.hole === c.hole) previous.count++; else groups.push({first: at / 24 - 1, count: 1, image, hole: c.hole});
-    }
-    if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4;
+    const reuse = canReuseInstances(this, scene, size);
+    if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
+    const at = scene.commands.length * 24, images = new Map();
+    for (const page of usedPages) images.set(page, this.image(page));
+    if (at && !reuse) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4; this.stats.instanceUploads++; }
+    rememberInstances(this, scene, size);
     for (const group of groups) {
-      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.image);
+      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.page ? images.get(group.page) : this.white);
       for (let i = 0; i < 6; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 96, group.first * 96 + i * 16);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, group.count);
     }
@@ -415,7 +557,7 @@ class WebGLPainter {
     this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
   }
   dispose() {
-    if (this.disposed) return; this.disposed = true; this.canvas.removeEventListener('webglcontextlost', this.lost);
+    if (this.disposed) return; this.disposed = true; this.encodedScene = null; this.batchedScene = null; this.batches = null; this.canvas.removeEventListener('webglcontextlost', this.lost);
     const gl = this.gl; if (!gl) return;
     for (const record of this.textures.values()) gl.deleteTexture(record.texture); this.textures.clear();
     gl.deleteTexture(this.white); gl.deleteBuffer(this.buffer); gl.deleteVertexArray(this.vao); gl.deleteProgram(this.program);
@@ -427,7 +569,7 @@ return {WebGLPainter};
 })();
 
 /* canvas2d.js */
-__modules[6]=(()=>{
+__modules[7]=(()=>{
 const {physicalSize}=__modules[0];
 const {rgbaCSS}=__modules[1];
 
@@ -466,7 +608,7 @@ return {CanvasPainter};
 })();
 
 /* dom-scene.js */
-__modules[7]=(()=>{
+__modules[8]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
 
@@ -668,13 +810,13 @@ return {DOMScene};
 })();
 
 /* renderer.js */
-__modules[8]=(()=>{
+__modules[9]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
-const {CanvasPainter}=__modules[6];
-const {WebGPUPainter}=__modules[4];
-const {WebGLPainter}=__modules[5];
+const {CanvasPainter}=__modules[7];
+const {WebGPUPainter}=__modules[5];
+const {WebGLPainter}=__modules[6];
 const {TextAtlas}=__modules[2];
-const {DOMScene}=__modules[7];
+const {DOMScene}=__modules[8];
 
 
 
@@ -702,26 +844,28 @@ class UIRenderer {
   listen(target, type, listener, options) { target?.addEventListener(type, listener, options); this.listeners.push(() => target?.removeEventListener(type, listener, options)); }
   observe() {
     const invalidate = event => {
-      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.adapter.invalidateStyles();
+      if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
+      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.stylesDirty = true;
       else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
-        const scope = event.target.closest('button,[role=treeitem],.tree-row,.property-row,.vb-control,.tool-caption') || event.target;
-        this.adapter.invalidateStyles(scope.parentElement);
-        if (event.relatedTarget?.nodeType === 1) this.adapter.invalidateStyles(event.relatedTarget.parentElement);
+        this.stylesDirty = true;
       }
       this.invalidate();
     };
     this.observer = new this.view.MutationObserver(records => {
+      if (!this.driver) return;
       let changed = false;
       for (const r of records) {
         const node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
         if (node?.closest('[data-vb-render-layer]')) continue;
+        if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        if (r.type !== 'characterData') this.adapter.invalidateStyles(node);
+        this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
-    this.observer.observe(this.document.body, {childList: true, subtree: true, attributes: true, characterData: true});
-    for (const event of ['input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    // Connected only while a canvas backend is active; native HTML incurs no
+    // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
+    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
     this.listen(this.document, 'scroll', invalidate, true);
     this.listen(this.view, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'resize', invalidate);
@@ -730,7 +874,7 @@ class UIRenderer {
     this.listen(this.view, 'pagehide', () => this.dispose());
     this.listen(this.view, 'beforeprint', () => { this.printing = true; if (this.canvas) this.canvas.style.visibility = 'hidden'; });
     this.listen(this.view, 'afterprint', () => { this.printing = false; invalidate(); });
-    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.adapter.invalidateStyles(); invalidate(); });
+    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.stylesDirty = true; invalidate(); });
     this.forcedColors = this.view.matchMedia('(forced-colors: active)');
     this.listen(this.forcedColors, 'change', () => { this.ready = this.setOptions(this.policy, {force: true}); });
     this.armDPR();
@@ -770,7 +914,8 @@ class UIRenderer {
           if (!this.disposed && this.generation === generation && this.driver === painter) this.fallback(reason);
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
-        this.canvas = canvas; this.driver = painter; this.backend = name;
+        this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
         this.renderNow();
         if (this.driver === painter) this.publish();
         return this.getStats();
@@ -798,7 +943,12 @@ class UIRenderer {
   renderNow() {
     if (this.disposed || !this.driver || this.printing) return;
     this.cancelFrame();
-    const start = this.view.performance.now(), scene = this.sceneFactory(this.policy), built = this.view.performance.now();
+    // Batch cache invalidation with painting, rather than repeatedly walking
+    // overlapping mutated subtrees from a MutationObserver callback.
+    // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
+    const start = this.view.performance.now();
+    if (this.stylesDirty) { this.adapter.invalidateStyles(); this.stylesDirty = false; }
+    const scene = this.sceneFactory(this.policy), built = this.view.performance.now();
     this.driver.render(scene);
     const submitted = this.view.performance.now();
     this.canvas.style.visibility = 'visible'; this.metrics.frames++;
@@ -815,7 +965,7 @@ class UIRenderer {
     return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.observer?.disconnect(); this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();
@@ -838,14 +988,14 @@ return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
 /* entry.js */
-__modules[9]=(()=>{
+__modules[10]=(()=>{
 const {BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect}=__modules[0];
 const {PaintScene, parseColor}=__modules[1];
 const {TextAtlas}=__modules[2];
-const {WebGPUPainter, UI_SHADER}=__modules[4];
-const {WebGLPainter}=__modules[5];
-const {CanvasPainter}=__modules[6];
-const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[8];
+const {WebGPUPainter, UI_SHADER}=__modules[5];
+const {WebGLPainter}=__modules[6];
+const {CanvasPainter}=__modules[7];
+const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[9];
 
 
 
@@ -856,5 +1006,5 @@ const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules
 
 return {BACKENDS,DEFAULT_RENDERING,normalizeRendering,renderingCandidates,physicalSize,snapRect,intersect,PaintScene,parseColor,TextAtlas,WebGPUPainter,UI_SHADER,WebGLPainter,CanvasPainter,UIRenderer,createPainter,retainRenderer,rendererForDocument};
 })();
-globalThis["VB6Rendering"]=__modules[9];
+globalThis["VB6Rendering"]=__modules[10];
 })();

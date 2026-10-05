@@ -17,6 +17,8 @@ OUT = ROOT / 'reports/rendering'
 RESULTS, METRICS, VISUAL = [], {}, []
 ARGS = argparse.ArgumentParser()
 ARGS.add_argument('--require-webgpu', action='store_true')
+ARGS.add_argument('--headed', action='store_true')
+ARGS.add_argument('--software-gpu', action='store_true', help='Explicit CI software adapter, never physical-GPU qualification')
 args = ARGS.parse_args()
 OUT.mkdir(parents=True, exist_ok=True)
 BUNDLE = (ROOT / 'dist/vb6-rendering.js').read_text()
@@ -53,12 +55,12 @@ def new_page(browser, dpr=1, ide=False):
     page.errors = []
     page.on('pageerror', lambda error: page.errors.append(str(error)))
     page.on('console', lambda message: METRICS.setdefault('browserWarnings', []).append(message.text) if message.type in ('warning', 'error') and len(METRICS.get('browserWarnings', [])) < 100 else None)
-    if URL: page.goto(URL + ('dist/VB6-Studio-Web.html' if ide else ''))
+    if URL: page.goto(URL + ('dist/VB6-Studio-Web.html' if ide else 'tests/fixtures/rendering.html'))
     if ide:
         if not URL: page.set_content(IDE)
         page.wait_for_function('window.vb6Studio?.rendering')
         page.evaluate('vb6Studio.rendering.ready')
-    else:
+    elif not URL:
         page.set_content('<!doctype html><html><head><style>html,body{margin:0;background:white}</style></head><body></body></html>')
     page.add_script_tag(content=BUNDLE)
     return page
@@ -73,18 +75,18 @@ def pixels(a, b):
 
 with sync_playwright() as playwright:
     executable = os.environ.get('CHROMIUM_PATH') or shutil.which('chromium') or playwright.chromium.executable_path
-    # Select the Vulkan driver explicitly: ANGLE flags alone configure WebGL,
-    # not Dawn's WebGPU adapter. Do not also force the browser compositor to
-    # Vulkan: its shared-image presentation path differs from Dawn's backend.
-    # These switches are test-only.
-    launch_flags = ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--use-vulkan=swiftshader']
+    # Browser flags belong to this test runner, never the shipped IDE/runtime.
+    # Source: https://developer.chrome.com/blog/supercharge-web-ai-testing
+    launch_flags = ['--no-sandbox']
+    if args.software_gpu:
+        launch_flags += ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--use-vulkan=swiftshader', '--enable-features=Vulkan', '--disable-vulkan-surface']
     launch_flags += shlex.split(os.environ.get('RENDERING_BROWSER_FLAGS', ''))
-    browser = playwright.chromium.launch(executable_path=executable, headless=True, args=launch_flags)
-    METRICS.update(browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False)
+    browser = playwright.chromium.launch(executable_path=executable, headless=not args.headed, args=launch_flags)
+    METRICS.update(browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False, headed=args.headed, softwareGpuRequested=args.software_gpu)
 
     def backend_execution():
         page = new_page(browser)
-        outcome = page.evaluate('''async()=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c);const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,adapter:p.adapterInfo||null};}catch(e){result[backend]={available:false,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''')
+        outcome = page.evaluate('''async()=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c);const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,adapter:p.adapterInfo||null,outputVerified:p.stats.outputVerified??null};}catch(e){result[backend]={available:false,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''')
         METRICS['backends'] = outcome
         check(outcome['canvas2d']['available'], 'Canvas2D missing')
         if args.require_webgpu:
@@ -108,23 +110,11 @@ with sync_playwright() as playwright:
                   s.add([16,16,64,32],[1,1,0,1],{clip:[32,16,32,32]});s.native([4,4,4,4],s.clip);
                   const image=document.createElement('canvas');image.width=image.height=16;const c=image.getContext('2d');c.fillStyle='#00ffff';c.fillRect(0,0,16,8);c.fillStyle='#ff00ff';c.fillRect(0,8,16,8);
                   s.add([160,16,16,16],[1,1,1,1],{page:{canvas:image,width:16,height:16,revision:1}});
-                  p.render(s);let readback=null;
+                  let readback=null;
                   if(p.device){
-                    // Copy before the canvas texture expires; GPU completion is
-                    // not proof that the compositor presented the drawn pixels.
-                    const stride=Math.ceil(canvas.width*4/256)*256,device=p.device;
-                    const buffer=device.createBuffer({size:stride*canvas.height,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
-                    const encoder=device.createCommandEncoder();
-                    encoder.copyTextureToBuffer({texture:p.context.getCurrentTexture()},{buffer,bytesPerRow:stride},{width:canvas.width,height:canvas.height});
-                    device.queue.submit([encoder.finish()]);await buffer.mapAsync(GPUMapMode.READ);
-                    const bytes=new Uint8Array(buffer.getMappedRange()),rgba=new Uint8Array(canvas.width*canvas.height*4),bgra=p.format.startsWith('bgra');
-                    for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
-                      const at=y*stride+x*4,to=(y*canvas.width+x)*4;
-                      rgba[to]=bytes[at+(bgra?2:0)];rgba[to+1]=bytes[at+1];rgba[to+2]=bytes[at+(bgra?0:2)];rgba[to+3]=bytes[at+3];
-                    }
-                    let text='';for(let i=0;i<rgba.length;i+=8192)text+=String.fromCharCode(...rgba.subarray(i,i+8192));
-                    readback=btoa(text);buffer.unmap();buffer.destroy();
-                  }
+                    const image=await p.render(s,{readback:true}),rgba=image.data;
+                    let text='';for(let i=0;i<rgba.length;i+=8192)text+=String.fromCharCode(...rgba.subarray(i,i+8192));readback=btoa(text);
+                  }else p.render(s);
                   return {name:p.name,width:canvas.width,height:canvas.height,stats:p.stats,readback};
                 }''', {'backend': backend, 'dpr': dpr})
                 raw = info[backend].pop('readback', None)
@@ -229,12 +219,14 @@ with sync_playwright() as playwright:
         stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow();return r.getStats()}''')
         METRICS['ideForcedRebuildCpu']=stats
         # A reusable library workload: all opaque quads must batch to one draw.
-        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;let initializationError=null;try{p=await VB6Rendering.createPainter(backend,c)}catch(error){initializationError=String(error);c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t)}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,initializationError,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
+        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;let initializationError=null;try{p=await VB6Rendering.createPainter(backend,c)}catch(error){initializationError=String(error);c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);s.seal();const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t);if(p.device&&(i+1)%4===0)await p.device.queue.onSubmittedWorkDone()}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,initializationError,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
         METRICS['batch10000Quads']=batch
         if args.require_webgpu: check(batch['backend']=='webgpu', 'Batch workload silently fell back: '+str(batch))
         if batch['backend']=='webgpu':
             check(batch['stats']['drawCalls']==1,'Opaque quads were not batched')
             check(batch['stats']['bufferAllocations']==1,'Buffer was reallocated every frame')
+            check(batch['stats']['instanceUploads']==1,'Sealed geometry was uploaded every frame')
+            check(batch['stats']['geometryPacks']==1,'Sealed geometry was repacked every frame')
         METRICS['batch10000Quads']=batch;page.close();return {'ide':stats,'batch':batch}
     case('forced rebuild CPU metrics and retained 10,000-quad batching',benchmark)
     browser.close()

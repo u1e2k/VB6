@@ -56,11 +56,13 @@ const {intersect, snapRect}=__modules[0];
 /** A retained paint list. Commands are in CSS pixels, colors are unpremultiplied sRGB. */
 class PaintScene {
   constructor(width, height, {dpr = 1, pixelSnap = true, maxCommands = 100000} = {}) {
+    this.sealed = false;
     this.width = width; this.height = height; this.dpr = dpr; this.pixelSnap = pixelSnap;
     this.clip = [0, 0, width, height]; this.commands = []; this.maxCommands = maxCommands;
     this.stats = {elements: 0, nativeIslands: 0, nativeText: 0, gpuText: 0, reasons: {}};
   }
   add(rect, color, {clip = this.clip, color2 = color, vertical = false, page = null, uv = [0, 0, 1, 1], hole = false, snap = true} = {}) {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     if (!rect.every(Number.isFinite) || rect[2] <= 0 || rect[3] <= 0) return;
     rect = this.pixelSnap && snap ? snapRect(rect, this.dpr) : rect;
     clip = intersect(clip, this.clip);
@@ -69,7 +71,22 @@ class PaintScene {
     if (this.commands.length >= this.maxCommands) throw new RangeError('UI paint command budget exceeded.');
     this.commands.push({rect, clip, color, color2, vertical, page, uv, hole});
   }
+  /** Opt-in immutable geometry for static/repeated GPU draws. Atlas pages remain
+   * revisioned resources, so updating their pixels still triggers an upload. */
+  seal() {
+    if (this.sealed) return this;
+    this.commands = Object.freeze(this.commands.map(command => {
+      const color = Object.freeze(Array.from(command.color));
+      return Object.freeze({...command, rect: Object.freeze(Array.from(command.rect)),
+        clip: Object.freeze(Array.from(command.clip)), color,
+        color2: command.color === command.color2 ? color : Object.freeze(Array.from(command.color2)),
+        uv: Object.freeze(Array.from(command.uv))});
+    }));
+    this.clip = Object.freeze(Array.from(this.clip)); this.sealed = true;
+    return Object.freeze(this);
+  }
   native(rect, clip, reason = 'native') {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     this.stats.nativeIslands++;
     this.stats.reasons[reason] = (this.stats.reasons[reason] || 0) + 1;
     const outward = r => { const x = Math.floor(r[0] * this.dpr) / this.dpr, y = Math.floor(r[1] * this.dpr) / this.dpr; return [x, y, Math.ceil((r[0] + r[2]) * this.dpr) / this.dpr - x, Math.ceil((r[1] + r[3]) * this.dpr) / this.dpr - y]; };
@@ -169,13 +186,97 @@ async function acquireDevice(view, timeout = 3000) {
   return deadline(pending, timeout);
 }
 
-return {deadline,acquireDevice};
+// One promise continuation per shared device, not one retained closure per
+// disposed painter. Unsubscribing releases detached documents immediately.
+const losses = new WeakMap();
+function subscribeDeviceLoss(device, callback) {
+  let record = losses.get(device);
+  if (!record) {
+    record = {listeners: new Set(), info: null}; losses.set(device, record);
+    device.lost.then(info => {
+      record.info = info;
+      const callbacks = [...record.listeners]; record.listeners.clear();
+      for (const listener of callbacks) { try { listener(info); } catch (error) { globalThis.reportError?.(error); } }
+    });
+  }
+  let active = true;
+  if (record.info) queueMicrotask(() => { if (active) callback(record.info); });
+  else record.listeners.add(callback);
+  return () => { active = false; record.listeners.delete(callback); };
+}
+
+return {deadline,acquireDevice,subscribeDeviceLoss};
+})();
+
+/* ../rendering/instances.js */
+__modules[4]=(()=>{
+
+/** Shared WebGPU/WebGL2 instance encoder. Colors remain unpremultiplied sRGB.
+ * Clip against physical pixel centers, not CSS coordinates divided in a shader:
+ * division introduced edge disagreements at fractional DPI.
+ * Source: WebGPU fragment position and pixel-coordinate conventions:
+ * https://gpuweb.github.io/gpuweb/#coordinate-systems
+ * Original implementation; no third-party code copied.
+ */
+const INSTANCE_FLOATS = 24;
+const INSTANCE_BYTES = INSTANCE_FLOATS * 4;
+function encodeInstances(commands, data, scaleX, scaleY) {
+  let at = 0;
+  for (const c of commands) {
+    data.set(c.rect, at);
+    const [x, y, w, h] = c.clip;
+    const left = Math.ceil(x * scaleX - .5), top = Math.ceil(y * scaleY - .5);
+    const right = Math.ceil((x + w) * scaleX - .5), bottom = Math.ceil((y + h) * scaleY - .5);
+    data[at + 4] = left; data[at + 5] = top;
+    data[at + 6] = right - left; data[at + 7] = bottom - top;
+    data.set(c.color, at + 8); data.set(c.color2, at + 12); data.set(c.uv, at + 16);
+    data[at + 20] = c.hole ? 2 : c.page ? 1 : 0;
+    data[at + 21] = c.vertical ? 1 : 0;
+    data[at + 22] = data[at + 23] = 0;
+    at += INSTANCE_FLOATS;
+  }
+  return at;
+}
+/** Only sealed scenes can reuse encoded geometry; mutable public command arrays
+ * continue to be observed on every draw. Image pixels are revisioned separately.
+ */
+function canReuseInstances(painter, scene, size) {
+  return scene.sealed === true && painter.encodedScene === scene &&
+    painter.encodedWidth === size.width && painter.encodedHeight === size.height;
+}
+function rememberInstances(painter, scene, size) {
+  painter.encodedScene = scene.sealed ? scene : null;
+  painter.encodedWidth = size.width; painter.encodedHeight = size.height;
+}
+
+/** Ordered batches keep page identities, not GPU handles, so a resized/revised
+ * atlas page can refresh its texture without repacking immutable geometry. */
+function prepareBatches(painter, scene) {
+  if (scene.sealed && painter.batchedScene === scene) return painter.batches;
+  const groups = [], pages = new Set();
+  for (let index = 0; index < scene.commands.length; index++) {
+    const command = scene.commands[index], page = command.page || null;
+    if (page) pages.add(page);
+    const previous = groups.at(-1), hole = Boolean(command.hole);
+    if (previous && previous.page === page && previous.hole === hole) previous.count++;
+    else groups.push({first: index, count: 1, page, hole});
+  }
+  painter.batches = {groups, pages}; painter.batchedScene = scene.sealed ? scene : null;
+  painter.stats.batchBuilds = (painter.stats.batchBuilds || 0) + 1;
+  return painter.batches;
+}
+
+return {INSTANCE_FLOATS,INSTANCE_BYTES,encodeInstances,canReuseInstances,rememberInstances,prepareBatches};
 })();
 
 /* ../rendering/webgpu.js */
-__modules[4]=(()=>{
-const {acquireDevice, deadline}=__modules[3];
+__modules[5]=(()=>{
+const {acquireDevice, deadline, subscribeDeviceLoss}=__modules[3];
 const {physicalSize}=__modules[0];
+const {PaintScene}=__modules[1];
+const {encodeInstances, canReuseInstances, rememberInstances, prepareBatches}=__modules[4];
+
+
 
 
 const UI_SHADER = `
@@ -202,7 +303,7 @@ struct Output {
  return out;
 }
 @fragment fn fs(input: Output) -> @location(0) vec4f {
- let xy = input.position.xy / screen.scale;
+ let xy = floor(input.position.xy);
  if (any(xy < input.clip.xy) || any(xy >= input.clip.xy + input.clip.zw)) { discard; }
  if (input.mode > 1.5) { return vec4f(0); }
  var color = input.color;
@@ -217,12 +318,12 @@ struct Output {
 class WebGPUPainter {
   static async create(canvas, {onLost = () => {}, timeout = 3000} = {}) {
     const painter = new WebGPUPainter(canvas, onLost);
-    try { await deadline(painter.initialize(timeout), timeout * 2); return painter; }
+    try { await deadline(painter.initialize(timeout), timeout * 2); await painter.verifyOutput(timeout); return painter; }
     catch (error) { painter.dispose(); throw error; }
   }
   constructor(canvas, onLost) {
     this.canvas = canvas; this.view = canvas.ownerDocument.defaultView; this.onLost = onLost; this.name = 'webgpu'; this.disposed = false;
-    this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0};
+    this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0, readbacks: 0, outputVerified: false};
   }
   async initialize(timeout) {
     const {device, info} = await acquireDevice(this.view, timeout);
@@ -255,15 +356,16 @@ class WebGPUPainter {
     if (this.disposed) { this.disposeResources(); return; }
     this.errorHandler = event => { if (!this.disposed) this.onLost('WebGPU error: ' + event.error.message); };
     device.addEventListener('uncapturederror', this.errorHandler);
-    device.lost.then(info => { if (!this.disposed) this.onLost('WebGPU device lost: ' + (info.message || info.reason)); });
+    this.unsubscribeLoss = subscribeDeviceLoss(device, info => { if (!this.disposed) this.onLost('WebGPU device lost: ' + (info.message || info.reason)); });
   }
   image(page) {
     if (!page) return this.whiteGroup;
     let record = this.textures.get(page);
+    if (record && (record.width !== page.width || record.height !== page.height)) { record.texture.destroy(); this.textures.delete(page); record = null; }
     if (!record) {
       const T = this.view.GPUTextureUsage;
       const texture = this.device.createTexture({size: [page.width, page.height], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST | T.RENDER_ATTACHMENT});
-      record = {texture, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
+      record = {texture, width: page.width, height: page.height, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
     }
     if (record.revision !== page.revision) {
       this.device.queue.copyExternalImageToTexture({source: page.canvas}, {texture: record.texture, premultipliedAlpha: false}, [page.width, page.height]);
@@ -271,8 +373,8 @@ class WebGPUPainter {
     }
     return record.group;
   }
-  render(scene) {
-    const usedPages = new Set(scene.commands.map(command => command.page).filter(Boolean));
+  render(scene, {readback = false} = {}) {
+    const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { record.texture.destroy(); this.textures.delete(page); }
     if (this.disposed) throw new Error('Renderer disposed');
     const device = this.device, size = physicalSize(scene.width, scene.height, scene.dpr, device.limits.maxTextureDimension2D);
@@ -285,23 +387,62 @@ class WebGPUPainter {
       this.buffer = device.createBuffer({size: this.capacity, usage: this.view.GPUBufferUsage.VERTEX | this.view.GPUBufferUsage.COPY_DST});
       this.data = new Float32Array(this.capacity / 4); this.stats.bufferAllocations++;
     }
-    const groups = []; let at = 0;
-    for (const command of scene.commands) {
-      this.data.set(command.rect, at); this.data.set(command.clip, at + 4); this.data.set(command.color, at + 8); this.data.set(command.color2, at + 12); this.data.set(command.uv, at + 16);
-      this.data.set([command.hole ? 2 : command.page ? 1 : 0, command.vertical ? 1 : 0, 0, 0], at + 20); at += 24;
-      const image = this.image(command.page), previous = groups.at(-1);
-      if (previous && previous.image === image && previous.hole === command.hole) previous.count++;
-      else groups.push({image, hole: command.hole, first: at / 24 - 1, count: 1});
-    }
+    const reuse = canReuseInstances(this, scene, size);
+    if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
+    const images = new Map();
+    for (const page of usedPages) images.set(page, this.image(page));
     device.queue.writeBuffer(this.uniform, 0, new Float32Array([scene.width, scene.height, size.scaleX, size.scaleY]));
-    if (count) { device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
+    if (count && !reuse) { this.stats.instanceUploads++; device.queue.writeBuffer(this.buffer, 0, this.data, 0, count * 24); this.stats.uploadedBytes += count * 96; }
+    rememberInstances(this, scene, size);
     const encoder = device.createCommandEncoder({label: 'VB6 UI frame'});
-    const pass = encoder.beginRenderPass({colorAttachments: [{view: this.context.getCurrentTexture().createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
+    const texture = this.context.getCurrentTexture();
+    const pass = encoder.beginRenderPass({colorAttachments: [{view: texture.createView(), clearValue: [0, 0, 0, 0], loadOp: 'clear', storeOp: 'store'}]});
     pass.setBindGroup(0, this.screenGroup); pass.setVertexBuffer(0, this.buffer);
-    for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.image); pass.draw(6, group.count, 0, group.first); }
-    pass.end(); device.queue.submit([encoder.finish()]); this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
+    for (const group of groups) { pass.setPipeline(group.hole ? this.holePipeline : this.pipeline); pass.setBindGroup(1, group.page ? images.get(group.page) : this.whiteGroup); pass.draw(6, group.count, 0, group.first); }
+    pass.end();
+    // Queue the copy in the SAME submission as rendering, before automatic
+    // canvas-texture expiry. Do not call getCurrentTexture after an await.
+    // Source: https://gpuweb.github.io/gpuweb/#automatic-expiry-task-source
+    let capture;
+    if (readback) {
+      const stride = Math.ceil(size.width * 4 / 256) * 256;
+      const buffer = device.createBuffer({label: 'VB6 UI readback', size: stride * size.height,
+        usage: this.view.GPUBufferUsage.COPY_DST | this.view.GPUBufferUsage.MAP_READ});
+      capture = {buffer, stride};
+      try { encoder.copyTextureToBuffer({texture}, {buffer, bytesPerRow: stride}, {width: size.width, height: size.height}); }
+      catch (error) { buffer.destroy(); throw error; }
+    }
+    try { device.queue.submit([encoder.finish()]); } catch (error) { capture?.buffer.destroy(); throw error; }
+    this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
+    if (capture) { this.stats.readbacks++; return this.decodeReadback(capture, size); }
+  }
+  async decodeReadback({buffer, stride}, size) {
+    try {
+      await deadline(buffer.mapAsync(this.view.GPUMapMode.READ), 5000, 'GPU readback timed out');
+      const bytes = new Uint8Array(buffer.getMappedRange()), data = new Uint8Array(size.width * size.height * 4);
+      const bgra = this.format.startsWith('bgra');
+      for (let y = 0; y < size.height; y++) {
+        const row = bytes.subarray(y * stride, y * stride + size.width * 4), at = y * size.width * 4;
+        data.set(row, at);
+        if (bgra) for (let x = 0; x < row.length; x += 4) { data[at + x] = row[x + 2]; data[at + x + 2] = row[x]; }
+      }
+      return {width: size.width, height: size.height, data};
+    } finally { if (buffer.mapState === 'mapped') buffer.unmap(); buffer.destroy(); }
+  }
+  async verifyOutput(timeout) {
+    const scene = new PaintScene(2, 2);
+    scene.add([0, 0, 2, 2], [1, 0, 0, 1]); scene.add([1, 0, 1, 2], [0, 1, 0, 1]);
+    const image = await deadline(this.render(scene, {readback: true}), timeout, 'WebGPU output verification timed out');
+    if (this.disposed) throw new Error('Renderer disposed during output verification');
+    const expected = [255,0,0,255,0,255,0,255,255,0,0,255,0,255,0,255];
+    if (image.width !== 2 || image.height !== 2 || image.data.length !== expected.length || image.data.some((channel, index) => channel !== expected[index])) throw new Error('WebGPU output verification failed');
+    this.stats.outputVerified = true;
+    // Startup diagnostics must not inflate workload frames/uploads/allocations.
+    this.buffer?.destroy(); this.buffer = null; this.encodedScene = null; this.batchedScene = null; this.batches = null;
+    for (const name of ['frames','drawCalls','uploadedBytes','bufferAllocations','geometryPacks','instanceUploads','readbacks','batchBuilds']) this.stats[name] = 0;
   }
   disposeResources() {
+    this.unsubscribeLoss?.(); this.unsubscribeLoss = null; this.encodedScene = null; this.batchedScene = null; this.batches = null;
     this.device?.removeEventListener('uncapturederror', this.errorHandler);
     this.buffer?.destroy(); this.uniform?.destroy(); this.white?.destroy();
     for (const record of this.textures.values()) record.texture.destroy(); this.textures.clear();
@@ -314,8 +455,10 @@ return {UI_SHADER,WebGPUPainter};
 })();
 
 /* ../rendering/webgl2.js */
-__modules[5]=(()=>{
+__modules[6]=(()=>{
 const {physicalSize}=__modules[0];
+const {encodeInstances, canReuseInstances, rememberInstances, prepareBatches}=__modules[4];
+
 
 const VERTEX = `#version 300 es
 precision highp float;
@@ -333,14 +476,14 @@ const FRAGMENT = `#version 300 es
 precision highp float; uniform sampler2D image; uniform vec4 screen;
 in vec2 uv; in vec4 tint; flat in vec4 clip; flat in float mode; out vec4 outputColor;
 void main(){
- vec2 xy=vec2(gl_FragCoord.x/screen.z,screen.y-gl_FragCoord.y/screen.w);
+ vec2 xy=floor(vec2(gl_FragCoord.x,screen.y*screen.w-gl_FragCoord.y));
  if(any(lessThan(xy,clip.xy))||any(greaterThanEqual(xy,clip.xy+clip.zw)))discard;
  if(mode>1.5){outputColor=vec4(0);return;}
  vec4 c=mode>.5?texture(image,uv)*tint:tint; outputColor=vec4(c.rgb*c.a,c.a);
 }`;
 class WebGLPainter {
   constructor(canvas, {onLost = () => {}} = {}) {
-    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0};
+    this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0};
     const gl = this.gl = canvas.getContext('webgl2', {alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
     if (!gl) throw new Error('WebGL2 unavailable');
     this.lost = event => { event.preventDefault(); if (!this.disposed) onLost('WebGL2 context lost'); }; canvas.addEventListener('webglcontextlost', this.lost);
@@ -366,14 +509,14 @@ class WebGLPainter {
     if (!page) return this.white;
     const gl = this.gl; let record = this.textures.get(page);
     if (!record) { record = {texture: this.texture(), revision: -1}; this.textures.set(page, record); }
-    if (record.revision !== page.revision) {
+    if (record.revision !== page.revision || record.width !== page.width || record.height !== page.height) {
       gl.bindTexture(gl.TEXTURE_2D, record.texture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; this.stats.uploadedBytes += page.width * page.height * 4;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
     }
     return record.texture;
   }
   render(scene) {
-    const usedPages = new Set(scene.commands.map(command => command.page).filter(Boolean));
+    const {groups, pages: usedPages} = prepareBatches(this, scene);
     for (const [page, record] of this.textures) if (!usedPages.has(page)) { this.gl.deleteTexture(record.texture); this.textures.delete(page); }
     const gl = this.gl; if (this.disposed || gl.isContextLost()) throw new Error('WebGL2 context lost');
     const size = physicalSize(scene.width, scene.height, scene.dpr, gl.getParameter(gl.MAX_TEXTURE_SIZE));
@@ -383,15 +526,14 @@ class WebGLPainter {
     gl.useProgram(this.program); gl.uniform4f(this.uniform, scene.width, scene.height, size.scaleX, size.scaleY); gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     const required = Math.max(24, scene.commands.length * 24);
     if (!this.data || this.data.length < required) { this.data = new Float32Array(Math.max(1024, 2 ** Math.ceil(Math.log2(required)))); gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW); this.stats.bufferAllocations++; }
-    const groups = []; let at = 0;
-    for (const c of scene.commands) {
-      this.data.set(c.rect, at); this.data.set(c.clip, at + 4); this.data.set(c.color, at + 8); this.data.set(c.color2, at + 12); this.data.set(c.uv, at + 16); this.data.set([c.hole ? 2 : c.page ? 1 : 0, c.vertical ? 1 : 0, 0, 0], at + 20); at += 24;
-      const image = this.image(c.page), previous = groups.at(-1);
-      if (previous && previous.image === image && previous.hole === c.hole) previous.count++; else groups.push({first: at / 24 - 1, count: 1, image, hole: c.hole});
-    }
-    if (at) gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4;
+    const reuse = canReuseInstances(this, scene, size);
+    if (!reuse) { encodeInstances(scene.commands, this.data, size.scaleX, size.scaleY); this.stats.geometryPacks++; }
+    const at = scene.commands.length * 24, images = new Map();
+    for (const page of usedPages) images.set(page, this.image(page));
+    if (at && !reuse) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data.subarray(0, at)); this.stats.uploadedBytes += at * 4; this.stats.instanceUploads++; }
+    rememberInstances(this, scene, size);
     for (const group of groups) {
-      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.image);
+      group.hole ? gl.disable(gl.BLEND) : gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.bindTexture(gl.TEXTURE_2D, group.page ? images.get(group.page) : this.white);
       for (let i = 0; i < 6; i++) gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 96, group.first * 96 + i * 16);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, group.count);
     }
@@ -399,7 +541,7 @@ class WebGLPainter {
     this.stats.frames++; this.stats.drawCalls = groups.length; this.stats.atlasPages = this.textures.size;
   }
   dispose() {
-    if (this.disposed) return; this.disposed = true; this.canvas.removeEventListener('webglcontextlost', this.lost);
+    if (this.disposed) return; this.disposed = true; this.encodedScene = null; this.batchedScene = null; this.batches = null; this.canvas.removeEventListener('webglcontextlost', this.lost);
     const gl = this.gl; if (!gl) return;
     for (const record of this.textures.values()) gl.deleteTexture(record.texture); this.textures.clear();
     gl.deleteTexture(this.white); gl.deleteBuffer(this.buffer); gl.deleteVertexArray(this.vao); gl.deleteProgram(this.program);
@@ -411,7 +553,7 @@ return {WebGLPainter};
 })();
 
 /* ../rendering/atlas.js */
-__modules[6]=(()=>{
+__modules[7]=(()=>{
 
 /** Browser-shaped text runs are rasterized once, then sampled by GPU quads.
  * No font files, foreignObject snapshots, HTML rasterizers or network dependencies.
@@ -466,7 +608,7 @@ return {TextAtlas};
 })();
 
 /* ../rendering/dom-scene.js */
-__modules[7]=(()=>{
+__modules[8]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
 
@@ -668,13 +810,13 @@ return {DOMScene};
 })();
 
 /* ../rendering/renderer.js */
-__modules[8]=(()=>{
+__modules[9]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
 const {CanvasPainter}=__modules[2];
-const {WebGPUPainter}=__modules[4];
-const {WebGLPainter}=__modules[5];
-const {TextAtlas}=__modules[6];
-const {DOMScene}=__modules[7];
+const {WebGPUPainter}=__modules[5];
+const {WebGLPainter}=__modules[6];
+const {TextAtlas}=__modules[7];
+const {DOMScene}=__modules[8];
 
 
 
@@ -702,26 +844,28 @@ class UIRenderer {
   listen(target, type, listener, options) { target?.addEventListener(type, listener, options); this.listeners.push(() => target?.removeEventListener(type, listener, options)); }
   observe() {
     const invalidate = event => {
-      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.adapter.invalidateStyles();
+      if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
+      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.stylesDirty = true;
       else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
-        const scope = event.target.closest('button,[role=treeitem],.tree-row,.property-row,.vb-control,.tool-caption') || event.target;
-        this.adapter.invalidateStyles(scope.parentElement);
-        if (event.relatedTarget?.nodeType === 1) this.adapter.invalidateStyles(event.relatedTarget.parentElement);
+        this.stylesDirty = true;
       }
       this.invalidate();
     };
     this.observer = new this.view.MutationObserver(records => {
+      if (!this.driver) return;
       let changed = false;
       for (const r of records) {
         const node = r.target.nodeType === 1 ? r.target : r.target.parentElement;
         if (node?.closest('[data-vb-render-layer]')) continue;
+        if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        if (r.type !== 'characterData') this.adapter.invalidateStyles(node);
+        this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
-    this.observer.observe(this.document.body, {childList: true, subtree: true, attributes: true, characterData: true});
-    for (const event of ['input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    // Connected only while a canvas backend is active; native HTML incurs no
+    // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
+    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
     this.listen(this.document, 'scroll', invalidate, true);
     this.listen(this.view, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'resize', invalidate);
@@ -730,7 +874,7 @@ class UIRenderer {
     this.listen(this.view, 'pagehide', () => this.dispose());
     this.listen(this.view, 'beforeprint', () => { this.printing = true; if (this.canvas) this.canvas.style.visibility = 'hidden'; });
     this.listen(this.view, 'afterprint', () => { this.printing = false; invalidate(); });
-    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.adapter.invalidateStyles(); invalidate(); });
+    this.listen(this.document.fonts, 'loadingdone', () => { this.atlas.reset(); this.stylesDirty = true; invalidate(); });
     this.forcedColors = this.view.matchMedia('(forced-colors: active)');
     this.listen(this.forcedColors, 'change', () => { this.ready = this.setOptions(this.policy, {force: true}); });
     this.armDPR();
@@ -770,7 +914,8 @@ class UIRenderer {
           if (!this.disposed && this.generation === generation && this.driver === painter) this.fallback(reason);
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
-        this.canvas = canvas; this.driver = painter; this.backend = name;
+        this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
         this.renderNow();
         if (this.driver === painter) this.publish();
         return this.getStats();
@@ -798,7 +943,12 @@ class UIRenderer {
   renderNow() {
     if (this.disposed || !this.driver || this.printing) return;
     this.cancelFrame();
-    const start = this.view.performance.now(), scene = this.sceneFactory(this.policy), built = this.view.performance.now();
+    // Batch cache invalidation with painting, rather than repeatedly walking
+    // overlapping mutated subtrees from a MutationObserver callback.
+    // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
+    const start = this.view.performance.now();
+    if (this.stylesDirty) { this.adapter.invalidateStyles(); this.stylesDirty = false; }
+    const scene = this.sceneFactory(this.policy), built = this.view.performance.now();
     this.driver.render(scene);
     const submitted = this.view.performance.now();
     this.canvas.style.visibility = 'visible'; this.metrics.frames++;
@@ -815,7 +965,7 @@ class UIRenderer {
     return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.observer?.disconnect(); this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();
@@ -838,7 +988,7 @@ return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
 /* ../language/errors.js */
-__modules[9]=(()=>{
+__modules[10]=(()=>{
 
 class VBError extends Error {
   constructor(message, number = 5, source = null, line = 0, column = 0) { super(message); this.name = 'VBError'; this.number = number; this.source = source; this.line = line; this.column = column; }
@@ -848,8 +998,8 @@ return {VBError};
 })();
 
 /* calendar.js */
-__modules[10]=(()=>{
-const {VBError}=__modules[9];
+__modules[11]=(()=>{
+const {VBError}=__modules[10];
 /** Gregorian/OLE DATE support. Numeric dates encode civil time, not UTC instants.
  * System-default week settings deliberately use the documented invariant defaults
  * (Sunday / week containing January 1); no Windows NLS API is available here.
@@ -926,9 +1076,9 @@ return {validateDate,dateOrdinal,dateToSerial,serialToDate,asDate,dateAdd,dateDi
 })();
 
 /* ../language/lexer.js */
-__modules[11]=(()=>{
-const {asDate}=__modules[10];
-const {VBError}=__modules[9];
+__modules[12]=(()=>{
+const {asDate}=__modules[11];
+const {VBError}=__modules[10];
 
 /** VB lexical scanner. Tokens retain original source offsets for editor/debugger use. */
 
@@ -1020,8 +1170,8 @@ return {tokenize,splitTop,logicalLines,VBError};
 })();
 
 /* decimal.js */
-__modules[12]=(()=>{
-const {VBError}=__modules[9];
+__modules[13]=(()=>{
+const {VBError}=__modules[10];
 
 const MAX=(1n<<96n)-1n;
 const abs=n=>n<0n?-n:n;
@@ -1098,7 +1248,7 @@ return {VBDecimal};
 })();
 
 /* ../core/window-context.js */
-__modules[13]=(()=>{
+__modules[14]=(()=>{
 
 /** Documents belonging to one live IDE session. No global DOM monkey-patching. */
 const documents = new Set();
@@ -1130,8 +1280,8 @@ return {registerUIDocument,uiDocuments,uiDocument,hasUIDialog};
 })();
 
 /* ../core/core.js */
-__modules[14]=(()=>{
-const {uiDocument}=__modules[13];
+__modules[15]=(()=>{
+const {uiDocument}=__modules[14];
 
 /** Small framework-independent primitives shared by the IDE and runtime. */
 class Signal {
@@ -1193,11 +1343,11 @@ return {Signal,History,clone,lower,escapeHTML,debounce,download,el,safeName,VERS
 })();
 
 /* values.js */
-__modules[15]=(()=>{
-const {VBDecimal}=__modules[12];
-const {asDate,dateToSerial}=__modules[10];
-const { VBError }=__modules[11];
-const { lower }=__modules[14];
+__modules[16]=(()=>{
+const {VBDecimal}=__modules[13];
+const {asDate,dateToSerial}=__modules[11];
+const { VBError }=__modules[12];
+const { lower }=__modules[15];
 
 
 function bankersRound(n) { if(!Number.isFinite(n))throw new VBError('Overflow',6);const floor=Math.floor(n), f=n-floor;return f===0.5?(floor%2===0?floor:floor+1):Math.round(n); }
@@ -1390,9 +1540,9 @@ return {bankersRound,NOTHING,MISSING,VBErrorValue,explicitErrorValue,VBInterface
 })();
 
 /* ../data/common.js */
-__modules[16]=(()=>{
-const {VBError}=__modules[11];
-const {VBArray, VBCurrency, VBDecimal}=__modules[15];
+__modules[17]=(()=>{
+const {VBError}=__modules[12];
+const {VBArray, VBCurrency, VBDecimal}=__modules[16];
 
 
 const DATA_LIMITS = Object.freeze({rows:100000, cells:1000000, bytes:20*1024*1024, pages:100});
@@ -1554,7 +1704,7 @@ return {DATA_LIMITS,DATA_CONSTANTS,dataError,assertData,after,dataList,sqlValue,
 })();
 
 /* ../data/vendor/sqlite.js */
-__modules[17]=(()=>{
+__modules[18]=(()=>{
 
 // Generated by tools/vendor-sqlite.mjs. sql.js 1.14.2 (MIT); SQLite public domain.
 // JavaScript SHA256 35e39a73b2e0bc1c2202a4cadb23bcf7a3a77071a39c270f014402968785b95f; WASM SHA256 38c14f6e379210bc942bdc4ebca44e7bfdb4318ecc1c72ca666a28fdce96670a.
@@ -1751,9 +1901,9 @@ return {initializeSQLite};
 })();
 
 /* ../data/sqlite.js */
-__modules[18]=(()=>{
-const {initializeSQLite}=__modules[17];
-const {assertData,dataError,DATA_LIMITS,quoteIdentifier,sqlValue,columnType}=__modules[16];
+__modules[19]=(()=>{
+const {initializeSQLite}=__modules[18];
+const {assertData,dataError,DATA_LIMITS,quoteIdentifier,sqlValue,columnType}=__modules[17];
 
 
 /** Real embedded SQLite. A context owns a disk; connections share its live database handles. */
@@ -1876,9 +2026,9 @@ return {SQLiteProvider};
 })();
 
 /* ../data/wire.js */
-__modules[19]=(()=>{
-const {VBCurrency,VBDecimal}=__modules[15];
-const {assertData}=__modules[16];
+__modules[20]=(()=>{
+const {VBCurrency,VBDecimal}=__modules[16];
+const {assertData}=__modules[17];
 
 
 /** Explicit tagged cells: transport cannot silently round BigInt or turn BLOBs into objects. */
@@ -1904,9 +2054,9 @@ return {encodeCell,decodeCell,encodeResult,decodeResult};
 })();
 
 /* ../data/http.js */
-__modules[20]=(()=>{
-const {encodeCell,decodeResult}=__modules[19];
-const {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue}=__modules[16];
+__modules[21]=(()=>{
+const {encodeCell,decodeResult}=__modules[20];
+const {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue}=__modules[17];
 
 
 async function boundedBody(response,limit){
@@ -2045,9 +2195,9 @@ return {HTTPProvider,GatewayProvider};
 })();
 
 /* ../data/recordset.js */
-__modules[21]=(()=>{
-const {VBError}=__modules[11];
-const {VBArray,VBCurrency,coerce,bankersRound,numeric,binary,truth}=__modules[15];
+__modules[22]=(()=>{
+const {VBError}=__modules[12];
+const {VBArray,VBCurrency,coerce,bankersRound,numeric,binary,truth}=__modules[16];
 
 
 // Disconnected client-side cursor. ConnectedRecordset adds explicit provider I/O.
@@ -2157,9 +2307,9 @@ return {fieldValue,DisconnectedRecordset};
 })();
 
 /* ../data/files.js */
-__modules[22]=(()=>{
-const {assertData,DATA_LIMITS,resultFromRows,sameValue,pathValue}=__modules[16];
-const {fieldValue}=__modules[21];
+__modules[23]=(()=>{
+const {assertData,DATA_LIMITS,resultFromRows,sameValue,pathValue}=__modules[17];
+const {fieldValue}=__modules[22];
 
 
 function parseCSV(text){
@@ -2212,9 +2362,9 @@ return {parseCSV,writeCSV,FileDataProvider};
 })();
 
 /* ../data/connected-recordset.js */
-__modules[23]=(()=>{
-const {DisconnectedRecordset,fieldValue}=__modules[21];
-const {assertData,after,DATA_LIMITS,sameValue}=__modules[16];
+__modules[24]=(()=>{
+const {DisconnectedRecordset,fieldValue}=__modules[22];
+const {assertData,after,DATA_LIMITS,sameValue}=__modules[17];
 
 
 /** The same observable cursor as the bound controls use, with awaited provider writes. */
@@ -2331,10 +2481,10 @@ return {ConnectedRecordset};
 })();
 
 /* ../data/connection.js */
-__modules[24]=(()=>{
-const {assertData,dataError,connectionConfiguration,dataList,after}=__modules[16];
-const {ConnectedRecordset}=__modules[23];
-const {fieldValue}=__modules[21];
+__modules[25]=(()=>{
+const {assertData,dataError,connectionConfiguration,dataList,after}=__modules[17];
+const {ConnectedRecordset}=__modules[24];
+const {fieldValue}=__modules[22];
 
 
 
@@ -2460,9 +2610,9 @@ return {DataCollection,ADOConnection,ADOCommand,DAODatabase,DAOEngine};
 })();
 
 /* binary-codec.js */
-__modules[25]=(()=>{
-const {VBError}=__modules[11];
-const {VBArray,VBCurrency,VBDecimal,VBErrorValue,NOTHING,coerce,numeric,vbString,Cell,makeRecord : buildRecord}=__modules[15];
+__modules[26]=(()=>{
+const {VBError}=__modules[12];
+const {VBArray,VBCurrency,VBDecimal,VBErrorValue,NOTHING,coerce,numeric,vbString,Cell,makeRecord : buildRecord}=__modules[16];
 
 
 // Classic VB files use an ANSI code page. This browser runtime explicitly uses
@@ -2558,9 +2708,9 @@ return {encodeANSI,decodeANSI,makeRecord,recordLength,encodeVariable,decodeVaria
 })();
 
 /* filesystem.js */
-__modules[26]=(()=>{
-const { VBError }=__modules[11];
-const {encodeANSI,decodeANSI}=__modules[25];
+__modules[27]=(()=>{
+const { VBError }=__modules[12];
+const {encodeANSI,decodeANSI}=__modules[26];
 
 
 const MAX_FILE=20*1024*1024;
@@ -2624,14 +2774,14 @@ return {VirtualFileSystem};
 })();
 
 /* ../data/context.js */
-__modules[27]=(()=>{
-const {normalizeDataSources,assertData,DATA_CONSTANTS}=__modules[16];
-const {SQLiteProvider}=__modules[18];
-const {HTTPProvider,GatewayProvider}=__modules[20];
-const {FileDataProvider}=__modules[22];
-const {ADOConnection,ADOCommand,DataCollection,DAOEngine}=__modules[24];
-const {ConnectedRecordset}=__modules[23];
-const {VirtualFileSystem}=__modules[26];
+__modules[28]=(()=>{
+const {normalizeDataSources,assertData,DATA_CONSTANTS}=__modules[17];
+const {SQLiteProvider}=__modules[19];
+const {HTTPProvider,GatewayProvider}=__modules[21];
+const {FileDataProvider}=__modules[23];
+const {ADOConnection,ADOCommand,DataCollection,DAOEngine}=__modules[25];
+const {ConnectedRecordset}=__modules[24];
+const {VirtualFileSystem}=__modules[27];
 
 
 
@@ -2698,8 +2848,8 @@ return {DataContext};
 })();
 
 /* financial.js */
-__modules[28]=(()=>{
-const {VBError}=__modules[9];
+__modules[29]=(()=>{
+const {VBError}=__modules[10];
 /**
  * Double-precision financial functions for the browser VB runtime.
  * Pure ES module: no DOM, network, filesystem or dynamic evaluation.
@@ -2888,7 +3038,7 @@ return {FinancialError,FV,PV,PMT,IPMT,PPMT,NPER,NPV,RATE,IRR,MIRR,SLN,SYD,DDB,FI
 })();
 
 /* ../theme/theme.js */
-__modules[29]=(()=>{
+__modules[30]=(()=>{
 
 /** Theme data is shared by DOM controls, canvas/WebGPU drawing and the exporter.
  * Values are RGB, not OLE BGR. No proprietary font or artwork is embedded.
@@ -2945,8 +3095,8 @@ return {THEMES,SYSTEM_ROLES,SYSTEM_COLOR_NAMES,themeId,getTheme,applyTheme,color
 })();
 
 /* ../graphics/surface.js */
-__modules[30]=(()=>{
-const { colorValue, getTheme }=__modules[29];
+__modules[31]=(()=>{
+const { colorValue, getTheme }=__modules[30];
 
 /** Demand-rendered 2D primitives: WebGPU triangles, Canvas2D fallback, DOM text. */
 const surfaces = new WeakMap();
@@ -3070,8 +3220,8 @@ return {refreshGraphicsSurfaces,oleColor,getGPUDevice,GraphicsSurface};
 })();
 
 /* native-windows.js */
-__modules[31]=(()=>{
-const {refreshGraphicsSurfaces}=__modules[30];
+__modules[32]=(()=>{
+const {refreshGraphicsSurfaces}=__modules[31];
 
 /** Native Windows adapter. One VM owns all forms; same-origin windows retain DOM/event identity. */
 function installNativeHost(host, bridge = globalThis.vb6Native) {
@@ -3263,8 +3413,8 @@ return {installNativeHost};
 })();
 
 /* ../project/binary-assets.js */
-__modules[32]=(()=>{
-const {VBError}=__modules[11];
+__modules[33]=(()=>{
+const {VBError}=__modules[12];
 
 const MAX_RESOURCE_BYTES=20*1024*1024;
 const fail=message=>{throw new VBError(message,1002);};
@@ -3275,10 +3425,10 @@ return {fromBase64,toBase64};
 })();
 
 /* ../project/native-text.js */
-__modules[33]=(()=>{
-const {decodeANSI,encodeANSI}=__modules[25];
-const {VBError}=__modules[11];
-const {fromBase64,toBase64}=__modules[32];
+__modules[34]=(()=>{
+const {decodeANSI,encodeANSI}=__modules[26];
+const {VBError}=__modules[12];
+const {fromBase64,toBase64}=__modules[33];
 /** Native project text: preserve bytes, BOMs and line endings; never replace unmappable characters. */
 
 
@@ -3342,9 +3492,9 @@ return {NATIVE_ENCODINGS,bytesOf,equalBytes,linesOf,lineBody,lineEnding,preferre
 })();
 
 /* ../project/frx.js */
-__modules[34]=(()=>{
-const {VBError}=__modules[11];
-const {decodeNativeBytes,encodeNativeText,bytesOf}=__modules[33];
+__modules[35]=(()=>{
+const {VBError}=__modules[12];
+const {decodeNativeBytes,encodeNativeText,bytesOf}=__modules[34];
 /** Bounded FRX records; no COM deserialization, native code, or remote resource loads. */
 
 
@@ -3447,9 +3597,9 @@ return {MAX_RESOURCE_BYTES,cleanProjectPath,relativeProjectPath,resolveProjectPa
 })();
 
 /* ../project/res.js */
-__modules[35]=(()=>{
-const {VBError}=__modules[11];
-const {cleanProjectPath,fromBase64,toBase64,MAX_RESOURCE_BYTES}=__modules[34];
+__modules[36]=(()=>{
+const {VBError}=__modules[12];
+const {cleanProjectPath,fromBase64,toBase64,MAX_RESOURCE_BYTES}=__modules[35];
 /** Windows 32-bit .res containers. Payloads remain opaque unless explicitly edited. */
 
 
@@ -3541,11 +3691,11 @@ return {RESOURCE_TYPES,resourceKey,normalizeResources,readRES,writeRES,decodeStr
 })();
 
 /* resources.js */
-__modules[36]=(()=>{
-const {VBError}=__modules[11];
-const {VBArray,bankersRound,numeric}=__modules[15];
-const {normalizeResources,decodeStringTable}=__modules[35];
-const {fromBase64,rasterDataURL,toBase64,MAX_RESOURCE_BYTES}=__modules[34];
+__modules[37]=(()=>{
+const {VBError}=__modules[12];
+const {VBArray,bankersRound,numeric}=__modules[16];
+const {normalizeResources,decodeStringTable}=__modules[36];
+const {fromBase64,rasterDataURL,toBase64,MAX_RESOURCE_BYTES}=__modules[35];
 
 
 
@@ -3576,8 +3726,8 @@ return {ResourceStore};
 })();
 
 /* error-messages.js */
-__modules[37]=(()=>{
-const {VBError}=__modules[9];
+__modules[38]=(()=>{
+const {VBError}=__modules[10];
 
 /** Invariant English descriptions for the errors produced by this runtime.
  * Localized Windows resource tables and arbitrary COM HRESULT messages are not
@@ -3611,9 +3761,9 @@ return {errorDescription};
 })();
 
 /* strings.js */
-__modules[38]=(()=>{
-const {VBError}=__modules[11];
-const {MISSING,VBArray,coerce,vbString}=__modules[15];
+__modules[39]=(()=>{
+const {VBError}=__modules[12];
+const {MISSING,VBArray,coerce,vbString}=__modules[16];
 
 
 const invalid=()=>{throw new VBError('Invalid procedure call or argument',5);};
@@ -3706,10 +3856,10 @@ return {stringLibrary};
 })();
 
 /* financial-library.js */
-__modules[39]=(()=>{
-const {VBError}=__modules[9];
-const {MISSING,VBArray,numeric}=__modules[15];
-const {FINANCIAL_FUNCTIONS}=__modules[28];
+__modules[40]=(()=>{
+const {VBError}=__modules[10];
+const {MISSING,VBArray,numeric}=__modules[16];
+const {FINANCIAL_FUNCTIONS}=__modules[29];
 
 
 
@@ -3737,8 +3887,8 @@ return {financialLibrary};
 })();
 
 /* signatures.js */
-__modules[40]=(()=>{
-const {FINANCIAL_SIGNATURES}=__modules[28];
+__modules[41]=(()=>{
+const {FINANCIAL_SIGNATURES}=__modules[29];
 
 /** Public names for named-argument binding. A trailing ? denotes Optional. */
 const BUILTIN_SIGNATURES={
@@ -3760,7 +3910,7 @@ return {BUILTIN_SIGNATURES,signatureParameters};
 })();
 
 /* constants.js */
-__modules[41]=(()=>{
+__modules[42]=(()=>{
 
 /** Shared immutable compiler/runtime intrinsic constants. */
 const VB_CONSTANTS = {
@@ -3787,19 +3937,19 @@ return {VB_CONSTANTS};
 })();
 
 /* library.js */
-__modules[42]=(()=>{
-const {errorDescription}=__modules[37];
-const {stringLibrary}=__modules[38];
-const {financialLibrary}=__modules[39];
-const {ResourceStore}=__modules[36];
-const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,weekday,weekdayName,monthName}=__modules[10];
-const {BUILTIN_SIGNATURES,signatureParameters}=__modules[40];
-const {DisconnectedRecordset}=__modules[21];
-const {recordLength}=__modules[25];
-const { VBError }=__modules[11];
-const { lower }=__modules[14];
-const { NOTHING, MISSING, VBErrorValue, explicitErrorValue, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, decimal, numeric, vbString, coerce, bankersRound, truth, binary }=__modules[15];
-const {VB_CONSTANTS}=__modules[41];
+__modules[43]=(()=>{
+const {errorDescription}=__modules[38];
+const {stringLibrary}=__modules[39];
+const {financialLibrary}=__modules[40];
+const {ResourceStore}=__modules[37];
+const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,weekday,weekdayName,monthName}=__modules[11];
+const {BUILTIN_SIGNATURES,signatureParameters}=__modules[41];
+const {DisconnectedRecordset}=__modules[22];
+const {recordLength}=__modules[26];
+const { VBError }=__modules[12];
+const { lower }=__modules[15];
+const { NOTHING, MISSING, VBErrorValue, explicitErrorValue, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, decimal, numeric, vbString, coerce, bankersRound, truth, binary }=__modules[16];
+const {VB_CONSTANTS}=__modules[42];
 
 
 
@@ -3878,9 +4028,9 @@ return {MemoryRecordset,createLibrary,VB_CONSTANTS};
 })();
 
 /* ../controls/rtf.js */
-__modules[43]=(()=>{
-const {VBError}=__modules[11];
-const {decodeANSI}=__modules[25];
+__modules[44]=(()=>{
+const {VBError}=__modules[12];
+const {decodeANSI}=__modules[26];
 /** An original bounded RTF reader/writer and UTF-16 rich-text run model.
  * HTML, native OLE objects, embedded code and external links are never executed.
  */
@@ -3989,8 +4139,8 @@ return {RTF_LIMITS,RICH_DEFAULTS,richText,parseRTF,writeRTF,RichTextDocument};
 })();
 
 /* ../controls/form-window.js */
-__modules[44]=(()=>{
-const {el}=__modules[14];
+__modules[45]=(()=>{
+const {el}=__modules[15];
 
 /** Pointer-capture lifecycle shared by runtime form moving and resizing. */
 function installFormWindow(form){
@@ -4015,9 +4165,9 @@ return {installFormWindow};
 })();
 
 /* ../controls/native-widgets.js */
-__modules[45]=(()=>{
-const {el}=__modules[14];
-const {getTheme}=__modules[29];
+__modules[46]=(()=>{
+const {el}=__modules[15];
+const {getTheme}=__modules[30];
 
 
 /** Bounds-only model used by the classic two-button spin control. */
@@ -4091,8 +4241,8 @@ return {stepperValue,ClassicUpDown,ClassicCombo};
 })();
 
 /* ../controls/scrollbar.js */
-__modules[46]=(()=>{
-const {el}=__modules[14];
+__modules[47]=(()=>{
+const {el}=__modules[15];
 
 /** Scroll-bar geometry is independent from DOM and remains stable at fractional DPR. */
 function scrollbarGeometry(min,max,value,length,page=1){
@@ -4132,7 +4282,7 @@ return {scrollbarGeometry,ClassicScrollbar};
 })();
 
 /* ../theme/icon-art.js */
-__modules[47]=(()=>{
+__modules[48]=(()=>{
 
 /** Authored classic IDE pixel artwork, not extracted Microsoft resources.
  * Every cell is one native 16px pixel. Keep semantic variants separate: a size,
@@ -4291,8 +4441,8 @@ return {ICON_PALETTE,ICON_ART,CONTROL_ART};
 })();
 
 /* ../theme/icons.js */
-__modules[48]=(()=>{
-const {ICON_ART,CONTROL_ART,ICON_PALETTE}=__modules[47];
+__modules[49]=(()=>{
+const {ICON_ART,CONTROL_ART,ICON_PALETTE}=__modules[48];
 /** Offline, font-independent classic glyph renderer, shared by IDE and runtime. */
 
 const ICON_NAMES=Object.freeze(Object.keys(ICON_ART));
@@ -4319,11 +4469,11 @@ return {ICON_NAMES,CONTROL_ICON_TYPES,hasIcon,hasControlIcon,iconSVG,icon,contro
 })();
 
 /* ../theme/menu.js */
-__modules[49]=(()=>{
-const {uiDocument}=__modules[13];
-const {el}=__modules[14];
-const {icon}=__modules[48];
-const {getTheme}=__modules[29];
+__modules[50]=(()=>{
+const {uiDocument}=__modules[14];
+const {el}=__modules[15];
+const {icon}=__modules[49];
+const {getTheme}=__modules[30];
 /** Shared IDE/runtime popup menus: one session, a retained submenu stack, no leaked listeners. */
 
 
@@ -4408,10 +4558,10 @@ return {mnemonicText,menuIsOpen,closeMenu,showMenu};
 })();
 
 /* ../controls/richtext.js */
-__modules[50]=(()=>{
-const {parseRTF,RichTextDocument,richText}=__modules[43];
-const {VBError}=__modules[11];
-const {oleColor}=__modules[30];
+__modules[51]=(()=>{
+const {parseRTF,RichTextDocument,richText}=__modules[44];
+const {VBError}=__modules[12];
+const {oleColor}=__modules[31];
 /** RichTextBox DOM adapter. All content is constructed as text nodes, never innerHTML. */
 
 
@@ -4499,11 +4649,11 @@ return {RichTextController,RICH_SELECTION_PROPERTIES};
 })();
 
 /* ../project/model.js */
-__modules[51]=(()=>{
-const {normalizeDataSources}=__modules[16];
-const { clone, lower, safeName }=__modules[14];
-const {normalizeResources}=__modules[35];
-const { VBError }=__modules[11];
+__modules[52]=(()=>{
+const {normalizeDataSources}=__modules[17];
+const { clone, lower, safeName }=__modules[15];
+const {normalizeResources}=__modules[36];
+const { VBError }=__modules[12];
 
 
 
@@ -4570,9 +4720,9 @@ return {PROJECT_SCHEMA,newId,BASIC_CONTROL_TYPES,EXTENDED_CONTROL_TYPES,CONTROL_
 })();
 
 /* ../controls/collections.js */
-__modules[52]=(()=>{
-const { VBError }=__modules[11];
-const { lower }=__modules[14];
+__modules[53]=(()=>{
+const { VBError }=__modules[12];
+const { lower }=__modules[15];
 
 
 class ControlCollection {
@@ -4618,22 +4768,22 @@ return {ControlCollection,TreeNodes,ListItems,ColumnHeaders,ToolbarButtons,Statu
 })();
 
 /* ../controls/controls.js */
-__modules[53]=(()=>{
-const {installFormWindow}=__modules[44];
-const {ClassicCombo,ClassicUpDown}=__modules[45];
-const {ClassicScrollbar}=__modules[46];
-const {showMenu : openClassicMenu,closeMenu,menuIsOpen}=__modules[49];
-const {RichTextController,RICH_SELECTION_PROPERTIES}=__modules[50];
-const {parseRTF}=__modules[43];
-const { el, lower, clone }=__modules[14];
-const { VBError }=__modules[11];
-const { NOTHING, Ref, Cell, truth, VBArray, vbString }=__modules[15];
-const { MemoryRecordset }=__modules[42];
-const { GraphicsSurface }=__modules[30];
-const { cssColor : oleColor, fontFamily, getTheme }=__modules[29];
-const { icon, controlIcon }=__modules[48];
-const { CONTROL_DEFAULTS, createControl, newId }=__modules[51];
-const { ControlCollection, TreeNodes, ListItems, ColumnHeaders, ToolbarButtons, StatusPanels, TabItems, ImageItems, ControlArray }=__modules[52];
+__modules[54]=(()=>{
+const {installFormWindow}=__modules[45];
+const {ClassicCombo,ClassicUpDown}=__modules[46];
+const {ClassicScrollbar}=__modules[47];
+const {showMenu : openClassicMenu,closeMenu,menuIsOpen}=__modules[50];
+const {RichTextController,RICH_SELECTION_PROPERTIES}=__modules[51];
+const {parseRTF}=__modules[44];
+const { el, lower, clone }=__modules[15];
+const { VBError }=__modules[12];
+const { NOTHING, Ref, Cell, truth, VBArray, vbString }=__modules[16];
+const { MemoryRecordset }=__modules[43];
+const { GraphicsSurface }=__modules[31];
+const { cssColor : oleColor, fontFamily, getTheme }=__modules[30];
+const { icon, controlIcon }=__modules[49];
+const { CONTROL_DEFAULTS, createControl, newId }=__modules[52];
+const { ControlCollection, TreeNodes, ListItems, ColumnHeaders, ToolbarButtons, StatusPanels, TabItems, ImageItems, ControlArray }=__modules[53];
 
 
 
@@ -4988,10 +5138,10 @@ return {NONVISUAL_TYPES,DEFAULT_EVENTS,CONTROL_EVENTS,BrowserControl,BrowserForm
 })();
 
 /* agent-control.js */
-__modules[54]=(()=>{
-const {CONTROL_EVENTS, DEFAULT_EVENTS}=__modules[53];
-const {clone}=__modules[14];
-const {newId}=__modules[51];
+__modules[55]=(()=>{
+const {CONTROL_EVENTS, DEFAULT_EVENTS}=__modules[54];
+const {clone}=__modules[15];
+const {newId}=__modules[52];
 /** Structured automation of the runtime only; never queries the owner IDE's DOM. */
 
 
@@ -5070,10 +5220,10 @@ return {RuntimeAgentControl};
 })();
 
 /* mdi.js */
-__modules[55]=(()=>{
-const {VBError}=__modules[11];
-const {el}=__modules[14];
-const {NOTHING}=__modules[15];
+__modules[56]=(()=>{
+const {VBError}=__modules[12];
+const {el}=__modules[15];
+const {NOTHING}=__modules[16];
 
 
 
@@ -5130,9 +5280,9 @@ return {arrangeMDIRects,RuntimeMDI};
 })();
 
 /* ../controls/dialog.js */
-__modules[56]=(()=>{
-const {el}=__modules[14];
-const {icon}=__modules[48];
+__modules[57]=(()=>{
+const {el}=__modules[15];
+const {icon}=__modules[49];
 
 
 /** The supported MsgBox style bits. Help/system-modal options remain host limitations. */
@@ -5167,11 +5317,11 @@ return {messageBoxOptions,runtimeDialog};
 })();
 
 /* ../language/binding.js */
-__modules[57]=(()=>{
-const {VBError}=__modules[9];
-const {lower}=__modules[14];
-const {VB_CONSTANTS}=__modules[41];
-const {VBCurrency,coerce,unary,binary}=__modules[15];
+__modules[58]=(()=>{
+const {VBError}=__modules[10];
+const {lower}=__modules[15];
+const {VB_CONSTANTS}=__modules[42];
+const {VBCurrency,coerce,unary,binary}=__modules[16];
 
 
 
@@ -5283,8 +5433,8 @@ return {bindConstants};
 })();
 
 /* ../language/default-types.js */
-__modules[58]=(()=>{
-const {VBError}=__modules[11];
+__modules[59]=(()=>{
+const {VBError}=__modules[12];
 
 /** VB6 module-scoped default types. Later VB.NET-only integer types are not accepted. */
 const DEFAULT_TYPE_NAMES=Object.freeze({defbool:'Boolean',defbyte:'Byte',defint:'Integer',deflng:'Long',defcur:'Currency',defsng:'Single',defdbl:'Double',defdate:'Date',defstr:'String',defobj:'Object',defvar:'Variant'});
@@ -5310,8 +5460,8 @@ return {DEFAULT_TYPE_NAMES,addDefaultTypes,defaultIdentifierType};
 })();
 
 /* ../language/interfaces.js */
-__modules[59]=(()=>{
-const {lower}=__modules[14];
+__modules[60]=(()=>{
+const {lower}=__modules[15];
 
 const json=x=>JSON.stringify(x);
 function shape(p){return {kind:p.kind,accessor:p.accessor,type:lower(p.returnType),params:p.params.map(a=>({type:lower(a.type),byRef:a.byRef,optional:a.optional,paramArray:a.paramArray,array:a.bounds!==null,initial:a.initial}))};}
@@ -5354,8 +5504,8 @@ return {validateInterfaces};
 })();
 
 /* ../language/expression.js */
-__modules[60]=(()=>{
-const { tokenize, VBError }=__modules[11];
+__modules[61]=(()=>{
+const { tokenize, VBError }=__modules[12];
 
 const PRECEDENCE = {imp:1,eqv:2,xor:3,or:4,and:5,'=':7,'<>':7,'<':7,'>':7,'<=':7,'>=':7,is:7,like:7,'&':8,'+':9,'-':9,mod:10,'\\':11,'*':12,'/':12,'^':14};
 class ExpressionParser {
@@ -5430,10 +5580,10 @@ return {ExpressionParser,parseExpression,parseCall};
 })();
 
 /* ../language/conditional.js */
-__modules[61]=(()=>{
-const { VBError }=__modules[11];
-const { parseExpression }=__modules[60];
-const { binary, unary, truth }=__modules[15];
+__modules[62]=(()=>{
+const { VBError }=__modules[12];
+const { parseExpression }=__modules[61];
+const { binary, unary, truth }=__modules[16];
 
 
 
@@ -5472,14 +5622,14 @@ return {preprocess};
 })();
 
 /* ../language/compiler.js */
-__modules[62]=(()=>{
-const {bindConstants}=__modules[57];
-const {defaultIdentifierType,addDefaultTypes}=__modules[58];
-const {validateInterfaces}=__modules[59];
-const { preprocess }=__modules[61];
-const { VBError, logicalLines, splitTop, tokenize }=__modules[11];
-const { parseExpression, parseCall }=__modules[60];
-const { lower }=__modules[14];
+__modules[63]=(()=>{
+const {bindConstants}=__modules[58];
+const {defaultIdentifierType,addDefaultTypes}=__modules[59];
+const {validateInterfaces}=__modules[60];
+const { preprocess }=__modules[62];
+const { VBError, logicalLines, splitTop, tokenize }=__modules[12];
+const { parseExpression, parseCall }=__modules[61];
+const { lower }=__modules[15];
 
 
 
@@ -5682,8 +5832,8 @@ return {parseDeclarations,parseParameters,compileModule,compileProject,validateC
 })();
 
 /* debug-evaluation.js */
-__modules[63]=(()=>{
-const {VBError}=__modules[11];
+__modules[64]=(()=>{
+const {VBError}=__modules[12];
 
 /** Not a VB exception: Resume Next must not defeat user cancellation. */
 class DebugEvaluationAbort extends VBError {
@@ -5711,11 +5861,11 @@ return {DebugEvaluationAbort,DebugEvaluationSession};
 })();
 
 /* debug-inspector.js */
-__modules[64]=(()=>{
-const {VBError}=__modules[11];
-const {parseExpression}=__modules[60];
-const {lower}=__modules[14];
-const {Cell,LazyCell,Ref,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,VBErrorValue,NOTHING,MISSING,objectSupports,unary,binary,coerce,truth}=__modules[15];
+__modules[65]=(()=>{
+const {VBError}=__modules[12];
+const {parseExpression}=__modules[61];
+const {lower}=__modules[15];
+const {Cell,LazyCell,Ref,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,VBErrorValue,NOTHING,MISSING,objectSupports,unary,binary,coerce,truth}=__modules[16];
 
 
 
@@ -5765,8 +5915,8 @@ return {debugDescription,DebugInspector};
 })();
 
 /* instruction-map.js */
-__modules[65]=(()=>{
-const {VBError}=__modules[11];
+__modules[66]=(()=>{
+const {VBError}=__modules[12];
 
 const key=ins=>{const {line,source,procedure,...rest}=ins;return JSON.stringify(rest);};
 const linearInstruction=ins=>['assign','expr','print','assert','graphics','filePrint','fileInput','fileRecord','fileSeek','fileCopy','fileRename','fileClose','fileOpen','stringMid','stringAlign','return','dim'].includes(ins.op);
@@ -5791,9 +5941,9 @@ return {linearInstruction,instructionMap};
 })();
 
 /* live-edit.js */
-__modules[66]=(()=>{
-const {instructionMap,linearInstruction}=__modules[65];
-const {VBError}=__modules[11];
+__modules[67]=(()=>{
+const {instructionMap,linearInstruction}=__modules[66];
+const {VBError}=__modules[12];
 
 
 const json=value=>JSON.stringify(value,(_,v)=>v instanceof Map?[...v]:v);
@@ -5853,21 +6003,21 @@ return {sameActiveLayout,planLiveEdit,nextStatementIndex};
 })();
 
 /* vm.js */
-__modules[67]=(()=>{
-const {DataContext}=__modules[27];
-const {errorDescription}=__modules[37];
-const {DebugEvaluationSession}=__modules[63];
-const {defaultIdentifierType}=__modules[58];
-const {DebugInspector}=__modules[64];
-const {planLiveEdit,nextStatementIndex}=__modules[66];
-const {encodeVariable,decodeVariable,makeRecord}=__modules[25];
-const { Signal, lower, VERSION }=__modules[14];
-const { VBError }=__modules[11];
-const { parseExpression, parseCall }=__modules[60];
-const { compileProject }=__modules[62];
-const { NOTHING, MISSING, objectIdentity, objectSupports, VBErrorValue, LazyCell, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, cloneValue, coerce, defaultValue, numeric, truth, vbString, unary, binary, describe }=__modules[15];
-const { VirtualFileSystem }=__modules[26];
-const { createLibrary, MemoryRecordset }=__modules[42];
+__modules[68]=(()=>{
+const {DataContext}=__modules[28];
+const {errorDescription}=__modules[38];
+const {DebugEvaluationSession}=__modules[64];
+const {defaultIdentifierType}=__modules[59];
+const {DebugInspector}=__modules[65];
+const {planLiveEdit,nextStatementIndex}=__modules[67];
+const {encodeVariable,decodeVariable,makeRecord}=__modules[26];
+const { Signal, lower, VERSION }=__modules[15];
+const { VBError }=__modules[12];
+const { parseExpression, parseCall }=__modules[61];
+const { compileProject }=__modules[63];
+const { NOTHING, MISSING, objectIdentity, objectSupports, VBErrorValue, LazyCell, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, cloneValue, coerce, defaultValue, numeric, truth, vbString, unary, binary, describe }=__modules[16];
+const { VirtualFileSystem }=__modules[27];
+const { createLibrary, MemoryRecordset }=__modules[43];
 
 
 
@@ -6369,20 +6519,20 @@ return {VBInstance,VirtualMachine};
 })();
 
 /* host.js */
-__modules[68]=(()=>{
-const {retainRenderer}=__modules[8];
-const {RuntimeAgentControl}=__modules[54];
-const {RuntimeMDI}=__modules[55];
-const {runtimeDialog,messageBoxOptions}=__modules[56];
-const { applyTheme, themeId }=__modules[29];
-const { icon }=__modules[48];
-const {rasterDataURL}=__modules[34];
-const { el, download, lower, clone }=__modules[14];
-const { compileProject }=__modules[62];
-const { VirtualMachine }=__modules[67];
-const { VirtualFileSystem }=__modules[26];
-const { describe }=__modules[15];
-const { BrowserForm }=__modules[53];
+__modules[69]=(()=>{
+const {retainRenderer}=__modules[9];
+const {RuntimeAgentControl}=__modules[55];
+const {RuntimeMDI}=__modules[56];
+const {runtimeDialog,messageBoxOptions}=__modules[57];
+const { applyTheme, themeId }=__modules[30];
+const { icon }=__modules[49];
+const {rasterDataURL}=__modules[35];
+const { el, download, lower, clone }=__modules[15];
+const { compileProject }=__modules[63];
+const { VirtualMachine }=__modules[68];
+const { VirtualFileSystem }=__modules[27];
+const { describe }=__modules[16];
+const { BrowserForm }=__modules[54];
 
 
 
@@ -6436,29 +6586,29 @@ return {ApplicationHost};
 })();
 
 /* entry.js */
-__modules[69]=(()=>{
-const {UIRenderer, retainRenderer, rendererForDocument}=__modules[8];
+__modules[70]=(()=>{
+const {UIRenderer, retainRenderer, rendererForDocument}=__modules[9];
 const {normalizeRendering, DEFAULT_RENDERING}=__modules[0];
-const {DataContext}=__modules[27];
-const {ADOConnection,ADOCommand}=__modules[24];
-const {ConnectedRecordset}=__modules[23];
-const {DATA_CONSTANTS}=__modules[16];
-const {FINANCIAL_FUNCTIONS}=__modules[28];
-const {installNativeHost}=__modules[31];
-const {ResourceStore}=__modules[36];
-const {readRES,writeRES,setResource,setResourceString}=__modules[35];
-const {THEMES,applyTheme,colorValue}=__modules[29];
-const {MemoryRecordset}=__modules[42];
-const {RichTextDocument,parseRTF,writeRTF}=__modules[43];
-const { ApplicationHost }=__modules[68];
-const { VirtualMachine }=__modules[67];
-const { compileProject, compileModule }=__modules[62];
-const { parseExpression }=__modules[60];
-const { NOTHING, MISSING, VBErrorValue, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency,VBDecimal }=__modules[15];
-const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,dateToSerial,serialToDate}=__modules[10];
-const { VirtualFileSystem }=__modules[26];
-const { BrowserControl, BrowserForm }=__modules[53];
-const { GraphicsSurface }=__modules[30];
+const {DataContext}=__modules[28];
+const {ADOConnection,ADOCommand}=__modules[25];
+const {ConnectedRecordset}=__modules[24];
+const {DATA_CONSTANTS}=__modules[17];
+const {FINANCIAL_FUNCTIONS}=__modules[29];
+const {installNativeHost}=__modules[32];
+const {ResourceStore}=__modules[37];
+const {readRES,writeRES,setResource,setResourceString}=__modules[36];
+const {THEMES,applyTheme,colorValue}=__modules[30];
+const {MemoryRecordset}=__modules[43];
+const {RichTextDocument,parseRTF,writeRTF}=__modules[44];
+const { ApplicationHost }=__modules[69];
+const { VirtualMachine }=__modules[68];
+const { compileProject, compileModule }=__modules[63];
+const { parseExpression }=__modules[61];
+const { NOTHING, MISSING, VBErrorValue, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency,VBDecimal }=__modules[16];
+const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,dateToSerial,serialToDate}=__modules[11];
+const { VirtualFileSystem }=__modules[27];
+const { BrowserControl, BrowserForm }=__modules[54];
+const { GraphicsSurface }=__modules[31];
 
 
 
@@ -6486,5 +6636,5 @@ const RuntimeAPI={UIRenderer,retainRenderer,rendererForDocument,normalizeRenderi
 
 return {mountApplication,RuntimeAPI};
 })();
-globalThis["VB6Runtime"]=__modules[69];
+globalThis["VB6Runtime"]=__modules[70];
 })();

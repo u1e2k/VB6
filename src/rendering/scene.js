@@ -2,11 +2,13 @@ import {intersect, snapRect} from './policy.js';
 /** A retained paint list. Commands are in CSS pixels, colors are unpremultiplied sRGB. */
 export class PaintScene {
   constructor(width, height, {dpr = 1, pixelSnap = true, maxCommands = 100000} = {}) {
+    this.sealed = false;
     this.width = width; this.height = height; this.dpr = dpr; this.pixelSnap = pixelSnap;
     this.clip = [0, 0, width, height]; this.commands = []; this.maxCommands = maxCommands;
     this.stats = {elements: 0, nativeIslands: 0, nativeText: 0, gpuText: 0, reasons: {}};
   }
   add(rect, color, {clip = this.clip, color2 = color, vertical = false, page = null, uv = [0, 0, 1, 1], hole = false, snap = true} = {}) {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     if (!rect.every(Number.isFinite) || rect[2] <= 0 || rect[3] <= 0) return;
     rect = this.pixelSnap && snap ? snapRect(rect, this.dpr) : rect;
     clip = intersect(clip, this.clip);
@@ -15,7 +17,22 @@ export class PaintScene {
     if (this.commands.length >= this.maxCommands) throw new RangeError('UI paint command budget exceeded.');
     this.commands.push({rect, clip, color, color2, vertical, page, uv, hole});
   }
+  /** Opt-in immutable geometry for static/repeated GPU draws. Atlas pages remain
+   * revisioned resources, so updating their pixels still triggers an upload. */
+  seal() {
+    if (this.sealed) return this;
+    this.commands = Object.freeze(this.commands.map(command => {
+      const color = Object.freeze(Array.from(command.color));
+      return Object.freeze({...command, rect: Object.freeze(Array.from(command.rect)),
+        clip: Object.freeze(Array.from(command.clip)), color,
+        color2: command.color === command.color2 ? color : Object.freeze(Array.from(command.color2)),
+        uv: Object.freeze(Array.from(command.uv))});
+    }));
+    this.clip = Object.freeze(Array.from(this.clip)); this.sealed = true;
+    return Object.freeze(this);
+  }
   native(rect, clip, reason = 'native') {
+    if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     this.stats.nativeIslands++;
     this.stats.reasons[reason] = (this.stats.reasons[reason] || 0) + 1;
     const outward = r => { const x = Math.floor(r[0] * this.dpr) / this.dpr, y = Math.floor(r[1] * this.dpr) / this.dpr; return [x, y, Math.ceil((r[0] + r[2]) * this.dpr) / this.dpr - x, Math.ceil((r[1] + r[3]) * this.dpr) / this.dpr - y]; };
