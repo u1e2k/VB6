@@ -1,0 +1,26 @@
+name: Rendering final integration snapshot
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-final-review.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture exact histories and current sources
+        run: |
+          git bundle create /tmp/rendering-final.bundle HEAD refs/remotes/origin/main
+          git rev-parse HEAD origin/main > /tmp/rendering-refs.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-final-integration-source
+          path: |
+            /tmp/rendering-final.bundle
+            /tmp/rendering-refs.txt
+          retention-days: 3
