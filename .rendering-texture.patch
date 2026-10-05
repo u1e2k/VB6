@@ -1,0 +1,95 @@
+diff --git a/src/rendering/webgl2.js b/src/rendering/webgl2.js
+index 2b6e547..49a651c 100644
+--- a/src/rendering/webgl2.js
++++ b/src/rendering/webgl2.js
+@@ -49,9 +49,9 @@ export class WebGLPainter {
+     if (!page) return this.white;
+     const gl = this.gl; let record = this.textures.get(page);
+     if (!record) { record = {texture: this.texture(), revision: -1}; this.textures.set(page, record); }
+-    if (record.revision !== page.revision || record.width !== page.width || record.height !== page.height) {
++    if (record.revision !== page.revision || record.source !== page.canvas || record.width !== page.width || record.height !== page.height) {
+       gl.bindTexture(gl.TEXTURE_2D, record.texture); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
++      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, page.canvas); record.revision = page.revision; record.source = page.canvas; record.width = page.width; record.height = page.height; this.stats.uploadedBytes += page.width * page.height * 4;
+     }
+     return record.texture;
+   }
+diff --git a/src/rendering/webgpu.js b/src/rendering/webgpu.js
+index bbbb742..4659254 100644
+--- a/src/rendering/webgpu.js
++++ b/src/rendering/webgpu.js
+@@ -90,9 +90,9 @@ export class WebGPUPainter {
+       const texture = this.device.createTexture({size: [page.width, page.height], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST | T.RENDER_ATTACHMENT});
+       record = {texture, width: page.width, height: page.height, revision: -1, group: this.device.createBindGroup({layout: this.imageLayout, entries: [{binding: 0, resource: texture.createView()}]})}; this.textures.set(page, record);
+     }
+-    if (record.revision !== page.revision) {
++    if (record.revision !== page.revision || record.source !== page.canvas) {
+       this.device.queue.copyExternalImageToTexture({source: page.canvas}, {texture: record.texture, premultipliedAlpha: false}, [page.width, page.height]);
+-      record.revision = page.revision; this.stats.uploadedBytes += page.width * page.height * 4;
++      record.revision = page.revision; record.source = page.canvas; this.stats.uploadedBytes += page.width * page.height * 4;
+     }
+     return record.group;
+   }
+diff --git a/tests/rendering-live.test.mjs b/tests/rendering-live.test.mjs
+index 05b88d7..7d45ad4 100644
+--- a/tests/rendering-live.test.mjs
++++ b/tests/rendering-live.test.mjs
+@@ -58,3 +58,20 @@ test('classic mnemonic continuity is explicit and does not change general prose
+   assert.doesNotMatch(css,/(?:^|\n)u\s*\{/);
+   assert.match(css,/https:\/\/drafts\.csswg\.org\/css-text-decor-4\//);
+ });
++
++for (const backend of ['webgpu','webgl2']) test(`${backend} reuploads a replaced canvas even when dimensions and revision are unchanged`, async()=>{
++  let uploads=0;const source={},page={canvas:source,width:2,height:2,revision:1};let painter;
++  if(backend==='webgpu'){
++    const {WebGPUPainter}=await import('../src/rendering/webgpu.js');
++    painter=Object.create(WebGPUPainter.prototype);
++    Object.assign(painter,{textures:new Map(),stats:{uploadedBytes:0},view:{GPUTextureUsage:{TEXTURE_BINDING:1,COPY_DST:2,RENDER_ATTACHMENT:4}},device:{createTexture:()=>({createView:()=>({}),destroy(){}}),createBindGroup:()=>({}),queue:{copyExternalImageToTexture(){uploads++;}}}});
++  }else{
++    const {WebGLPainter}=await import('../src/rendering/webgl2.js');
++    painter=Object.create(WebGLPainter.prototype);
++    Object.assign(painter,{textures:new Map(),stats:{uploadedBytes:0},texture:()=>({}),gl:{bindTexture(){},pixelStorei(){},texImage2D(){uploads++;}}});
++  }
++  const resource=painter.image(page);painter.image(page);assert.equal(uploads,1);
++  page.canvas={};assert.equal(painter.image(page),resource);assert.equal(uploads,2);
++  painter.image(page);assert.equal(uploads,2);
++  page.revision++;painter.image(page);assert.equal(uploads,3);assert.equal(painter.stats.uploadedBytes,48);
++});
+diff --git a/tools/browser-rendering-tests.py b/tools/browser-rendering-tests.py
+index cf7d60f..7a3bcc8 100644
+--- a/tools/browser-rendering-tests.py
++++ b/tools/browser-rendering-tests.py
+@@ -297,6 +297,33 @@ with sync_playwright() as playwright:
+         check(not page.errors,str(page.errors));page.close();return result
+     case('retained live UI, CSSOM resize, animation completion and idle cleanup', live_invalidation)
+ 
++    def replacement_texture():
++        page = new_page(browser)
++        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
++        result = page.evaluate('''async backend=>{
++          const canvas=document.createElement('canvas');document.body.append(canvas);
++          const painter=await VB6Rendering.createPainter(backend,canvas);
++          const make=color=>{const c=document.createElement('canvas');c.width=c.height=2;const ctx=c.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,2,2);return c};
++          const page={canvas:make('#ff0000'),width:2,height:2,revision:1};
++          const scene=new VB6Rendering.PaintScene(32,32);scene.add([0,0,32,32],[1,1,1,1],{page});scene.seal();
++          const read=async()=>{
++            if(painter.device)return (await painter.render(scene,{readback:true})).data;
++            painter.render(scene);const gl=painter.gl;
++            if(gl){const data=new Uint8Array(32*32*4);gl.readPixels(0,0,32,32,gl.RGBA,gl.UNSIGNED_BYTE,data);return data;}
++            return painter.context.getImageData(0,0,32,32).data;
++          };
++          const exact=(data,color)=>{for(let i=0;i<data.length;i++)if(data[i]!==color[i%4])return false;return data.length===32*32*4};
++          try{
++            const red=exact(await read(),[255,0,0,255]);page.canvas=make('#00ff00');
++            const green=exact(await read(),[0,255,0,255]);
++            return {backend:painter.name,red,green,instanceUploads:painter.stats.instanceUploads};
++          }finally{painter.dispose();canvas.remove();}
++        }''',backend)
++        check(result['backend']==backend and result['red'] and result['green'],str(result))
++        if backend!='canvas2d': check(result['instanceUploads']==1,'Texture replacement unnecessarily uploaded sealed geometry: '+str(result))
++        check(not page.errors,str(page.errors));page.close();return result
++    case('replaced texture source has exact new pixels without geometry upload',replacement_texture)
++
+     def benchmark():
+         page=new_page(browser,ide=True)
+         if REQUIRED: page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',REQUIRED[0])
