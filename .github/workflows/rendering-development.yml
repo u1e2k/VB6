@@ -35,15 +35,17 @@ jobs:
           assert hashlib.sha256(patch).hexdigest() == '482e6628bda8d3afb548d28649ddd0837071d73afee818bca3b8ed387e8baa21'
           Path('/tmp/rendering-source.patch').write_bytes(patch)
           PY
-          git apply --check /tmp/rendering-source.patch
-          git apply /tmp/rendering-source.patch
+          # Workflow files are already installed through the repository connector.
+          # The Actions token intentionally does not modify workflow definitions.
+          git apply --check --exclude=.github/workflows/rendering.yml /tmp/rendering-source.patch
+          git apply --exclude=.github/workflows/rendering.yml /tmp/rendering-source.patch
       - name: Rebuild combined distributions and run the full Node regression suite
         run: npm run build && npm test
       - name: Commit normal source and generated artifacts to the feature branch
         shell: bash
         run: |
-          git rm -r .rendering-transfer .github/workflows/rendering-development.yml
-          git add .github/workflows/rendering.yml .gitignore package.json src/rendering src/ide/ide-tools.js src/mcp/studio-entry.js src/runtime/entry.js src/runtime/host.js src/exporter/runtime-payload.js tools/build.mjs tests/rendering-policy.test.mjs tools/browser-rendering-tests.py docs/RENDERING.md dist examples
+          git rm -r .rendering-transfer
+          git add .gitignore package.json src/rendering src/ide/ide-tools.js src/mcp/studio-entry.js src/runtime/entry.js src/runtime/host.js src/exporter/runtime-payload.js tools/build.mjs tests/rendering-policy.test.mjs tools/browser-rendering-tests.py docs/RENDERING.md dist examples
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'feat(rendering): add WebGPU-first hybrid UI renderer, configurable fallbacks and validation'
