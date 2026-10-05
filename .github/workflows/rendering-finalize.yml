@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   source:
-    runs-on: ubuntu-24.04-arm
+    runs-on: macos-14
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Merge pinned main and apply checksum-verified source changes
         run: |
           git config user.name 'github-actions[bot]'
@@ -48,6 +51,14 @@ jobs:
           git apply --unidiff-zero /tmp/rendering-recovered.patch
           git apply --check /tmp/rendering-enhancements.patch
           git apply /tmp/rendering-enhancements.patch
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/browser-tests.py');s=p.read_text()
+          old='        stop_ide(page);check(len(page.frames)==1)'
+          assert s.count(old)==1
+          s=s.replace(old,"        # DOM removal precedes Playwright's asynchronous frame-detached event.\n        # Await that event rather than racing its protocol-side frame registry.\n        with page.expect_event('framedetached', predicate=lambda detached: detached == frame):\n            stop_ide(page)\n        check(len(page.frames)==1)")
+          p.write_text(s)
+          PY
           npm run build && npm test
       - name: Commit ordinary source and regenerate all derived outputs
         run: |
