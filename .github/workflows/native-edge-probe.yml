@@ -1,0 +1,30 @@
+name: Native mnemonic boundary investigation
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [tools/native-edge-probe.py, .github/workflows/native-edge-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: python -m pip install playwright==1.57.0 Pillow
+      - run: python -m playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - run: xvfb-run -a python tools/native-edge-probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-edge-investigation
+          path: reports/native-edge-probe
+          retention-days: 7
