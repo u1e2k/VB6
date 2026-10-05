@@ -650,3 +650,11 @@
    box-shadow:none!important;text-shadow:none!important;
  }
 }
+
+/* Mnemonic marks are continuous classic UI underlines, not prose decoration.
+   Disable glyph-avoidance segmentation for these marks in BOTH backends. Keep
+   browser shaping, font metrics, selection and the native glyphs unchanged.
+   Property semantics: https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property
+   Original rule; independent of the attributed 98.css bevel technique above. */
+.menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,
+.vb-option u,.vb-frame-legend u,.vb-form-title u { text-decoration-skip-ink:none; }

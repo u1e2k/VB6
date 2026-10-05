@@ -24,6 +24,7 @@ export class DOMScene {
   build(policy) {
     const view = this.view, width = view.innerWidth, height = view.innerHeight;
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
+    this.elements = new Set();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
     let background;
     try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
@@ -85,6 +86,7 @@ export class DOMScene {
     if (SKIP.has(node.tagName.toUpperCase()) || node.hasAttribute('data-vb-render-layer')) return;
     const style = this.style(node);
     if (style.display === 'none' || node.hidden) return;
+    this.elements.add(node);
     // visibility may be overridden by a descendant, so do not drop the subtree.
     const visible = style.visibility === 'visible', rect = rectOf(node.getBoundingClientRect());
     const area = intersect(rect, clip), inView = area[2] > 0 && area[3] > 0;

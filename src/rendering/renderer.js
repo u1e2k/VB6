@@ -4,6 +4,7 @@ import {WebGPUPainter} from './webgpu.js';
 import {WebGLPainter} from './webgl2.js';
 import {TextAtlas} from './atlas.js';
 import {DOMScene} from './dom-scene.js';
+import {RetainedScene} from './retained-scene.js';
 const sessions = new WeakMap();
 export async function createPainter(name, canvas, options = {}) {
   if (name === 'webgpu') return WebGPUPainter.create(canvas, options);
@@ -20,13 +21,15 @@ export class UIRenderer {
     this.document = document; this.view = document.defaultView; this.factory = factory; this.generation = 0; this.disposed = false;
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
+    this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
   }
   listen(target, type, listener, options) { target?.addEventListener(type, listener, options); this.listeners.push(() => target?.removeEventListener(type, listener, options)); }
   observe() {
     const invalidate = event => {
       if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
-      if (event?.type === 'vb-theme-change' || event?.type === 'resize') this.stylesDirty = true;
+      if (event?.type === 'vb-theme-change' || event?.type === 'resize' || /^(animation|transition)/.test(event?.type || '')) this.stylesDirty = true;
       else if (event?.target?.nodeType === 1 && /^(focus|pointer)/.test(event.type)) {
         this.stylesDirty = true;
       }
@@ -47,6 +50,14 @@ export class UIRenderer {
     // Connected only while a canvas backend is active; native HTML incurs no
     // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
     for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keyup', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    // ResizeObserver catches layout changes which have no DOM mutation (for
+    // example intrinsic image sizing or a container resized by a stylesheet).
+    // Source: https://www.w3.org/TR/resize-observer/
+    this.resizeObserver = typeof this.view.ResizeObserver === 'function' ? new this.view.ResizeObserver(() => {
+      if (!this.driver) return;
+      this.stylesDirty = true; this.invalidate();
+    }) : null;
+    for (const event of ['animationstart','animationiteration','animationend','animationcancel','transitionrun','transitionstart','transitionend','transitioncancel']) this.listen(this.document, event, invalidate, true);
     this.listen(this.document, 'scroll', invalidate, true);
     this.listen(this.view, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'resize', invalidate);
@@ -63,7 +74,7 @@ export class UIRenderer {
   armDPR() {
     this.dprCleanup?.();
     const query = this.view.matchMedia(`(resolution: ${this.view.devicePixelRatio || 1}dppx)`);
-    const changed = () => { this.atlas.reset(); this.armDPR(); this.invalidate(); };
+    const changed = () => { this.atlas.reset(); this.stylesDirty = true; this.armDPR(); this.invalidate(); };
     query.addEventListener('change', changed); this.dprCleanup = () => query.removeEventListener('change', changed);
   }
   canvasForBackend() {
@@ -105,7 +116,8 @@ export class UIRenderer {
         if (this.disposed || generation !== this.generation) return this.getStats();
         // The first frame can fail after observe() connected. HTML fallback
         // must not retain an observer (or a queued frame) from the failed driver.
-        this.cancelFrame(); this.observer.disconnect();
+        this.cancelFrame(); this.observer.disconnect(); this.resizeObserver?.disconnect();
+        this.observedElements.clear(); this.retained.clear();
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
       }
@@ -124,21 +136,39 @@ export class UIRenderer {
     if (this.frame) return;
     this.frame = this.view.requestAnimationFrame(() => { this.frame = 0; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
-  renderNow() {
+  syncResizeTargets() {
+    if (!this.resizeObserver) return;
+    const next = this.adapter.elements || new Set([this.document.body]);
+    for (const node of this.observedElements) if (!next.has(node)) this.resizeObserver.unobserve(node);
+    for (const node of next) if (!this.observedElements.has(node)) this.resizeObserver.observe(node);
+    this.observedElements = next;
+  }
+  renderNow({force = false} = {}) {
     if (this.disposed || !this.driver || this.printing) return;
     this.cancelFrame();
-    // Batch cache invalidation with painting, rather than repeatedly walking
-    // overlapping mutated subtrees from a MutationObserver callback.
-    // Source: https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing
     const start = this.view.performance.now();
-    if (this.stylesDirty) { this.adapter.invalidateStyles(); this.stylesDirty = false; }
-    const scene = this.sceneFactory(this.policy), built = this.view.performance.now();
-    this.driver.render(scene);
+    // Sample active CSS/Web Animations on demand; once they finish or pause,
+    // no perpetual RAF loop remains. Animation events invalidate the first frame.
+    // Source: https://www.w3.org/TR/web-animations-1/#dom-document-getanimations
+    const animations = this.document.getAnimations?.() || [];
+    const animating = animations.some(a => (a.playState === 'running' || a.pending) && !a.effect?.target?.closest?.('[data-vb-render-layer]'));
+    if (this.stylesDirty || this.animating || animating) { this.adapter.invalidateStyles(); this.stylesDirty = false; }
+    this.animating = animating;
+    const scene = this.sceneFactory(this.policy);
+    const plan = this.retained.update(scene);
+    this.syncResizeTargets();
+    const built = this.view.performance.now();
+    const resized = this.canvas.width !== Math.round(scene.width * scene.dpr) || this.canvas.height !== Math.round(scene.height * scene.dpr);
+    const painted = force || resized || plan.changed;
+    if (painted) { this.driver.render(plan.scene); this.metrics.frames++; }
+    else this.metrics.unchangedFrames++;
     const submitted = this.view.performance.now();
-    this.canvas.style.visibility = 'visible'; this.metrics.frames++;
+    this.metrics.sceneBuilds++;
+    if (this.canvas.style.visibility !== 'visible') this.canvas.style.visibility = 'visible';
     this.metrics.builds.push(built - start); this.metrics.submissions.push(submitted - built);
     if (this.metrics.builds.length > 120) { this.metrics.builds.shift(); this.metrics.submissions.shift(); }
-    this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
+    this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, submitted: painted, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
+    if (animating) this.invalidate();
   }
   cancelFrame() { if (this.frame) this.view.cancelAnimationFrame(this.frame); this.frame = 0; }
   publish() {
@@ -147,9 +177,9 @@ export class UIRenderer {
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
     return {requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
-      frames: this.metrics.frames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+      frames: this.metrics.frames, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.observer?.disconnect(); this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();

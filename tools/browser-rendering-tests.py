@@ -264,10 +264,43 @@ with sync_playwright() as playwright:
             check(not page.errors,str(page.errors));page.close();return comparisons
         case(f'HTML-vs-renderer visual evidence at DPR {dpr}',ide_visual)
 
+    def live_invalidation():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        result = page.evaluate('''async backend=>{
+          document.body.innerHTML='<style id="s">#sample{position:absolute;left:20px;top:20px;width:40px;height:40px;background:rgb(255,0,0)}</style><div id="sample"></div>';
+          const r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
+          if(r.backend!==backend)throw Error(JSON.stringify(r.getStats()));
+          const settle=()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));
+          await settle();const before=r.metrics.frames,driverFrames=r.driver.stats.frames;
+          const snapshot=r.retained.scene;
+          for(let i=0;i<100;i++)r.renderNow();
+          const stable={frames:r.metrics.frames-before,driverFrames:r.driver.stats.frames-driverFrames,identity:r.retained.scene===snapshot,skips:r.metrics.unchangedFrames};
+          r.renderNow({force:true});const forced=r.metrics.frames-before;
+          // CSSOM writes do not emit MutationObserver records. Inner-element
+          // ResizeObserver tracking must catch this change without manual invalidation.
+          document.querySelector('#s').sheet.cssRules[0].style.width='80px';
+          await new Promise(done=>setTimeout(done,100));await settle();
+          const resized=r.retained.scene.commands.some(c=>!c.hole&&c.color[0]===1&&c.rect[0]===20&&c.rect[2]===80);
+          const rules=document.createElement('style');rules.textContent='@keyframes rendererProbe{from{background-color:rgb(255,0,0)}to{background-color:rgb(0,0,255)}}';document.head.append(rules);
+          document.querySelector('#sample').style.animation='rendererProbe .16s linear forwards';
+          await new Promise(done=>setTimeout(done,350));await settle();
+          const animated=r.retained.scene.commands.some(c=>!c.hole&&c.rect[0]===20&&c.color[2]===1&&c.color[0]===0);
+          const idleStart=r.metrics.frames;await new Promise(done=>setTimeout(done,100));const idleFrames=r.metrics.frames-idleStart;
+          const targets=r.observedElements.size;
+          await r.setOptions({backend:'html'});const clean=r.observedElements.size===0&&r.retained.scene===null;
+          r.dispose();return {stable,forced,resized,animated,idleFrames,targets,clean};
+        }''', backend)
+        check(result['stable']['frames']==0 and result['stable']['driverFrames']==0 and result['stable']['identity'],str(result))
+        check(result['forced']==1 and result['resized'] and result['animated'],str(result))
+        check(result['idleFrames']==0 and result['targets']>0 and result['clean'],str(result))
+        check(not page.errors,str(page.errors));page.close();return result
+    case('retained live UI, CSSOM resize, animation completion and idle cleanup', live_invalidation)
+
     def benchmark():
         page=new_page(browser,ide=True)
         if REQUIRED: page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"]})',REQUIRED[0])
-        stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow();return r.getStats()}''')
+        stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow({force:true});return r.getStats()}''')
         METRICS['ideForcedRebuildCpu']=stats
         # Complete this workload before initializing a second renderer; otherwise
         # its bounded startup readback sits behind 50 queued full-IDE submissions.
