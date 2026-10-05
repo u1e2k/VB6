@@ -741,13 +741,13 @@ struct Output {
 @vertex fn vs(@builtin(vertex_index) vertex: u32,
  @location(0) rect: vec4f, @location(1) clip: vec4f,
  @location(2) color: vec4f, @location(3) color2: vec4f,
- @location(4) uv: vec4f, @location(5) meta: vec4f) -> Output {
+ @location(4) uv: vec4f, @location(5) paintFlags: vec4f) -> Output {
  let corners = array<vec2f, 6>(vec2f(0,0),vec2f(1,0),vec2f(0,1),vec2f(0,1),vec2f(1,0),vec2f(1,1));
  let p = corners[vertex]; let xy = rect.xy + p * rect.zw;
  var out: Output;
  out.position = vec4f(xy.x / screen.size.x * 2.0 - 1.0, 1.0 - xy.y / screen.size.y * 2.0, 0.0, 1.0);
- out.uv = uv.xy + p * uv.zw; out.clip = clip; out.mode = meta.x;
- out.color = mix(color, color2, select(p.x, p.y, meta.y > 0.5));
+ out.uv = uv.xy + p * uv.zw; out.clip = clip; out.mode = paintFlags.x;
+ out.color = mix(color, color2, select(p.x, p.y, paintFlags.y > 0.5));
  return out;
 }
 @fragment fn fs(input: Output) -> @location(0) vec4f {

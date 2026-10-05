@@ -34,20 +34,25 @@ def check(ok, message):
 
 def case(name, fn):
     start = time.perf_counter()
+    existing_contexts = set(browser.contexts)
     try:
         details = fn()
         RESULTS.append({'name': name, 'passed': True, 'details': details, 'ms': round((time.perf_counter()-start)*1000, 2)})
-        print('PASS', name, flush=True)
+        print('SKIP' if isinstance(details, dict) and details.get('skipped') else 'PASS', name, flush=True)
     except Exception as e:
         RESULTS.append({'name': name, 'passed': False, 'error': str(e)})
         traceback.print_exc(limit=3)
         print('FAIL', name, str(e), flush=True)
+    finally:
+        # A failed assertion must not exhaust the browser's context/GPU budget.
+        for context in browser.contexts:
+            if context not in existing_contexts: context.close()
 
 def new_page(browser, dpr=1, ide=False):
     page = browser.new_page(viewport={'width': 1280, 'height': 800}, device_scale_factor=dpr)
     page.errors = []
     page.on('pageerror', lambda error: page.errors.append(str(error)))
-    if URL: page.goto(URL + ('dist/VB6-Studio-Web.html' if ide else 'LICENSE'))
+    if URL: page.goto(URL + ('dist/VB6-Studio-Web.html' if ide else ''))
     if ide:
         if not URL: page.set_content(IDE)
         page.wait_for_function('window.vb6Studio?.rendering')
@@ -74,6 +79,7 @@ with sync_playwright() as playwright:
     def backend_execution():
         page = new_page(browser)
         outcome = page.evaluate('''async()=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c);const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,adapter:p.adapterInfo||null};}catch(e){result[backend]={available:false,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''')
+        METRICS['backends'] = outcome
         check(outcome['canvas2d']['available'], 'Canvas2D missing')
         if args.require_webgpu:
             check(outcome['webgpu']['available'], 'REAL WebGPU required, no fallback accepted: ' + str(outcome))
@@ -102,6 +108,8 @@ with sync_playwright() as playwright:
                 images[backend] = page.locator('canvas.fixture').screenshot()
                 (OUT / f'primitives-{backend}-{dpr}.png').write_bytes(images[backend])
                 check(info[backend]['width'] == round(256*dpr), 'DPR was capped or ignored')
+            check('canvas2d' in images, 'Reference backend did not execute')
+            if args.require_webgpu: check('webgpu' in images and 'webgl2' in images, 'Required GPU backend did not execute')
             comparisons = {backend: pixels(images['canvas2d'], image) for backend, image in images.items() if backend != 'canvas2d'}
             for backend, comparison in comparisons.items():
                 check(comparison['changedPixels'] == 0, f'{backend} solid/clip/texture pixel mismatch at DPR {dpr}: {comparison}')
@@ -111,7 +119,7 @@ with sync_playwright() as playwright:
     def ide_workflow():
         page = new_page(browser, ide=True); renderer = 'vb6Studio.rendering'
         check(page.evaluate(renderer+'.policy.backend') == 'webgpu', 'WebGPU is not default')
-        if args.require_webgpu: check(page.evaluate(renderer+'.backend') == 'webgpu', 'IDE silently fell back')
+        if args.require_webgpu: check(page.evaluate(renderer+'.backend') == 'webgpu', 'IDE fallback: ' + json.dumps(page.evaluate(renderer+'.getStats()')))
         page.evaluate('vb6Studio.optionsDialog();undefined');page.get_by_role('tab', name='Rendering', exact=True).click()
         page.get_by_label('UI rendering backend').select_option('html');page.get_by_role('button', name='Cancel', exact=True).click()
         check(page.evaluate(renderer+'.policy.backend') == 'webgpu', 'Cancel changed policy')
@@ -175,7 +183,10 @@ with sync_playwright() as playwright:
                 # This is a regression guard, not a claim of pixel-perfect parity.
                 check(comparison['fraction']<.01,'More than 1% of IDE pixels differ: '+str(comparison))
                 check(comparison['meanChannelError']<.5,'IDE mean error exceeds guard: '+str(comparison))
-            check(not page.errors,str(page.errors));page.close();return [v for v in VISUAL if v['dpr']==dpr]
+            comparisons = [v for v in VISUAL if v['dpr']==dpr]
+            check(bool(comparisons), 'No visual backends executed')
+            if args.require_webgpu: check(any(v['backend']=='webgpu' for v in comparisons), 'GPU visual comparison did not execute')
+            check(not page.errors,str(page.errors));page.close();return comparisons
         case(f'HTML-vs-renderer visual evidence at DPR {dpr}',ide_visual)
 
     def benchmark():
@@ -183,7 +194,8 @@ with sync_playwright() as playwright:
         stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow();return r.getStats()}''')
         METRICS['ideForcedRebuildCpu']=stats
         # A reusable library workload: all opaque quads must batch to one draw.
-        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c)}catch{p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t)}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
+        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c)}catch{c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t)}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
+        if args.require_webgpu: check(batch['backend']=='webgpu', 'Batch workload silently fell back: '+str(batch))
         if batch['backend']=='webgpu':
             check(batch['stats']['drawCalls']==1,'Opaque quads were not batched')
             check(batch['stats']['bufferAllocations']==1,'Buffer was reallocated every frame')
