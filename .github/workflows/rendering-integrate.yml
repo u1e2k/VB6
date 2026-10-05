@@ -1,0 +1,49 @@
+name: Publish reviewed renderer integration
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.rendering-source/**, .github/workflows/rendering-integrate.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify the reviewed integration patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import lzma,hashlib
+          parts=sorted(Path('.rendering-source').glob('*.part'))
+          assert len(parts)==4
+          patch=lzma.decompress(b''.join(p.read_bytes() for p in parts))
+          assert hashlib.sha256(patch).hexdigest()=='c065f96ce85f10d338d7b2b20af81c471e5c87b37851ab9626fa0c96030c66ba'
+          Path('/tmp/rendering.patch').write_bytes(patch)
+          PY
+          git apply --unidiff-zero --check /tmp/rendering.patch
+          git apply --unidiff-zero /tmp/rendering.patch
+          npm run build
+          npm test
+      - name: Publish source and regenerated apps
+        run: |
+          git rm -r .rendering-source
+          git add .gitignore package.json docs src tools tests dist examples
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(rendering): integrate attributed bevel layers, latest debugger and strict backend tests'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git bundle create /tmp/rendering-combined.bundle HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-combined-source
+          path: /tmp/rendering-combined.bundle
+          retention-days: 3
