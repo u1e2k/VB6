@@ -30,8 +30,7 @@ jobs:
       - run: python -m pip install playwright==1.57.0 Pillow
       - run: python -m playwright install --with-deps chromium
       - name: Install software Vulkan presentation dependencies
-        # First-party investigation: https://github.com/vercel-labs/vgpu/issues/109
-        # These are software-GPU correctness jobs, never hardware qualification.
+        # This matrix proves software-GPU correctness, not hardware performance.
         run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
       - name: Resolve test browser
         run: |
@@ -45,16 +44,14 @@ jobs:
           DISPLAY_MODE: ${{ matrix.display }}
           REQUIRED_BACKEND: ${{ matrix.backend }}
         run: |
-          # Coherent Vulkan presentation can disable WebGL2 in Chromium. Test
-          # each API with its own driver configuration, never as a fallback pass.
-          if [ "$REQUIRED_BACKEND" = webgpu ]; then
-            export RENDERING_BROWSER_FLAGS='--enable-features=Vulkan --use-angle=vulkan --use-webgpu-adapter=swiftshader --disable-vulkan-surface'
-          fi
-          if [ "$DISPLAY_MODE" = headed ]; then
-            xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu --headed
-          else
-            python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu
-          fi
+          # Source: Chris Gervang, https://github.com/visgl/luma.gl/issues/2874
+          # Headless Chromium needs BOTH --enable-gpu and an X display for the
+          # WebGPU canvas to reach the compositor. Retain ANGLE SwiftShader for
+          # WebGL; readback alone cannot prove that the displayed pixels match.
+          export RENDERING_BROWSER_FLAGS='--enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist'
+          args=()
+          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
       - name: Verify reproducible generated distributions
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
