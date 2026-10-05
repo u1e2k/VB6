@@ -1,0 +1,46 @@
+name: Reconcile HTML with form input update
+on:
+  push:
+    branches: [fix/classic-bevels-and-list-reuse]
+    paths: [.github/workflows/classic-html-sync.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge reviewed input changes and regenerate derived outputs
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 56e392b8d60ab524c66e3f01d87f631179ee9513 || true
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          for path in conflicts:
+              if path.startswith(('dist/','examples/')) or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js']:
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+                  subprocess.run(['git','add','--',path],check=True)
+              else:
+                  raise RuntimeError('Unreviewed source conflict: '+path)
+          assert Path('.git/MERGE_HEAD').exists()
+          PY
+          npm run build && npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git commit -m 'merge: preserve form input improvements and regenerate classic HTML apps'
+          git push origin HEAD:refs/heads/fix/classic-bevels-and-list-reuse
+          git bundle create /tmp/classic-html-final.bundle HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: classic-html-final-source
+          path: /tmp/classic-html-final.bundle
+          retention-days: 3
