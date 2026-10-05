@@ -18,8 +18,10 @@ export const NONVISUAL_TYPES=new Set(['Timer','ImageList','CommonDialog']);
 export const DEFAULT_EVENTS={Form:'Load',MDIForm:'Load',CommandButton:'Click',TextBox:'Change',RichTextBox:'Change',ListBox:'Click',ComboBox:'Click',Timer:'Timer',HScrollBar:'Change',VScrollBar:'Change',TreeView:'NodeClick',ListView:'ItemClick',ProgressBar:'MouseDown',Slider:'Change',Toolbar:'ButtonClick',TabStrip:'Click',DTPicker:'Change',MonthView:'DateClick',MSFlexGrid:'Click',PictureBox:'Click'};
 export const CONTROL_EVENTS=['Click','DblClick','MouseDown','MouseMove','MouseUp','KeyDown','KeyPress','KeyUp','GotFocus','LostFocus'];
 const stripMnemonic=text=>String(text??'').replace(/&&/g,'\0').replace(/&/g,'').replace(/\0/g,'&');
-function updateMnemonic(node,text){node.replaceChildren();text=String(text??'');let plain='';for(let i=0;i<text.length;i++){if(text[i]==='&'&&text[i+1]){if(text[i+1]==='&'){plain+='&';i++;}else{if(plain)node.append(plain);plain='';node.append(el('u',{},text[++i]));}}else plain+=text[i];}if(plain)node.append(plain);}
-function selectOptions(node,items,index){node.replaceChildren(...items.map((text,i)=>el('option',{value:i,selected:i===index},String(text))));node.selectedIndex=index;}
+// Keep unchanged DOM text stable; see docs/HTML-RENDERING-PERFORMANCE.md for provenance.
+const mnemonicCache=new WeakMap(),optionCache=new WeakMap();
+function updateMnemonic(node,text){text=String(text??'');if(mnemonicCache.get(node)===text)return;mnemonicCache.set(node,text);node.replaceChildren();let plain='';for(let i=0;i<text.length;i++){if(text[i]==='&'&&text[i+1]){if(text[i+1]==='&'){plain+='&';i++;}else{if(plain)node.append(plain);plain='';node.append(el('u',{},text[++i]));}}else plain+=text[i];}if(plain)node.append(plain);}
+function selectOptions(node,items,index){const labels=items.map(String),previous=optionCache.get(node);if(!previous||previous.length!==labels.length||labels.some((v,i)=>v!==previous[i])){node.replaceChildren(...labels.map((text,i)=>el('option',{value:i},text)));optionCache.set(node,labels);}if(node.selectedIndex!==index)node.selectedIndex=index;}
 function units(mode){return ({0:1,1:15,2:.75,3:1,4:8,5:1/96,6:25.4/96,7:2.54/96})[Number(mode)]||15;}
 function safeImage(picture,assets={}){if(typeof picture==='string'){if(/^data:image\//i.test(picture)||/^blob:/i.test(picture))return picture;const a=assets[picture];if(a?.encoding==='base64'){const ext=picture.split('.').at(-1).toLowerCase(),mime={png:'png',jpg:'jpeg',jpeg:'jpeg',gif:'gif',bmp:'bmp',svg:'svg+xml',webp:'webp',ico:'x-icon'}[ext];return mime?'data:image/'+mime+';base64,'+a.data:'';}}return '';}
 
@@ -113,8 +115,9 @@ export class BrowserControl {
     }
   }
   refresh(){if(this.disposed)return;const n=this.node,p=this.props;Object.assign(n.style,{left:Number(p.Left||0)/15+'px',top:Number(p.Top||0)/15+'px',width:Math.max(1,Number(p.Width||0)/15)+'px',height:Math.max(1,Number(p.Height||0)/15)+'px',fontFamily:fontFamily(p.FontName),fontSize:Number(p.FontSize||8.25)*96/72+'px',fontWeight:truth(p.FontBold)?'bold':'normal',fontStyle:truth(p.FontItalic)?'italic':'normal',textDecoration:truth(p.FontUnderline)?'underline':'none',color:oleColor(p.ForeColor, '#000')});
-    n.hidden=!this.design&&(!truth(p.Visible)||NONVISUAL_TYPES.has(this.type));n.classList.toggle('disabled',!truth(p.Enabled));n.title=p.ToolTipText||'';n.tabIndex=truth(p.TabStop)?Number(p.TabIndex)||0:-1;n.setAttribute('aria-label',stripMnemonic(p.Caption||this.model.name));
-    if(this.input){if(!['Slider','UpDown','CheckBox','OptionButton'].includes(this.type))this.input.style.backgroundColor=oleColor(p.BackColor);this.input.style.color=oleColor(p.ForeColor);this.input.disabled=!truth(p.Enabled);this.input.tabIndex=n.tabIndex;n.tabIndex=-1;}
+    const hidden=!this.design&&(!truth(p.Visible)||NONVISUAL_TYPES.has(this.type)),disabled=!truth(p.Enabled),title=String(p.ToolTipText||''),tabIndex=truth(p.TabStop)?Number(p.TabIndex)||0:-1,label=stripMnemonic(p.Caption||this.model.name);
+    if(n.hidden!==hidden)n.hidden=hidden;n.classList.toggle('disabled',disabled);if(n.title!==title)n.title=title;if(n.tabIndex!==(this.input?-1:tabIndex))n.tabIndex=this.input?-1:tabIndex;if(n.getAttribute('aria-label')!==label)n.setAttribute('aria-label',label);
+    if(this.input){if(!['Slider','UpDown','CheckBox','OptionButton'].includes(this.type))this.input.style.backgroundColor=oleColor(p.BackColor);this.input.style.color=oleColor(p.ForeColor);if(this.input.disabled!==disabled)this.input.disabled=disabled;if(this.input.tabIndex!==tabIndex)this.input.tabIndex=tabIndex;}
     if(['Frame','TextBox','PictureBox','CommandButton','Label','RichTextBox'].includes(this.type))n.style.background=Number(p.BackStyle)===0&&this.type==='Label'?'transparent':oleColor(p.BackColor);
     switch(this.type){
       case 'CommandButton':updateMnemonic(n,p.Caption);n.classList.toggle('default-button',!!p.Default);break;

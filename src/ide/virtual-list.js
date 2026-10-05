@@ -80,7 +80,7 @@ export class ToolList {
     this.rowNodes=retained;this.paintStats.paints++;
     if(this.selected>=start&&this.selected<end)attribute(this.root,'aria-activedescendant',this.id+'-'+this.selected);
     else if(this.root.hasAttribute('aria-activedescendant'))this.root.removeAttribute('aria-activedescendant');
-    if(!this.root.hasAttribute('aria-label'))this.root.setAttribute('aria-label','Items');
+    if(!this.root.getAttribute('aria-label'))this.root.setAttribute('aria-label','Items');
   }
   dispose(){this.disposed=true;this.cancelPaint();this.observer.disconnect();this.rowNodes?.clear();lists.delete(this.root);}
 }
