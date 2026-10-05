@@ -142,6 +142,8 @@ with sync_playwright() as playwright:
             check('canvas2d' in images, 'Reference backend did not execute')
             if args.require_webgpu: check('webgpu' in images and 'webgl2' in images, 'Required GPU backend did not execute')
             comparisons = {backend: pixels(images['canvas2d'], image) for backend, image in images.items() if backend != 'canvas2d'}
+            if not comparisons:
+                page.close();return {'skipped':'No second renderer available for a cross-backend pixel comparison','info':info}
             for backend, comparison in comparisons.items():
                 check(comparison['changedPixels'] == 0, f'{backend} solid/clip/texture pixel mismatch at DPR {dpr}: {comparison}')
             check(not page.errors, str(page.errors)); page.close(); return {'info': info, 'comparisons': comparisons}
@@ -237,7 +239,11 @@ with sync_playwright() as playwright:
     case('forced rebuild CPU metrics and retained 10,000-quad batching',benchmark)
     browser.close()
 
-report={'results':RESULTS,'metrics':METRICS,'visual':VISUAL,'claims':{
+summary={'passed':0,'failed':0,'skipped':0}
+for result in RESULTS:
+    is_skip=isinstance(result.get('details'),dict) and bool(result['details'].get('skipped'))
+    summary['skipped' if is_skip else 'passed' if result['passed'] else 'failed']+=1
+report={'summary':summary,'results':RESULTS,'metrics':METRICS,'visual':VISUAL,'claims':{
  'physicalHardwarePerformanceConfirmed':False,
  'fullWebGPUWithoutDOMPainting':False,
  'zeroPixelDifferenceInTestedIDEImages':bool(VISUAL) and all(v['changedPixels']==0 for v in VISUAL),
