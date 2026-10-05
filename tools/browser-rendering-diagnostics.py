@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnostic only: distinguish native raster drift from GPU overlay paint.
-The strict rendering suite remains the acceptance gate. No tolerance is relaxed.
-"""
+"""Diagnostic only; the strict rendering suite remains the acceptance gate."""
 import functools
 import http.server
 import io
@@ -21,16 +19,16 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Qui
 threading.Thread(target=server.serve_forever, daemon=True).start()
 def differences(first, second):
     a, b = [Image.open(io.BytesIO(data)).convert('RGB') for data in (first, second)]
-    diff = ImageChops.difference(a, b)
-    points = []
-    box = diff.getbbox()
+    box = ImageChops.difference(a, b).getbbox()
+    points = []; changed = 0
     if box:
         for y in range(box[1], box[3]):
             for x in range(box[0], box[2]):
                 if a.getpixel((x,y)) != b.getpixel((x,y)):
+                    changed += 1
                     if len(points) < 100:
                         points.append({'x':x,'y':y,'before':a.getpixel((x,y)),'after':b.getpixel((x,y))})
-    return {'bounds':box, 'points':points}
+    return {'bounds':box, 'changedPixels':changed, 'points':points}
 try:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH') or pw.chromium.executable_path, headless=False,
@@ -60,10 +58,26 @@ try:
             return {...point,overlay:Array.from(image.data.slice(at,at+4)),commands:commands.slice(-12),nodes};
           });
         }''',diff['points'])
+        # Diagnostic variants never change production policy or count as passes.
+        # Sampling reference: https://www.w3.org/TR/css-images-3/#the-image-rendering
+        trials = {'afterReadback':differences(before,page.screenshot())}
+        for name, css, padding in [('pixelated','image-rendering:pixelated',0),('crisp','image-rendering:crisp-edges',0),('no-containment','contain:none',0),('native-padding','',2)]:
+            geometry = page.evaluate('''async({css,padding})=>{
+              const r=vb6Studio.rendering,c=r.canvas;
+              if(!window.originalCanvasCSS)window.originalCanvasCSS=c.style.cssText;
+              c.style.cssText=window.originalCanvasCSS+';'+css;
+              const s=r.adapter.build(r.policy);
+              if(padding)for(const cmd of s.commands)if(cmd.hole){cmd.rect=[cmd.rect[0]-padding,cmd.rect[1]-padding,cmd.rect[2]+2*padding,cmd.rect[3]+2*padding];}
+              r.driver.render(s);await r.driver.device.queue.onSubmittedWorkDone();
+              await new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)));
+              const rect=c.getBoundingClientRect();return {rect:[rect.x,rect.y,rect.width,rect.height],width:c.width,height:c.height};
+            }''',{'css':css,'padding':padding})
+            image=page.screenshot();(OUT/(name+'.png')).write_bytes(image)
+            trials[name]={'geometry':geometry,**differences(before,image)}
         page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})')
         page.evaluate('async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
         restored = page.screenshot(); (OUT/'native-restored.png').write_bytes(restored)
-        (OUT/'diagnostics.json').write_text(json.dumps({'browser':browser.version,'active':active,'difference':diff,'samples':samples,'nativeDrift':differences(before,restored)},indent=2))
+        (OUT/'diagnostics.json').write_text(json.dumps({'browser':browser.version,'active':active,'difference':diff,'samples':samples,'trials':trials,'nativeDrift':differences(before,restored)},indent=2))
         browser.close()
 finally:
     server.shutdown()
