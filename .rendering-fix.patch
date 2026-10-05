@@ -1,0 +1,82 @@
+--- a/tools/browser-rendering-tests.py
++++ b/tools/browser-rendering-tests.py
+@@ -7,7 +7,7 @@
+ pixel parity with our HTML path, CPU timing and physical-hardware qualification.
+ """
+ from __future__ import annotations
+-import argparse, functools, http.server, io, json, os, platform, shlex, shutil, threading, time, traceback
++import argparse, base64, functools, http.server, io, json, os, platform, shlex, shutil, threading, time, traceback
+ from pathlib import Path
+ from PIL import Image, ImageChops
+ from playwright.sync_api import sync_playwright
+@@ -74,8 +74,10 @@
+ with sync_playwright() as playwright:
+     executable = os.environ.get('CHROMIUM_PATH') or shutil.which('chromium') or playwright.chromium.executable_path
+     # Select the Vulkan driver explicitly: ANGLE flags alone configure WebGL,
+-    # not Dawn's WebGPU adapter. These switches are test-only.
+-    launch_flags = ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--use-vulkan=swiftshader', '--enable-features=Vulkan', '--disable-vulkan-surface']
++    # not Dawn's WebGPU adapter. Do not also force the browser compositor to
++    # Vulkan: its shared-image presentation path differs from Dawn's backend.
++    # These switches are test-only.
++    launch_flags = ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--use-vulkan=swiftshader']
+     launch_flags += shlex.split(os.environ.get('RENDERING_BROWSER_FLAGS', ''))
+     browser = playwright.chromium.launch(executable_path=executable, headless=True, args=launch_flags)
+     METRICS.update(browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False)
+@@ -106,9 +108,34 @@
+                   s.add([16,16,64,32],[1,1,0,1],{clip:[32,16,32,32]});s.native([4,4,4,4],s.clip);
+                   const image=document.createElement('canvas');image.width=image.height=16;const c=image.getContext('2d');c.fillStyle='#00ffff';c.fillRect(0,0,16,8);c.fillStyle='#ff00ff';c.fillRect(0,8,16,8);
+                   s.add([160,16,16,16],[1,1,1,1],{page:{canvas:image,width:16,height:16,revision:1}});
+-                  p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();
+-                  return {name:p.name,width:canvas.width,height:canvas.height,stats:p.stats};
++                  p.render(s);let readback=null;
++                  if(p.device){
++                    // Copy before the canvas texture expires; GPU completion is
++                    // not proof that the compositor presented the drawn pixels.
++                    const stride=Math.ceil(canvas.width*4/256)*256,device=p.device;
++                    const buffer=device.createBuffer({size:stride*canvas.height,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
++                    const encoder=device.createCommandEncoder();
++                    encoder.copyTextureToBuffer({texture:p.context.getCurrentTexture()},{buffer,bytesPerRow:stride},{width:canvas.width,height:canvas.height});
++                    device.queue.submit([encoder.finish()]);await buffer.mapAsync(GPUMapMode.READ);
++                    const bytes=new Uint8Array(buffer.getMappedRange()),rgba=new Uint8Array(canvas.width*canvas.height*4),bgra=p.format.startsWith('bgra');
++                    for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
++                      const at=y*stride+x*4,to=(y*canvas.width+x)*4;
++                      rgba[to]=bytes[at+(bgra?2:0)];rgba[to+1]=bytes[at+1];rgba[to+2]=bytes[at+(bgra?0:2)];rgba[to+3]=bytes[at+3];
++                    }
++                    let text='';for(let i=0;i<rgba.length;i+=8192)text+=String.fromCharCode(...rgba.subarray(i,i+8192));
++                    readback=btoa(text);buffer.unmap();buffer.destroy();
++                  }
++                  return {name:p.name,width:canvas.width,height:canvas.height,stats:p.stats,readback};
+                 }''', {'backend': backend, 'dpr': dpr})
++                raw = info[backend].pop('readback', None)
++                if raw:
++                    rgba = Image.frombytes('RGBA', (info[backend]['width'],info[backend]['height']), base64.b64decode(raw))
++                    displayed = Image.new('RGBA', rgba.size, (255,255,255,255));displayed.alpha_composite(rgba)
++                    encoded = io.BytesIO();displayed.convert('RGB').save(encoded, format='PNG')
++                    (OUT / f'framebuffer-{backend}-{dpr}.png').write_bytes(encoded.getvalue())
++                    comparison = pixels(images['canvas2d'], encoded.getvalue())
++                    METRICS.setdefault('gpuFramebufferReadback', []).append({'backend':backend,'dpr':dpr,**comparison})
++                    check(comparison['changedPixels']==0, 'GPU framebuffer differs before presentation: '+str(comparison))
+                 images[backend] = page.locator('canvas.fixture').screenshot()
+                 (OUT / f'primitives-{backend}-{dpr}.png').write_bytes(images[backend])
+                 check(info[backend]['width'] == round(256*dpr), 'DPR was capped or ignored')
+@@ -134,7 +161,9 @@
+         check(page.evaluate('vb6Studio.project.settings.rendering.backend') == 'html', 'Export policy not stored')
+         page.evaluate('vb6Studio.setRenderingPolicy({backend:"canvas2d",fallbacks:["html"]})')
+         page.wait_for_function(renderer+'.backend === "canvas2d"')
+-        page.wait_for_timeout(250)
++        # Allow pending activation/focus/resize invalidations to settle, then
++        # enforce no further submissions across a separate idle interval.
++        page.evaluate('''async()=>{const r=vb6Studio.rendering;let last=r.metrics.frames,stable=0;for(let i=0;i<30;i++){await new Promise(done=>setTimeout(done,50));const now=r.metrics.frames;stable=now===last?stable+1:0;last=now;if(stable>=4)return;}throw Error('Renderer did not reach quiescence')}''')
+         frames = page.evaluate(renderer+'.metrics.frames');page.wait_for_timeout(350)
+         check(page.evaluate(renderer+'.metrics.frames') == frames, 'Idle UI continuously redraws')
+         page.evaluate('vb6Studio.optionsDialog();undefined');page.get_by_role('tab', name='Rendering', exact=True).click();page.screenshot(path=OUT/'options.png')
+@@ -198,7 +227,8 @@
+         stats=page.evaluate('''()=>{const r=vb6Studio.rendering;r.metrics.builds=[];r.metrics.submissions=[];for(let i=0;i<50;i++)r.renderNow();return r.getStats()}''')
+         METRICS['ideForcedRebuildCpu']=stats
+         # A reusable library workload: all opaque quads must batch to one draw.
+-        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c)}catch{c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t)}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
++        batch=page.evaluate('''async()=>{const backend=window.navigator.gpu?'webgpu':'canvas2d';let c=document.createElement('canvas');document.body.append(c);let p;let initializationError=null;try{p=await VB6Rendering.createPainter(backend,c)}catch(error){initializationError=String(error);c.remove();c=document.createElement('canvas');document.body.append(c);p=await VB6Rendering.createPainter('canvas2d',c)}const s=new VB6Rendering.PaintScene(1024,1024);for(let i=0;i<10000;i++)s.add([i%100*10,Math.floor(i/100)*10,8,8],[.2,.4,.8,1]);const times=[];for(let i=0;i<60;i++){const t=performance.now();p.render(s);times.push(performance.now()-t)}if(p.device)await p.device.queue.onSubmittedWorkDone();times.sort((a,b)=>a-b);const result={backend:p.name,initializationError,quads:10000,frames:60,cpuSubmitP50Ms:times[30],cpuSubmitP95Ms:times[57],stats:p.stats};p.dispose();c.remove();return result}''')
++        METRICS['batch10000Quads']=batch
+         if args.require_webgpu: check(batch['backend']=='webgpu', 'Batch workload silently fell back: '+str(batch))
+         if batch['backend']=='webgpu':
+             check(batch['stats']['drawCalls']==1,'Opaque quads were not batched')

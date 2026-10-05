@@ -19,9 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply reviewed test-driver configuration
+      - name: Apply reviewed framebuffer diagnostics
         run: |
-          echo '77568ab8c29629695e009c7a467e6612135bb4c9e6089cb84b11e234b3f50c8f  .rendering-fix.patch' | sha256sum --check
+          echo 'ec683687c166e3b9bc18ffd33d8fdb6d95e7ec27b16a2cf83dda556cd351c440  .rendering-fix.patch' | sha256sum --check
           git apply --check .rendering-fix.patch
           git apply .rendering-fix.patch
           npm run build
@@ -30,9 +30,10 @@ jobs:
           git add tools/browser-rendering-tests.py dist src/exporter/runtime-payload.js examples
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'test(rendering): explicitly configure software Vulkan and capture GPU diagnostics'
+          git commit -m 'test(rendering): verify GPU framebuffer independently of compositor screenshots'
           git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
           git rev-parse HEAD > /tmp/rendering-head.txt
+          git archive --format=tar.gz -o /tmp/rendering-source.tar.gz HEAD
       - run: python -m pip install playwright==1.57.0 Pillow
       - run: python -m playwright install --with-deps chromium
       - name: Resolve browser
@@ -48,8 +49,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: rendering-gpu-driver-evidence
+          name: rendering-framebuffer-evidence
           path: |
             reports/rendering
             /tmp/rendering-head.txt
+            /tmp/rendering-source.tar.gz
           retention-days: 14
