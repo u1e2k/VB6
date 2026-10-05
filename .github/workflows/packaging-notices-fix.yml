@@ -1,0 +1,48 @@
+name: Apply packaging notice correction
+on:
+  push:
+    branches: [fix/classic-bevels-and-list-reuse]
+    paths: [.github/workflows/packaging-notices-fix.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply reviewed source changes
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected={'package-release.py':('64d815b34b1db6887d0e31ba8ed439c833d93dbdf3dbf850ca03abf08a7a8bcf','6a7d66a40d5b62da25623164f8d14ec31ee9e0ccd7b1072b029ea736e30002fc'),'package-recovery.py':('43c42f0c4a5d5e21b410dc434d78c542319d8284f95600156a15861a03dd2169','028523755fdce15885f7c5061b5a535ded140a8aec73e2c4166afbfc5b5b8370')}
+          for name,key in [('package-release.py','DIRS'),('package-recovery.py','ALLOWED')]:
+              p=Path('tools')/name
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==expected[name][0]
+              s=p.read_text().replace(key+"={'src'",key+"={'LICENSES','src'")
+              if name=='package-release.py':
+                  s=s.replace("    source={f'{PREFIX}/{rel.as_posix()}'", "    notices={rel.as_posix():p.read_bytes() for rel,p in files() if rel.parts[0]=='LICENSES'}\n    source={f'{PREFIX}/{rel.as_posix()}'")
+                  s=s.replace("if p.is_file()})", "if p.is_file()} | notices)",1)
+                  s=s.replace("    examples['README.md']=", "    examples.update(notices)\n    examples['README.md']=")
+                  s=s.replace("    sdk={}\n", "    sdk=dict(notices)\n")
+              else:
+                  s=s.replace("    manifest=''.join", "    notices={name:data for name,data in entries.items() if name.startswith('LICENSES/')}\n    manifest=''.join")
+                  s=s.replace("if p.is_file()})", "if p.is_file()} | notices)",1)
+                  s=s.replace("    archive(out/(PREFIX+'-Examples.zip'),apps)", "    apps.update(notices)\n    archive(out/(PREFIX+'-Examples.zip'),apps)")
+                  s=s.replace("    for name in ['LICENSE','THIRD-PARTY-NOTICES.md','RECOVERY.md']:sdk", "    sdk.update(notices)\n    for name in ['LICENSE','THIRD-PARTY-NOTICES.md','RECOVERY.md']:sdk")
+              p.write_text(s)
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==expected[name][1]
+          PY
+          python tools/test-package-notices.py
+          npm run build && npm test
+          git add tools/package-release.py tools/package-recovery.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(packaging): retain third-party notices in source, browser, examples and SDK archives'
+          git push origin HEAD:refs/heads/fix/classic-bevels-and-list-reuse
