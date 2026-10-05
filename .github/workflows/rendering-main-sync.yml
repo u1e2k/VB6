@@ -1,0 +1,55 @@
+name: Reconcile rendering with agent threads
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-main-sync.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-main-integration
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Merge reviewed agent-thread changes and regenerate outputs
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff f4ee8d47bed69ae26b65d20637b8f5f8da13d815 || true
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          assert all(p.startswith('dist/') or p=='src/exporter/runtime-payload.js' for p in conflicts), conflicts
+          for p in conflicts:
+              subprocess.run(['git','checkout','--ours','--',p],check=True)
+              subprocess.run(['git','add','--',p],check=True)
+          assert Path('.git/MERGE_HEAD').exists()
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          PY
+          npm run build && npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'merge: retain coding-agent threads and rebuild dual-renderer distributions'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git bundle create /tmp/rendering-final-candidate.bundle HEAD
+          git rev-parse HEAD > /tmp/rendering-final-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-final-candidate-source
+          path: |
+            /tmp/rendering-final-candidate.bundle
+            /tmp/rendering-final-head.txt
+          retention-days: 7
