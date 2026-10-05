@@ -2,7 +2,7 @@ name: Publish reviewed rendering completion
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
-    paths: [.rendering-final/**, .rendering-enhancements.xz, .github/workflows/rendering-finalize.yml]
+    paths: [.rendering-final/**, .rendering-enhancements.xz, .rendering-accessor.patch, .github/workflows/rendering-finalize.yml]
 permissions:
   contents: write
 concurrency:
@@ -10,9 +10,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   source:
-    # macOS 14 is in an announced October 5 brownout; use a supported image.
-    # https://github.com/actions/runner-images/issues/13518
-    runs-on: macos-26
+    # This short Node/git build needs no privileged operations or GPU device.
+    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -48,11 +48,14 @@ jobs:
           patch=lzma.decompress(Path('.rendering-enhancements.xz').read_bytes())
           assert hashlib.sha256(patch).hexdigest()=='7fffef6393d03a6cdb4f5aef5eada304fdcd251acd2ec02c2010a7de938baf6e'
           Path('/tmp/rendering-enhancements.patch').write_bytes(patch)
+          assert hashlib.sha256(Path('.rendering-accessor.patch').read_bytes()).hexdigest()=='c4360d4974fffd3bf372b84f945b4fa3e0dccfcd40bf84d0e00383ee61033e63'
           PY
           git apply --unidiff-zero --check /tmp/rendering-recovered.patch
           git apply --unidiff-zero /tmp/rendering-recovered.patch
           git apply --check /tmp/rendering-enhancements.patch
           git apply /tmp/rendering-enhancements.patch
+          git apply --check .rendering-accessor.patch
+          git apply .rendering-accessor.patch
           python - <<'PY'
           from pathlib import Path
           p=Path('tools/browser-tests.py');s=p.read_text()
@@ -64,7 +67,7 @@ jobs:
           npm run build && npm test
       - name: Commit ordinary source and regenerate all derived outputs
         run: |
-          git rm -r .rendering-final .rendering-enhancements.xz
+          git rm -r .rendering-final .rendering-enhancements.xz .rendering-accessor.patch
           git add README.md docs src tests tools dist examples
           git diff --cached --exit-code -- .github/workflows
           git commit -m 'feat(rendering): complete dual-backend settings, dynamic repaint and local GPU diagnostics'
