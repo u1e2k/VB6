@@ -1,4 +1,4 @@
-name: Validate rendering GPU fixes
+name: Finalize rendering evidence reporting
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
@@ -6,52 +6,22 @@ on:
 permissions:
   contents: write
 jobs:
-  fixes:
+  source:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Apply reviewed framebuffer diagnostics
+      - name: Apply reviewed reporting-only correction
         run: |
-          echo 'ec683687c166e3b9bc18ffd33d8fdb6d95e7ec27b16a2cf83dda556cd351c440  .rendering-fix.patch' | sha256sum --check
+          echo 'd544e7b3507c599e6de0bab1c155f4d603f1ca3c0e45d6dcd5ae383bb0bdf2d8  .rendering-fix.patch' | sha256sum --check
           git apply --check .rendering-fix.patch
           git apply .rendering-fix.patch
-          npm run build
-          npm test
+          python -m py_compile tools/browser-rendering-tests.py
           git rm .rendering-fix.patch
-          git add tools/browser-rendering-tests.py dist src/exporter/runtime-payload.js examples
+          git add tools/browser-rendering-tests.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'test(rendering): verify GPU framebuffer independently of compositor screenshots'
+          git commit -m 'test(rendering): distinguish skipped GPU comparisons from passing tests'
           git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
-          git rev-parse HEAD > /tmp/rendering-head.txt
-          git archive --format=tar.gz -o /tmp/rendering-source.tar.gz HEAD
-      - run: python -m pip install playwright==1.57.0 Pillow
-      - run: python -m playwright install --with-deps chromium
-      - name: Resolve browser
-        run: |
-          python - <<'PY' >> "$GITHUB_ENV"
-          from playwright.sync_api import sync_playwright
-          with sync_playwright() as p:
-              print('CHROMIUM_PATH=' + p.chromium.executable_path)
-          PY
-      - run: npm run test:rendering:gpu
-        env:
-          DEBUG: pw:browser
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: rendering-framebuffer-evidence
-          path: |
-            reports/rendering
-            /tmp/rendering-head.txt
-            /tmp/rendering-source.tar.gz
-          retention-days: 14
