@@ -16,8 +16,11 @@ standalone applications. No third-party font files or JavaScript were imported.
 The attribution is in the source as well as this document.
 
 The overrides are intentionally limited to rectangular classic controls. Their
-removed borders are compensated by padding to preserve authored outer bounds
-and content origins. Native radio circles, user-authored shapes, editor text,
+removed button borders are compensated by padding. Container chrome retains
+its original border widths and padding, drawing the equivalent staircase in
+border-box background layers: nominal border widths and padding do not round
+identically on WebKit at fractional DPI. This preserves actual authored outer
+bounds and content origins without per-control JavaScript measurements. Native radio circles, user-authored shapes, editor text,
 flat menu items and selection/focus behavior are not globally replaced.
 Forced-colors mode keeps real borders rather than relying on suppressed shadows.
 Theme tokens are redeclared at every theme boundary for embedded runtime forms.

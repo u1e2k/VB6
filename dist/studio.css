@@ -1252,6 +1252,11 @@ html:has(.browser-window-root), body:has(> .browser-window-root) { width:100%; h
  --vb-bevel-sunken: inset -1px -1px var(--vb-light), inset 1px 1px var(--vb-shadow), inset -2px -2px var(--vb-highlight), inset 2px 2px var(--vb-dark);
  --vb-bevel-pressed: inset -1px -1px var(--vb-light), inset 1px 1px var(--vb-dark), inset -2px -2px var(--vb-highlight), inset 2px 2px var(--vb-shadow);
  --vb-bevel-raised-thin: inset -1px -1px var(--vb-shadow), inset 1px 1px var(--vb-light);
+ /* Equivalent staircase paint for chrome whose original borders must remain
+    in layout. A fractional-DPI border may not equal its nominal CSS width;
+    replacing it with fixed padding shifted WebKit content. Border-box background
+    strips keep the original border metrics without adding nodes or JS reads. */
+ --vb-bevel-raised-image: linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-highlight),var(--vb-highlight));
  --vb-bevel-sunken-thin: inset -1px -1px var(--vb-light), inset 1px 1px var(--vb-shadow);
 }
 /* Removing a layout border requires compensating padding. These explicit
@@ -1268,9 +1273,19 @@ html:has(.browser-window-root), body:has(> .browser-window-root) { width:100%; h
  .vb-command:active:not(:disabled):not([aria-disabled=true]) { box-shadow:var(--vb-bevel-pressed);padding:5px 8px 3px 10px; }
  .vb-command:disabled,.vb-command[aria-disabled=true] { box-shadow:var(--vb-bevel-raised);padding:4px 9px; }
 
- .vb-form:not(.vb-borderless),.vb-dialog { border:0;padding:4px;box-shadow:var(--vb-bevel-raised); }
- .ide-dialog { border:0;padding:5px;box-shadow:var(--vb-bevel-raised),1px 1px var(--vb-text); }
- .classic-menu { border:0;padding:3px;box-shadow:var(--vb-bevel-raised); }
+ /* Preserve these containers' original border widths and padding exactly.
+    Transparent border paint avoids diagonal joins; the equivalent border-box
+    staircase is independent of WebKit's fractional border-width rounding. */
+ .vb-form:not(.vb-borderless),.vb-dialog,.ide-dialog,.classic-menu,.vb-popup-menu.classic-menu {
+   border-color:transparent;
+   background-image:var(--vb-bevel-raised-image);
+   background-origin:border-box;background-clip:border-box;background-repeat:no-repeat;
+   background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
+   background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
+   box-shadow:none;
+ }
+ .vb-popup-menu.classic-menu { border-color:transparent; }
+ .ide-dialog { box-shadow:1px 1px var(--vb-text); }
  .ide-dialog-footer button,.vb-dialog-actions button { border:0;box-shadow:var(--vb-bevel-raised);padding:4px 10px;background:var(--vb-face);color:var(--vb-text); }
  .ide-dialog-footer button:active:not(:disabled),.vb-dialog-actions button:active:not(:disabled) { box-shadow:var(--vb-bevel-pressed); }
  .ide-dialog-footer button:disabled,.vb-dialog-actions button:disabled { color:var(--vb-gray);text-shadow:1px 1px var(--vb-light); }

@@ -34,7 +34,7 @@ def pixels(a,b):
 def case(name,fn):
     contexts=set(browser.contexts);start=time.perf_counter()
     try:
-        details=fn();RESULTS.append(dict(name=name,passed=True,details=details,ms=round((time.perf_counter()-start)*1000,2)));print('PASS',name,flush=True)
+        details=fn();RESULTS.append(dict(name=name,passed=True,details=details,ms=round((time.perf_counter()-start)*1000,2)));print('SKIP' if isinstance(details,dict) and details.get('skipped') else 'PASS',name,flush=True)
     except Exception as e:
         RESULTS.append(dict(name=name,passed=False,error=str(e)));print('FAIL',name,str(e),flush=True);traceback.print_exc(limit=3)
     finally:
@@ -75,7 +75,13 @@ with sync_playwright() as pw:
             (OUT/f'pressed-{dpr}.png').write_bytes(shot);check(changed==0,f'{changed} pressed pixels differ')
             p.locator('#raised').evaluate('(b)=>b.disabled=true');shot=p.locator('#raised').screenshot()
             check(pixels(shot,expected)==0,'Disabled bevel became pressed')
-            return {'dpr':dpr,'normalChangedPixels':0,'pressedChangedPixels':0,'disabledChangedPixels':0}
+            # The container variant preserves real border metrics and uses an
+            # equivalent border-box staircase. Compare to the same independent
+            # pixel oracle, including corner ownership, not another CSS sample.
+            p=page(dpr,html='<div class="vb-form" style="left:16px;top:16px;width:40px;height:24px;min-width:0"></div>')
+            shot=p.locator('.vb-form').screenshot();(OUT/f'form-staircase-{dpr}.png').write_bytes(shot)
+            check(pixels(shot,expected)==0,'Container staircase differs from the independent reference')
+            return {'dpr':dpr,'containerChangedPixels':0,'normalChangedPixels':0,'pressedChangedPixels':0,'disabledChangedPixels':0}
         case(f'independent normal/pressed/disabled staircase pixels at DPR {dpr}',bevel_pixels)
     FIXTURE='''<div data-vb-theme="classic">
     <div class="vb-form" style="left:10px;top:10px;width:250px"><div class="vb-form-title"><span class="caption" data-geometry>Form1</span><button class="vb-window-button" aria-label="Close"><span data-geometry>X</span></button></div><div class="vb-form-content" data-geometry style="height:40px"></div></div>
@@ -110,6 +116,8 @@ with sync_playwright() as pw:
     case('nested theme tokens and keyboard focus',themes)
     def forced_colors():
         p=page(html=FIXTURE,forced=True)
+        if not p.evaluate("matchMedia('(forced-colors: active)').matches"):
+            return {'skipped':'This browser does not support forced-colors emulation; no forced-colors pass is claimed'}
         info=p.locator('.vb-command').evaluate('(n)=>{const s=getComputedStyle(n);return {border:s.borderTopWidth,shadow:s.boxShadow}}')
         check(info['border']=='1px','Forced colors lost the real button border')
         check(info['shadow']=='none','Forced-colors shadow suppression not respected')
@@ -157,7 +165,10 @@ with sync_playwright() as pw:
         p.screenshot(path=OUT/'ide.png');check(not p.errors,str(p.errors));return {'startup':True,'optionsCancel':True}
     case('standalone IDE startup and classic Options interaction',ide_smoke)
     browser.close()
-summary={'passed':sum(x['passed'] for x in RESULTS),'failed':sum(not x['passed'] for x in RESULTS)}
+summary={'passed':0,'failed':0,'skipped':0}
+for result in RESULTS:
+    skipped=isinstance(result.get('details'),dict) and bool(result['details'].get('skipped'))
+    summary['skipped' if skipped else 'passed' if result['passed'] else 'failed']+=1
 (OUT/'report.json').write_text(json.dumps(dict(summary=summary,results=RESULTS,metrics=METRICS),indent=2))
 print(json.dumps(summary),flush=True)
 raise SystemExit(bool(summary['failed']))
