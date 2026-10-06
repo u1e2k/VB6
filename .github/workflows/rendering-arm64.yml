@@ -52,7 +52,7 @@ jobs:
           import json
           from pathlib import Path
           report=json.loads(Path('reports/rendering/report.json').read_text())
-          assert report['summary']=={'passed':30,'failed':0,'skipped':0}, report['summary']
+          assert report['summary']=={'passed':31,'failed':0,'skipped':0}, report['summary']
           PY
           git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
