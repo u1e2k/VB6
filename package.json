@@ -53,7 +53,15 @@
     "test:rendering": "node --test tests/rendering-*.test.mjs",
     "test:rendering:browser": "python tools/browser-rendering-tests.py",
     "test:rendering:gpu": "python tools/browser-rendering-tests.py --require-webgpu",
-    "test:classic-html": "python tools/browser-classic-html.py"
+    "test:classic-html": "python tools/browser-classic-html.py",
+    "test:layout": "node --test --test-concurrency=4 tests/layout-*.test.mjs",
+    "test:layout:browser": "python tools/browser-layout-tests.py",
+    "bench:layout": "node tools/bench-layout.mjs",
+    "pack:layout": "node tools/pack-layout.mjs",
+    "build:compute": "node tools/build-compute.mjs",
+    "compile:compute": "node tools/compile-compute.mjs",
+    "test:compute": "node --test tests/compute*.test.mjs",
+    "test:compute:browser": "node tools/build-compute.mjs && python tools/compute-browser-tests.py"
   },
   "engines": {
     "node": ">=22"
