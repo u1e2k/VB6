@@ -112,14 +112,23 @@ test('retries: completed mutation followed by server failure is never replayed; 
   assert.equal(n, 3); assert.equal(f.ide.project.modules[0].code, "' exactly once\n" + original); assert.equal(f.ide.history.undoStack.length, 1);
   assert.equal(f.agent.usage.calls, 1); assert.equal(f.agent.usage.tokens, 27); assert.ok(!visible(f.agent).includes('PRIVATE-SECRET'));
 });
-test('retries: bounded exhaustion offers Continue, preserves history, and honors Retry-After on that fresh run', async t => {
-  const f = fixture(t); let n = 0;
+for (const elapsed of [0, 1250, 5000, 6500]) test(`retries: bounded exhaustion preserves history and honors the remaining Retry-After after ${elapsed} ms`, async t => {
+  // The deadline is absolute. A host scheduler pause legitimately shortens the
+  // remaining wait; asserting a 10 ms wall-clock margin made CI flaky. Advance
+  // only this test's clock so both unexpired and elapsed cooldowns are exact.
+  let now = Date.now(), n = 0; const waits = [];
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t, {wait: async (ms, signal) => {
+    signal.throwIfAborted(); waits.push(ms); now += ms;
+  }});
   await assert.rejects(run(f, 'openai', async () => { n++; throw new ProviderTransportError('Unavailable', {retryable: true, retryAfterMs: 5000}); }, {maxRetries: 2}));
   assert.equal(n, 3); assert.equal(f.agent.canResume, true); assert.equal(f.agent.blocked, false);
   assert.equal(f.agent.history.length, 1); assert.equal(f.agent.usage.requests, 3); assert.equal(f.agent.unreportedRequests, 3);
-  assert.equal(f.waits.length, 2); assert.ok(f.waits.every(ms => ms >= 4990));
+  assert.deepEqual(waits, [5000, 5000]); assert.equal(f.agent.retryAt, now + 5000);
+  now += elapsed;
   await f.agent.resume({transport: async (_, {receive}) => receive(packet('openai'))});
-  assert.equal(f.waits.length, 3); assert.ok(f.waits[2] >= 4990); assert.equal(f.agent.usage.requests, 4); assert.equal(f.agent.history.filter(x => x.role === 'user').length, 1);
+  assert.deepEqual(waits, elapsed < 5000 ? [5000, 5000, 5000 - elapsed] : [5000, 5000]);
+  assert.equal(f.agent.usage.requests, 4); assert.equal(f.agent.history.filter(x => x.role === 'user').length, 1);
 });
 test('retries: per-run request cap wins over retry count and a missing usage attempt is accounted', async t => {
   const f = fixture(t); let n = 0;
@@ -147,7 +156,7 @@ test('compaction: failed checkpoint preserves a validated deferred batch exactly
   await f.agent.resume({maxCalls: 1, transport: async (_, {receive}) => receive(packet('openai', [get, get]))});
   const pending = f.agent.pendingTurn, history = structuredClone(f.agent.history);
   await f.agent.compact({maxRetries: 0, transport: async () => { throw new ProviderTransportError('Offline', {retryable: true}); }});
-  assert.equal(f.agent.pendingTurn, pending); assert.deepEqual(f.agent.history, history); assert.equal(f.agent.canResume, true);
+  assert.equal(f.agent.pendingTurn, pending); assert.deepEqual(f.agent.history, history); assert.ok(f.agent.canResume);
 });
 test('compaction: Stop during a summary retains original context and ignores a late checkpoint', async t => {
   const f = fixture(t); await prepare(f, 'openai', 1); const before = structuredClone(f.agent.history); let release;
