@@ -1,42 +1,32 @@
-name: Diagnose final rendering unit failure
+name: Final rendering source verification
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
     paths: [.github/workflows/rendering-ocx-sync.yml]
 permissions:
-  actions: read
+  contents: read
 jobs:
-  diagnostics:
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
         with:
-          python-version: '3.12'
-      - name: Extract failing TAP test and stack from the known failed job
-        env:
-          GH_TOKEN: ${{ github.token }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify the complete integrated source and reproduce distributions
         run: |
-          python - <<'PY'
-          import os,re,urllib.request
-          from pathlib import Path
-          request=urllib.request.Request('https://api.github.com/repos/wieslawsoltes/VB6/actions/jobs/112255715159/logs',headers={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
-          # A signed storage redirect authenticates itself; never forward the
-          # GitHub API Authorization header to that other origin.
-          request.add_unredirected_header('Authorization','Bearer '+os.environ['GH_TOKEN'])
-          with urllib.request.urlopen(request,timeout=30) as response:
-              lines=response.read().decode('utf-8','replace').splitlines()
-          indices=[i for i,line in enumerate(lines) if re.search(r'\bnot ok\b|# fail |ERR_ASSERTION|error:|failureType:',line)]
-          keep=set()
-          for i in indices:
-              keep.update(range(max(0,i-4),min(len(lines),i+45)))
-          report='\n'.join(lines[i] for i in sorted(keep))+'\n'
-          assert indices, 'Expected failing test diagnostics in the known failed job'
-          Path('/tmp/rendering-unit-failure.txt').write_text(report)
-          print(report)
-          PY
+          mkdir -p /tmp/rendering-final-review
+          git rev-parse HEAD origin/main > /tmp/rendering-final-review/refs.txt
+          npm run build > /tmp/rendering-final-review/build.log 2>&1
+          npm test > /tmp/rendering-final-review/tests.log 2>&1
+          git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git bundle create /tmp/rendering-final-review/repository.bundle HEAD refs/remotes/origin/main
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: rendering-unit-failure-diagnostic
-          path: /tmp/rendering-unit-failure.txt
+          name: rendering-final-merge-review
+          path: /tmp/rendering-final-review
           retention-days: 7
