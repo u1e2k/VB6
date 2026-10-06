@@ -4,53 +4,21 @@ on:
     branches: [feat/webgpu-ui-rendering]
     paths: [.rendering-acceptance.patch, .github/workflows/rendering-acceptance-sync.yml]
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: rendering-acceptance-source
   cancel-in-progress: true
 jobs:
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Preserve reviewed scalar and native interoperability changes
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-commit --no-ff 72dae4fa89e165f6f0dc0ba0aad5cb7615508ea3 || true
-          python3 - <<'PY'
-          import subprocess
-          from pathlib import Path
-          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
-          for path in conflicts:
-              if path.startswith(('dist/','examples/')) or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js']:
-                  subprocess.run(['git','checkout','--ours','--',path],check=True)
-              elif path=='src/runtime/entry.js':
-                  main=subprocess.check_output(['git','show','72dae4fa89e165f6f0dc0ba0aad5cb7615508ea3:'+path]).decode()
-                  imports="import {UIRenderer, retainRenderer, rendererForDocument} from '../rendering/renderer.js';\nimport {normalizeRendering, DEFAULT_RENDERING} from '../rendering/policy.js';\n"
-                  assert main.count('export const RuntimeAPI={')==1
-                  Path(path).write_text(imports+main.replace('export const RuntimeAPI={','export const RuntimeAPI={UIRenderer,retainRenderer,rendererForDocument,normalizeRendering,DEFAULT_RENDERING,'))
-              else: raise RuntimeError('Unreviewed authored conflict: '+path)
-              subprocess.run(['git','add','--',path],check=True)
-          assert Path('.git/MERGE_HEAD').exists()
-          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
-          PY
-          git apply --check .rendering-acceptance.patch
-          git apply .rendering-acceptance.patch
-          npm run build && npm test
-          git rm .rendering-acceptance.patch
-          git add src tests tools dist examples
-          git diff --cached --exit-code -- .github/workflows
-          git commit -m 'merge(rendering): preserve scalar runtime and strengthen complete pixel evidence'
-          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
-          git bundle create /tmp/rendering-acceptance-source.bundle HEAD
+      - name: Capture exact branch and scalar-runtime main for authored merge review
+        run: git bundle create /tmp/rendering-acceptance-source.bundle HEAD refs/remotes/origin/main
       - uses: actions/upload-artifact@v4
         with:
           name: rendering-acceptance-source
