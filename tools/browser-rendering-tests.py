@@ -384,7 +384,11 @@ with sync_playwright() as playwright:
         for backend in backends:
             for repeat in range(4):
                 page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})');page.wait_for_timeout(100)
-                native_image = page.screenshot()
+                # Submission completion is not compositor presentation. Apply
+                # the same reference-independent stability prerequisite as the
+                # whole-IDE tests to EVERY mode switch, not just the baseline.
+                # A stable wrong image still fails the fixed zero-pixel oracle.
+                native_image = stable_html_reference(page, f'mnemonics-native-{backend}-{repeat}')
                 native = pixels(reference, native_image)
                 if native['changedPixels']:
                     # Retain the actual failing frame, not just a passing
@@ -396,7 +400,8 @@ with sync_playwright() as playwright:
                 check(native['changedPixels']==0, 'HTML mnemonic drift: '+str(native))
                 page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"],text:"native"})',backend)
                 check(page.evaluate('vb6Studio.rendering.backend')==backend, 'Mnemonic test silently fell back')
-                page.wait_for_timeout(100);image=page.screenshot()
+                page.wait_for_timeout(100)
+                image=stable_render_capture(page, f'mnemonics-switch-{backend}-{repeat}', backend)
                 (OUT/f'mnemonics-{backend}.png').write_bytes(image)
                 comparison=pixels(reference,image);comparison.update(backend=backend,repeat=repeat)
                 comparisons.append(comparison)
