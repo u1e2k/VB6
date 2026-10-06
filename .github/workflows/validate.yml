@@ -1,7 +1,7 @@
 name: Validate
 on:
   push:
-    branches: [main, feat/webgpu-ui-rendering]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -13,73 +13,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Publish reviewed theme and rendering integration
-        if: github.ref == 'refs/heads/feat/webgpu-ui-rendering'
-        shell: bash
-        run: |
-          mkdir -p /tmp/rendering-theme-integration
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-commit --no-ff 287475b6bf2e55cd0beda733264b501a897661a3 || true
-          python - <<'PY'
-          import re,json,hashlib,subprocess
-          from pathlib import Path
-          assert Path('.git/MERGE_HEAD').exists()
-          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
-          assert set(conflicts)=={'src/ide/ide-tools.js','src/ide/main.js','tools/ide-artifacts.json'}, conflicts
-          p=Path('src/ide/ide-tools.js');s=p.read_text();m=re.search(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]+\n',s,re.S);assert m
-          ours=m[1];assert ours.count('appearance={...a,windowMode:')==1
-          ours=ours.replace('appearance={...a,windowMode:','appearance={...a,...themeSettings.value(),windowMode:')
-          needle="if(!Object.hasOwn(before.settings,'errorTrapping')";assert ours.count(needle)==1
-          ours=ours.replace(needle,"if(!Object.hasOwn(before.settings,'anchoring')&&!settings.anchoring)delete settings.anchoring;"+needle)
-          p.write_text(s[:m.start()]+ours+s[m.end():])
-          p=Path('src/ide/main.js');s=p.read_text();m=re.search(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]+\n',s,re.S);assert m
-          ours=m[1];assert ours.count('applyTheme(document.documentElement,this.appearance.theme);')==1
-          ours=ours.replace('applyTheme(document.documentElement,this.appearance.theme);','(this.themeController??=new IdeThemeController(this.root.ownerDocument)).apply(this.appearance);')
-          p.write_text(s[:m.start()]+ours+s[m.end():])
-          manifest=json.loads(subprocess.check_output(['git','show',':2:tools/ide-artifacts.json'],text=True))
-          manifest['files']['dist/studio.js']={'bytes':5987548,'sha256':'5b670387199653b63834a78c653b8d958b4509e5863aa3f2030bd01fb91cfbbc'}
-          manifest['files']['dist/VB6-Studio-Web.html']={'bytes':6200317,'sha256':'0291425e6501532f2ae8a825045ffe47446c687c09a5537b6609410b9be42435'}
-          Path('tools/ide-artifacts.json').write_text(json.dumps(manifest,indent=2)+'\n')
-          assert hashlib.sha256(Path('.rendering-theme.patch').read_bytes()).hexdigest()=='0520af228edf4d62189410801fc9451eecec2ddcf3325a0776e00b0bdba1d1c6'
-          subprocess.run(['git','add','src/ide/ide-tools.js','src/ide/main.js','tools/ide-artifacts.json'],check=True)
-          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
-          PY
-          git apply --check .rendering-theme.patch
-          git apply .rendering-theme.patch
-          npm run build > /tmp/rendering-theme-integration/build.log 2>&1
-          npm test > /tmp/rendering-theme-integration/tests.log 2>&1
-          python - <<'PY'
-          import subprocess
-          expected={'src/ide/ide-tools.js':'9e063c8dce35040a3210e7e505fa6780a17b9859','src/ide/main.js':'d74af4143f20ff3530d77572e882d481e6766f6b','src/editor/editor.js':'14b21f4cd5467f54498f32532288dea4b1780acf','tools/build.mjs':'11c036da5a73eb43d2b431c87668e7bc78f11102','tools/ide-artifacts.json':'3590a3fd099c3f547e664b9e453e85d72b6b96d6','dist/studio.css':'cfae6362a79d364fa6536b65e042091b804cf01d','tools/browser-rendering-tests.py':'6e8ce38b35d451fb812d075b7cf0108a4a8c68e9','tools/verify-rendering-report.py':'6adaa95f5dfa36abd839802f2ba4de29bf39e077'}
-          for p,h in expected.items():assert subprocess.check_output(['git','hash-object',p],text=True).strip()==h,p
-          PY
-          git rm .rendering-theme.patch
-          git add src tools dist examples
-          git diff --cached --exit-code -- .github/workflows
-          git commit -m 'merge(rendering): preserve all optional IDE themes and both transactional settings panels'
-          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
-          git archive --format=tar.gz -o /tmp/rendering-theme-integration/source.tar.gz HEAD
-          git rev-parse HEAD > /tmp/rendering-theme-integration/head.txt
-      - uses: actions/upload-artifact@v4
-        if: always() && github.ref == 'refs/heads/feat/webgpu-ui-rendering'
-        with:
-          name: rendering-theme-verified-source
-          path: /tmp/rendering-theme-integration
-          retention-days: 3
       - run: npm run build
       - run: npm test
       - run: python -m pip install playwright==1.57.0
@@ -136,3 +77,54 @@ jobs:
             reports/ide-themes
           if-no-files-found: ignore
           retention-days: 7
+  rendering-qualification:
+    # One final pre-merge qualification; the job is retired afterwards to keep
+    # main's essential Validate/Pages policy. No additional workflow is created.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl2]
+        display: [headless, headed]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build && npm test
+      - run: python -m pip install playwright==1.57.0 Pillow
+      - name: Verify exact pixel-comparison statistics and bounds
+        run: python tools/test_rendering_pixels.py
+      - run: python -m playwright install --with-deps chromium
+      - name: Install software Vulkan presentation dependencies
+        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - name: Resolve test browser
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p: print('CHROMIUM_PATH=' + p.chromium.executable_path)
+          PY
+      - name: Required GPU execution including all eight optional IDE themes
+        env:
+          DISPLAY_MODE: ${{ matrix.display }}
+          REQUIRED_BACKEND: ${{ matrix.backend }}
+          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist
+        run: |
+          # Source: Chris Gervang, https://github.com/visgl/luma.gl/issues/2874
+          args=()
+          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
+      - name: Require all 39 cases and unchanged generated products
+        run: |
+          python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
+          git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-themes-${{ matrix.backend }}-${{ matrix.display }}
+          path: reports/rendering
+          retention-days: 14
