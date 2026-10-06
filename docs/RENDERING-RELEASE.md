@@ -33,10 +33,10 @@ queries are avoided. These mechanisms do not by themselves prove a whole-IDE
 speedup over the browser's HTML compositor.
 
 Event-driven mutation, CSSOM, input, resize and animation observation wakes paint
-when required and returns to idle afterward. The October 6 lifecycle correction
-defers newly encountered ResizeObserver targets to a coalesced task outside an
-active resize-delivery loop. It cancels and clears pending registrations during
-failure, backend replacement and disposal. See [RENDERING-RESIZE-LIFECYCLE.md](RENDERING-RESIZE-LIFECYCLE.md).
+when required and returns to idle afterward. Newly encountered ResizeObserver
+targets register in a coalesced task outside an active resize-delivery loop.
+Failure, backend replacement and disposal cancel and clear pending registrations.
+See [RENDERING-RESIZE-LIFECYCLE.md](RENDERING-RESIZE-LIFECYCLE.md).
 
 **Measure Rendering / Cancel Measurement / Save Report** runs a bounded workload
 on the actual local adapter without changing project or renderer preferences.
@@ -47,37 +47,47 @@ latency, FPS and CPU submission time are not interchangeable measurements.
 
 ## Integration and attribution
 
-The source incorporates main `728a9201806a4d455113867d2778c3262666a05b`, including
-its visual-fidelity CSS, caption/menu behavior and portable generated bundles,
-as well as the preceding scalar runtime, editor/IME, agent, native interoperability
-and data-provider work. Generated outputs are rebuilt from the combined source,
-not selected from one side of a merge conflict.
+The integration preserves main `e7cfde0a219569f4ab5bd5abadb2d337b6722efb` (native
+String interoperability) and `bd4f9cfbb753cf18cdc78d89744f31789a6e5b28` (agent
+recovery/compaction and diagnostics lifecycle), along with prior visual-fidelity,
+native debugger, editor/IME, agent and data-provider changes. The unpublished
+`55934004` continuation is reconciled with the newer remote resize/background
+corrections, retaining both sets of regression tests. Generated outputs are rebuilt
+from combined source, never selected from one side of a merge conflict.
 
 Jordan Scales' HN/98.css staircase-bevel attribution and complete MIT notice remain
 in source, distributed CSS and release packages. Independent CSSOM, Web Animations,
 DOM, CSSWG, WebGPU and layout-batching guidance is attributed at the relevant code.
 No third-party fonts are included by this change. Classic mnemonic marks use a
-scoped filled strip to avoid automatic underline raster drift; native glyphs,
-inline layout, prose underlines and high-contrast fallback are preserved.
+scoped filled strip; native glyphs, inline layout, prose underlines and high-contrast
+fallback are preserved.
 
 ## Acceptance and reproducibility
 
-The shared `tools/verify-rendering-report.py` gate requires **34 passed cases,
-zero failed and zero skipped** for each required GPU API. x64, ARM64 and container
-matrices exercise WebGPU/WebGL2 in headed/headless Chromium. Each requires actual
-API execution, exact framebuffer/presentation pixels and reproducible generated
-outputs. Consult the run on the PR's exact head; historical 19/30/33-case runs are
-not substitutes for current-source qualification.
+The shared `tools/verify-rendering-report.py` gate requires **38 distinct passed
+cases, zero failed and zero skipped** for each required GPU API. x64, ARM64 and
+container matrices exercise WebGPU/WebGL2 in headed/headless Chromium. Each requires
+actual API execution, exact framebuffer/presentation pixels and reproducible
+outputs. Consult the run on the PR's exact head; older 19/30/34-case runs are not
+substitutes for current-source qualification.
 
 Coverage includes six-DPI primitives/holes/clips/textures, four-DPI whole-IDE
 comparisons against HTML, repeated mnemonic switching, actual runtime controls
 and changed/disabled/selected states, multiple themes, mobile layout, detached
 Properties ownership, standalone calculator execution, CSSOM/animation wakeups,
 resize reentrancy, alpha compositing, retained scenes/textures, loss recovery,
-settings/measurement cancellation, persisted-page lifecycle and cleanup.
-The screenshot comparator's counts, errors and difference bounds are separately
-checked against scalar calculations, including single-channel and sparse changes.
-Neither pixel tolerance nor failure handling is relaxed.
+settings/measurement cancellation, persisted-page lifecycle and cleanup. The
+reconciled handoff adds sparse hover-event invalidation, no-op Options retention,
+same-backend settings submission before promise resolution, narrow fractional
+background-edge preservation and square-checkbox normal/checked/indeterminate
+paint. Radio buttons and keyboard/accessibility behavior are retained.
+
+The screenshot comparator is independently checked against scalar calculations,
+including single-channel and sparse changes. The software-GPU oracle disables
+partial raster and waits for compositor completion so native HTML tile reuse is
+not confused with GPU paint differences. These Chromium test flags are recorded
+in reports, never shipped to applications or imposed on the default physical-
+adapter measurement path. Pixel tolerance remains zero.
 
 ```
 npm run build
@@ -89,7 +99,7 @@ python tools/verify-rendering-report.py reports/rendering/report.json --backend 
 
 Restricted local browser runs explicitly skip unavailable APIs; those skips are
 not GPU qualification. Automated adapters are normally software SwiftShader.
-The evidence does **not** certify complete native Windows VB6 golden-image parity,
+This evidence does **not** certify complete native Windows VB6 golden-image parity,
 a fully GPU-only IDE, physical desktop/mobile acceleration, sustained frame pacing,
 power consumption or an end-to-end performance improvement over HTML/CSS.
 
@@ -97,4 +107,4 @@ Pre-captured native CSSOM methods/declarations and direct writes through previou
 saved adopted-sheet arrays can bypass observation; integrations can explicitly
 call `renderer.invalidateStyles()`. A built-in closed shadow root created before
 observation requires `data-vb-native-render`. These limitations remain documented
-rather than silently presented as complete browser-paint emulation.
+rather than presented as complete browser-paint emulation.

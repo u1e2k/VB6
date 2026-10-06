@@ -1,125 +1,68 @@
-# Rendering qualification — 2026-10-05
+# Dual-renderer validation — October 6, 2026
 
-## Historical qualification and current release scope
+## Current acceptance contract
 
-**The historical strict software-GPU pixel gate passed. The current expanded
-release requires its own 30-case runs; the earlier 18/19-case results are not
-current-source certification. Full GPU-only rendering and physical-device
-performance have not been certified. See [RENDERING-RELEASE.md](RENDERING-RELEASE.md).**
+`tools/verify-rendering-report.py` requires **38 distinct cases, zero failures and
+zero skips** for each selected GPU API. WebGPU/WebGL2 run independently in headed
+and headless Chromium on x64, ARM64 and lightweight Linux containers. A fallback
+cannot satisfy a required-backend case. Generated distributions must reproduce
+exactly from the merged authored source.
 
-The attributed classic HTML/CSS improvements are already merged separately in
-[PR #36](https://github.com/wieslawsoltes/VB6/pull/36), commit
-`2b4f9dd50fc20c36f2a48d3c8586e4063277ff69`. This rendering branch incorporates that
-release without losing its current debugger, form-input, native-call or region
-changes. Main's UI renderer preference was not changed by PR #36.
+Coverage includes independent GPU framebuffer readback and presentation pixels
+at six device-pixel ratios; four-ratio whole-IDE HTML reference comparisons;
+repeated mode switches; eight-ratio background edges; actual controls, themes,
+selection, disabled/checked/indeterminate states; mobile layout; detached windows;
+standalone calculator execution; CSSOM/animation/resize wakeups; actual device and
+context loss; ownership, cancellation and teardown; retained geometry and replaced
+textures; and the reconciled hover and same-backend Options regressions.
 
-## First complete strict GPU pass
+The screenshot comparator itself has independent scalar verification. Zero-pixel
+comparisons remain zero-pixel comparisons; no reference is replaced with GPU
+output, no region is masked, and no difference tolerance is introduced.
 
-[Run 37356581025](https://github.com/wieslawsoltes/VB6/actions/runs/37356581025),
-source `37e94823d0c8811dcd17a5cc0e642176362d033e`, passed all four independent jobs:
-WebGPU/headless, WebGPU/headed, WebGL2/headless and WebGL2/headed. Each job requires
-its selected backend to execute rather than accepting a fallback as success.
-Generated distributions were reproducible in all four jobs.
+## Reconciled source
 
-The downloaded WebGPU/headless report contains **18 passed, 0 failed, 0 skipped**
-browser cases. It records:
+The release combines local `55934004`, remote renderer `34740322`, main `e7cfde0a`
+(native debugger and String interoperability), and subsequent main `bd4f9cfb`
+(agent recovery/compaction and diagnostics lifecycle). Conflicting generated
+output is rebuilt, not chosen from one side. Both the newer deferred ResizeObserver
+registration and the local pointer/settings/checkbox corrections are retained.
+See [the continuation record](RENDERING-CONTINUATION-2026-10-06.md) for source
+lineage and narrow native-edge preservation details.
 
-- Exact solid, clip, transparent-hole and texture framebuffer/presentation pixels
-  at DPR 1, 1.25, 1.5, 2, 3 and 4. Direct texture readback is separate from the
-  screenshot check, so a blank overlay cannot pass solely by exposing HTML.
-- Zero changed pixels in all 12 IDE comparisons: Canvas2D, WebGL2 and WebGPU
-  against the existing HTML fixture at DPR 1, 1.25, 1.5 and 2.
-- Options cancel/apply/export, ordered fallback, asynchronous startup ownership,
-  actual device/context loss and final cleanup.
-- One hundred unchanged UI render requests with **zero submitted frames**, the
-  same retained geometry snapshot and 100 recorded unchanged-frame skips.
-- A forced render submits once; CSSOM width changes trigger resize observation;
-  a finite CSS background animation reaches its correct final color and returns
-  to zero idle submissions. Switching to HTML clears observed-node resources.
+Local validation before the final `bd4f9cfb` integration passed **3,180 Node tests**,
+**14 classic HTML browser cases**, and the required-WebGL2 suite in both headed
+and headless Chromium: **37 passed, zero failed, one explicitly skipped WebGPU
+device-loss case** each. These local skips are not GPU certification. The
+published-source runs linked from [PR #21](https://github.com/wieslawsoltes/VB6/pull/21)
+are the final-head acceptance evidence; earlier 19/30/34-case reports are historical.
 
-The historical initialization/blank-frame failures in runs 37300456342 and
-37299509999 do not describe this passing source. The last two-pixel fractional
-IDE discrepancy also existed with the overlay hidden. A scoped classic mnemonic
-`text-decoration-skip-ink: none` rule passed that initial sequence. Expanded
-repeated captures later exposed residual native underline drift; see the current
-correction below. The pixel gate still requires **zero** changed pixels.
+## Reproducible software-adapter screenshots
 
-## Retained texture-source follow-up
+A local Chromium 144 investigation reproduced a changing native HTML border at
+fractional DPI even after the overlay was removed. Speculative permanent
+application promotion/isolation hints were discarded. The explicit software-GPU
+test profile uses `--disable-partial-raster` and
+`--run-all-compositor-stages-before-draw` to capture complete native raster and
+compositor output. These switches are documented in the
+[Google Chrome launcher guidance](https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md#rendering--gpu),
+are recorded in every report, and affect only this requested test profile.
+Application CSS and normal/hardware measurement paths do not get these flags.
 
-Source `ff944059d27f2188071faedddf45af47e31516c7` additionally fixes stale images
-when a page's canvas is replaced without changing its dimensions or revision.
-Both GPU texture caches now compare the source object as well as revision and
-size. Two unit regressions and a nineteenth browser case require exact red-to-green
-texture replacement while sealed geometry is uploaded only once.
+## Performance and coverage boundaries
 
-The integrated source passes **2,386 Node tests** locally; the texture-publication
-workflow also passed its full build and Node suite. Inspect the GPU workflow on
-the PR's current head for the follow-up's complete 19-case backend results. The
-18-case run above is explicitly the earlier retained-scene baseline, not evidence
-that the subsequent texture case ran there.
+The renderer skips identical output, retains geometry uploads and batches, and
+tracks texture revisions/source identity separately. Tests require a 10,000-quad,
+60-frame workload to reuse one geometry upload and one compatible draw batch.
+These structural assertions are not fabricated FPS or proof of whole-IDE speedup.
+The classic measurement tool reports actual adapter identity, raw CPU submission
+samples and optional real GPU pass timestamps, with quantization and software
+adapters explicit. Production frames allocate no diagnostic readbacks.
 
-## Performance evidence and limitations
-
-All measurements below are from the first passing WebGPU/headless report,
-Chromium 143.0.7499.4 on Linux, **Google SwiftShader software adapter**. They are
-not physical GPU timing, presentation latency, sustained FPS or power measurements.
-
-| Workload | Recorded result |
-| --- | --- |
-| 10,000 sealed opaque quads, 60 frames | One draw per frame; one buffer allocation, geometry pack, batch build and geometry upload across all frames |
-| CPU submission for that workload | Median about 0.10 ms; 95th percentile about 0.30 ms |
-| Actual 1,498-command IDE, forced scene rebuild | CPU build median about 11.4 ms; 95th percentile about 21.9 ms |
-| Unchanged live UI fixture | Zero GPU submissions for 100 identical render requests |
-
-The forced whole-IDE build cost is material. Avoiding redundant submissions and
-uploads is useful, but these results do **not** establish a whole-IDE speedup over
-HTML/CSS or a high-refresh-rate frame budget. No speedup is inferred from a forced
-rebuild benchmark that accidentally skips painting: that test uses `force: true`.
-
-## Remaining acceptance gates
-
-1. Qualify complete runtime/control states, themes, editor selection/IME,
-   popups, scrolling, detached windows and mobile layouts against approved
-   references. Existing HTML screenshots are not native Microsoft VB6 goldens.
-2. Measure representative physical desktop/mobile GPUs against HTML/CSS for
-   scene/layout CPU cost, GPU time, frame pacing, interaction latency, memory and
-   sustained performance. Software adapter CPU timings cannot substitute.
-3. Complete the remaining GPU-painted surfaces before calling this a fully
-   WebGPU-rendered IDE. Layout, accessibility, native editing, text, icons,
-   existing graphics canvases and unsupported CSS still rely on DOM/native paint.
-4. The final integration adds CSSOM and script-created animation observation.
-   Pre-captured native references and direct indexed adopted-sheet array edits
-   still require the explicit invalidation hook; see the release document.
-
-See [RENDERING.md](RENDERING.md) for API and settings. Keep the qualification boundaries separate: passing software-GPU cases does not
-constitute physical-hardware or native Windows visual certification. This release
-ships the validated dual-renderer integration, not a claim that these broader
-compatibility goals are complete.
-
-## Current expanded integration and mnemonic regression
-
-The source includes main `f4ee8d47` and its coding-agent conversation work. Local
-validation passes **2,606 Node tests** and **22 rendering browser cases**, with
-**eight explicitly skipped GPU-dependent cases** in the restricted local browser.
-The permanent GPU matrices require **30 passed, zero failed and zero skipped**
-for each WebGPU/WebGL2 headed/headless configuration, plus reproducible outputs.
-Check the workflow on the PR's exact head for its completed current-source result.
-
-The earlier expanded 29-case source `846ce81` exposed a two-pixel mismatch at
-DPR 1.5; a separate x64 job happened to pass the same sequence. Direct framebuffer
-readback at those pixels was transparent. Repeated native HTML/hidden-overlay
-captures demonstrated that automatic mnemonic underline coverage itself varied.
-Neither wider native holes nor explicit underline thickness reliably corrected it.
-
-[Investigation run 37379475588](https://github.com/wieslawsoltes/VB6/actions/runs/37379475588)
-alternated native underline controls with an explicit filled background strip.
-All 16 strip-based renderer switches, their hidden-overlay comparisons and native
-baseline captures were pixel-identical; the native controls still varied.
-The implementation therefore paints only classic mnemonic marks as filled strips,
-retains native glyph/layout/color behavior, and restores native underlines for
-forced colors. The permanent thirtieth case checks repeated full-IDE pixels,
-geometry, disabled/larger text, untouched prose and high-contrast visibility.
-
-The drawing-command/pixel tests and local-adapter measurement tool cover a bounded
-dual-renderer implementation. They are not evidence of a complete DOM-free UI,
-native Windows VB6 golden-image equivalence or a physical-GPU speedup.
+This release is **WebGPU-first hybrid DOM/GPU rendering** with HTML/CSS retained.
+Native layout, accessibility, editing/IME, native text/widgets/icons and unsupported
+CSS remain browser-painted. Passing these bounded software-adapter fixtures does
+not certify fully GPU-only painting, every native Microsoft VB6 Windows pixel,
+physical desktop/mobile acceleration, sustained FPS, input latency or power use.
+Representative physical-hardware comparisons and native Windows reference matrices
+remain broader qualification work, not completed claims of this merge.

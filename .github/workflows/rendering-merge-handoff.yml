@@ -1,8 +1,8 @@
-name: Publish reconciled rendering sources
+name: Integrate final agent recovery main
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
-    paths: [.rendering-reconcile.xz, .github/workflows/rendering-merge-handoff.yml]
+    paths: [.github/workflows/rendering-merge-handoff.yml]
 permissions:
   contents: write
 concurrency:
@@ -23,46 +23,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Merge pinned main without losing authored changes
+      - name: Preserve newly merged recovery and diagnostics changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-commit --no-ff e7cfde0a219569f4ab5bd5abadb2d337b6722efb || true
+          git merge --no-commit --no-ff bd4f9cfbb753cf18cdc78d89744f31789a6e5b28 || true
           python - <<'PY'
-          import subprocess,hashlib,lzma
           from pathlib import Path
-          assert Path('.git/MERGE_HEAD').exists(), 'Expected pinned main merge'
+          import subprocess
+          assert Path('.git/MERGE_HEAD').exists()
           conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
-          allowed={'dist/VB6-Studio-Web.html','dist/studio.js','dist/vb6-native.js','src/exporter/runtime-payload.js'}
-          assert set(conflicts)<=allowed, conflicts
+          assert set(conflicts)<={'dist/VB6-Studio-Web.html','dist/studio.js','src/exporter/runtime-payload.js'}, conflicts
           for path in conflicts:
               subprocess.run(['git','checkout','--ours','--',path],check=True)
               subprocess.run(['git','add','--',path],check=True)
-          # Workflow definitions were installed through the authorized connector.
-          # The source-building token must not modify any workflow definitions.
           subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
-          packed=Path('.rendering-reconcile.xz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest()=='eadd2b198f2aba4cd975442a943560d362983a357b142bbacf07615148870a3d'
-          patch=lzma.decompress(packed)
-          assert hashlib.sha256(patch).hexdigest()=='1c105b5129e3f6fbec5de4270023a7f98ec0249e96b2a7827a85dbd501546092'
-          Path('/tmp/rendering-reconcile.patch').write_bytes(patch)
           PY
-          git apply --check /tmp/rendering-reconcile.patch
-          git apply /tmp/rendering-reconcile.patch
           npm run build && npm test
-      - name: Commit ordinary source and reproducible distributions
-        run: |
-          git rm .rendering-reconcile.xz
-          git add docs/RENDERING-CONTINUATION-2026-10-06.md src/rendering src/theme/bevels.css tests/rendering-background.test.mjs tests/rendering-mutations.test.mjs tests/rendering-options-lifecycle.test.mjs tests/classic-bevels.test.mjs tools/browser-rendering-tests.py tools/verify-rendering-report.py dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
           git diff --cached --exit-code -- .github/workflows
-          git commit -m 'merge(rendering): reconcile local continuation, retained settings and latest native runtime'
+          git commit -m 'merge: retain agent recovery and diagnostics lifecycle in dual-renderer release'
           git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
-          git archive --format=tar.gz -o /tmp/rendering-reconciled-source.tar.gz HEAD
-          git rev-parse HEAD > /tmp/rendering-reconciled-head.txt
+          git bundle create /tmp/rendering-final-source.bundle HEAD
       - uses: actions/upload-artifact@v4
         with:
-          name: rendering-reconciled-source
-          path: |
-            /tmp/rendering-reconciled-source.tar.gz
-            /tmp/rendering-reconciled-head.txt
+          name: rendering-final-source
+          path: /tmp/rendering-final-source.bundle
           retention-days: 7
