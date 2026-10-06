@@ -320,7 +320,15 @@ with sync_playwright() as playwright:
         for backend in backends:
             for repeat in range(4):
                 page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})');page.wait_for_timeout(100)
-                native = pixels(reference, page.screenshot())
+                native_image = page.screenshot()
+                native = pixels(reference, native_image)
+                if native['changedPixels']:
+                    # Retain the actual failing frame, not just a passing
+                    # baseline or the following GPU screenshot.
+                    (OUT/f'mnemonics-native-{backend}-{repeat}-failure.png').write_bytes(native_image)
+                    x, y = native['bounds'][:2]
+                    details = page.evaluate('''([x,y])=>({stats:vb6Studio.rendering.getStats(),nodes:document.elementsFromPoint((x+.5)/devicePixelRatio,(y+.5)/devicePixelRatio).slice(0,6).map(n=>{const r=n.getBoundingClientRect(),s=getComputedStyle(n);return {tag:n.tagName,class:n.className,rect:r.toJSON(),border:s.border,shadow:s.boxShadow,opacity:s.opacity,transform:s.transform,isolation:s.isolation};})})''',[x,y])
+                    (OUT/f'mnemonics-native-{backend}-{repeat}-failure.json').write_text(json.dumps(details,indent=2))
                 check(native['changedPixels']==0, 'HTML mnemonic drift: '+str(native))
                 page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"],text:"native"})',backend)
                 check(page.evaluate('vb6Studio.rendering.backend')==backend, 'Mnemonic test silently fell back')

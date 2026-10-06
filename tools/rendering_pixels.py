@@ -19,6 +19,6 @@ def compare_pixels(first_bytes, second_bytes):
     channels = difference.histogram()
     count = first.width * first.height
     changed = count - maximum[0]
-    return {'changedPixels': changed, 'pixels': count, 'fraction': changed / count,
+    return {'bounds': difference.getbbox(), 'changedPixels': changed, 'pixels': count, 'fraction': changed / count,
             'maxChannelError': max(i for i, n in enumerate(maximum) if n),
             'meanChannelError': sum((i % 256) * n for i, n in enumerate(channels)) / (count * 3)}
