@@ -156,7 +156,7 @@ test('compaction: failed checkpoint preserves a validated deferred batch exactly
   await f.agent.resume({maxCalls: 1, transport: async (_, {receive}) => receive(packet('openai', [get, get]))});
   const pending = f.agent.pendingTurn, history = structuredClone(f.agent.history);
   await f.agent.compact({maxRetries: 0, transport: async () => { throw new ProviderTransportError('Offline', {retryable: true}); }});
-  assert.equal(f.agent.pendingTurn, pending); assert.deepEqual(f.agent.history, history); assert.ok(f.agent.canResume);
+  assert.equal(f.agent.pendingTurn, pending); assert.deepEqual(f.agent.history, history); assert.equal(f.agent.canResume, true);
 });
 test('compaction: Stop during a summary retains original context and ignores a late checkpoint', async t => {
   const f = fixture(t); await prepare(f, 'openai', 1); const before = structuredClone(f.agent.history); let release;
