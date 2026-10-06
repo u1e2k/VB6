@@ -1,0 +1,191 @@
+diff --git a/src/rendering/background.js b/src/rendering/background.js
+index b9f89cf..f625be2 100644
+--- a/src/rendering/background.js
++++ b/src/rendering/background.js
+@@ -32,11 +32,43 @@ export function solidBackgroundLayers(style) {
+   });
+ }
+ export function paintBackgroundLayers(scene, rect, clip, layers) {
+-  const [x,y,width,height]=rect;
++  const [x,y,width,height]=rect, painted=[];
+   for(let i=layers.length-1;i>=0;i--) {
+     const layer=layers[i], w=resolve(layer.size[0],width), h=resolve(layer.size[1],height);
+     // Percent position applies to the remaining space, not the whole box.
+     const left=x+resolve(layer.position[0],width-w), top=y+resolve(layer.position[1],height-h);
+-    scene.add([left,top,w,h],layer.color,{clip});
++    const area=[left,top,w,h];
++    scene.add(area,layer.color,{clip});
++    if(layer.color[3]>0 && w>0 && h>0) painted.push(area);
++  }
++  return painted;
++}
++
++/** Preserve a thin device-pixel coverage strip at fractional edges of
++ * authored background images. Image bounds need not match the layout border:
++ * a two-CSS-pixel classic bevel can extend inside a one-pixel border. Rounding
++ * only the outer box then loses the inner image's partial pixel at e.g. DPR 1.25.
++ * CSS Backgrounds: https://www.w3.org/TR/css-backgrounds-3/#background-size
++ * Interiors are still GPU quads. Clear these strips after the complete box paint
++ * but before its children, so later siblings/children keep their stacking order.
++ */
++export function preserveBackgroundEdges(scene, rectangles, clip) {
++  const dpr=scene.dpr, seen=new Set();
++  const edge=(coordinate,start,extent,vertical,fractionalBox)=>{
++    const pixel=coordinate*dpr;
++    if((!fractionalBox && Math.abs(pixel-Math.round(pixel))<1e-6) || extent<=0) return;
++    // CSS image origins and image extents may round independently. Include
++    // a one-device-pixel halo around the coverage pixel, never the whole box.
++    const low=(Math.floor(pixel)-1)/dpr;
++    const rect=vertical?[low,start,3/dpr,extent]:[start,low,extent,3/dpr];
++    const key=rect.join(',');if(seen.has(key))return;seen.add(key);
++    scene.native(rect,clip,'fractional CSS background edge');
++  };
++  for(const [x,y,w,h] of rectangles){
++    // Fractional CSS boxes may shift an otherwise integral device edge when
++    // the browser computes its image positioning area from rounded box metrics.
++    const fractionalBox=[x,y,w,h].some(value=>Math.abs(value-Math.round(value))>1e-6);
++    edge(x,y,h,true,fractionalBox);edge(x+w,y,h,true,fractionalBox);
++    edge(y,x,w,false,fractionalBox);edge(y+h,x,w,false,fractionalBox);
+   }
+ }
+diff --git a/src/rendering/dom-scene.js b/src/rendering/dom-scene.js
+index 5cb3667..99c9b62 100644
+--- a/src/rendering/dom-scene.js
++++ b/src/rendering/dom-scene.js
+@@ -1,6 +1,6 @@
+ import {PaintScene, parseColor, splitCSS} from './scene.js';
+ import {intersect} from './policy.js';
+-import {solidBackgroundLayers, paintBackgroundLayers} from './background.js';
++import {solidBackgroundLayers, paintBackgroundLayers, preserveBackgroundEdges} from './background.js';
+ import {requiresNativeShadowPaint} from './style-activity.js';
+ import {hasPartialAlpha, canvasBackground} from './paint-compat.js';
+ const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
+@@ -136,7 +136,7 @@ export class DOMScene {
+     }
+     const box = this.box(node);
+     const scaleX = box.width ? rect[2] / box.width : 1, scaleY = box.height ? rect[3] / box.height : 1;
+-    let borders, shadows, background, gradient, layers;
++    let borders, shadows, background, gradient, layers, backgroundRects;
+     try {
+       if (!style.paint) {
+         const sourceBorders = ['Top', 'Right', 'Bottom', 'Left'].map(side => ({width: number(style['border' + side + 'Width']), style: style['border' + side + 'Style'], color: parseColor(style['border' + side + 'Color'])}));
+@@ -155,7 +155,7 @@ export class DOMScene {
+       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
+       this.scene.add(rect, background, {clip});
+       if (gradient) this.scene.add(rect, gradient.start, {clip, color2: gradient.end, vertical: gradient.vertical});
+-      if (layers) { paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
++      if (layers) { backgroundRects = paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
+       const [t, r, b, l] = borders.map(item => item.width), [x, y, w, h] = rect;
+       // CSS solid border corners are split diagonally. Use native corner squares
+       // for multicolor bevels; long edges remain native GPU primitives.
+@@ -186,6 +186,7 @@ export class DOMScene {
+           [x + w - r - sx - pad, y - sy - pad, r + 2 * (sx + pad), h + 2 * (sy + pad)]
+         ]) this.scene.native(edge, clip, 'fractional CSS edge');
+       }
++      if (backgroundRects) preserveBackgroundEdges(this.scene, backgroundRects, intersect(rect,clip));
+     }
+     let childClip = clip;
+     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {
+diff --git a/tests/rendering-background.test.mjs b/tests/rendering-background.test.mjs
+index 3b9cd2e..eb714e2 100644
+--- a/tests/rendering-background.test.mjs
++++ b/tests/rendering-background.test.mjs
+@@ -1,6 +1,6 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+-import {solidBackgroundLayers,paintBackgroundLayers} from '../src/rendering/background.js';
++import {solidBackgroundLayers,paintBackgroundLayers,preserveBackgroundEdges} from '../src/rendering/background.js';
+ import {PaintScene} from '../src/rendering/scene.js';
+ import {UIRenderer} from '../src/rendering/renderer.js';
+ const style={backgroundImage:'linear-gradient(rgb(0, 0, 0), rgb(0, 0, 0)), linear-gradient(rgb(255, 255, 255), rgb(255, 255, 255))',backgroundSize:'1px 100%,100% 2px',backgroundPosition:'100% 0%,0% 0%',backgroundRepeat:'no-repeat',backgroundOrigin:'border-box',backgroundClip:'border-box'};
+@@ -30,3 +30,27 @@ test('failed first paint disconnects mutation observation before HTML fallback',
+  assert.deepEqual(r.attempts,[{backend:'webgpu',reason:'first draw failed'}]);
+  assert.equal(resized,1);assert.equal(cleared,1);assert.equal(r.observedElements.size,0);
+ });
++
++test('background layers return their unsnapped authored rectangles',()=>{
++ const scene=new PaintScene(200,100,{dpr:1.25}),layers=solidBackgroundLayers(style);
++ const rects=paintBackgroundLayers(scene,[3,7,74,51],scene.clip,layers);
++ assert.deepEqual(rects,[[3,7,74,2],[76,7,1,51]]);
++ assert.notDeepEqual(scene.commands[0].rect,rects[0]);
++});
++test('fractional inner bevel edges preserve bounded coverage, not the whole control',()=>{
++ const scene=new PaintScene(200,100,{dpr:1.25});
++ preserveBackgroundEdges(scene,[[75,8,2,40],[75,8,2,40]],scene.clip);
++ assert.equal(scene.commands.length,2); // shared edges are deduplicated
++ assert.deepEqual(scene.commands.map(c=>c.rect.map(v=>Math.round(v*1.25))),[[92,10,3,50],[95,10,3,50]]);
++ assert.ok(scene.commands.every(c=>c.hole && Math.abs(c.rect[2]*1.25-3)<1e-9));
++});
++test('integer background edges need no native coverage and fractional edges stay clipped',()=>{
++ for(const dpr of [1,2,3,4]){
++   const scene=new PaintScene(200,100,{dpr});
++   preserveBackgroundEdges(scene,[[3,7,74,51]],scene.clip);
++   assert.equal(scene.commands.length,0);
++ }
++ const scene=new PaintScene(200,100,{dpr:1.5});
++ preserveBackgroundEdges(scene,[[3,7,74,51]],[10,10,40,20]);
++ assert.equal(scene.commands.length,0);
++});
+diff --git a/tools/browser-rendering-tests.py b/tools/browser-rendering-tests.py
+index 996db25..d1824b0 100644
+--- a/tools/browser-rendering-tests.py
++++ b/tools/browser-rendering-tests.py
+@@ -304,6 +304,45 @@ with sync_playwright() as playwright:
+         check(not page.errors,str(page.errors));page.close();return data
+     case('Studio retained renderer survives persisted page lifecycle and releases on final pagehide',studio_page_lifecycle)
+ 
++    def layered_background_edges():
++        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
++        results=[]
++        for dpr in [1,1.25,1.5,1.75,2,2.5,3,4]:
++            page = new_page(browser,dpr)
++            page.evaluate("""()=>{
++              document.head.insertAdjacentHTML('beforeend',`<style>
++                .edge-fixture{position:absolute;box-sizing:border-box;left:3px;top:7px;width:74px;height:91px;border:1px solid transparent;background-color:rgb(192,192,192);overflow:hidden;
++                  background-image:linear-gradient(black,black),linear-gradient(black,black),linear-gradient(white,white),linear-gradient(white,white),linear-gradient(gray,gray),linear-gradient(gray,gray),linear-gradient(rgb(223,223,223),rgb(223,223,223)),linear-gradient(rgb(223,223,223),rgb(223,223,223));
++                  background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
++                  background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
++                  background-origin:border-box;background-clip:border-box;background-repeat:no-repeat}
++                .edge-fixture:nth-child(2){left:83.25px;top:7.5px;width:74.5px;height:91.25px}
++                .edge-fixture:nth-child(3){left:163px;top:7px}
++                .edge-fixture:nth-child(3) div{position:absolute;left:0;top:23px;width:90px;height:30px;background:rgb(0,255,0)}
++              </style>`);
++              document.body.innerHTML='<div class="edge-fixture"></div><div class="edge-fixture"></div><div class="edge-fixture"><div></div></div>';
++              window.edgeRenderer=new VB6Rendering.UIRenderer(document,{backend:'html'});
++            }""")
++            page.wait_for_timeout(80);before=page.screenshot()
++            page.evaluate('backend=>edgeRenderer.setOptions({backend,fallbacks:["html"]})',backend)
++            check(page.evaluate('edgeRenderer.backend')==backend,'Background edge fixture fell back')
++            page.wait_for_timeout(80);after=page.screenshot();comparison=pixels(before,after)
++            (OUT/f'background-edges-{dpr}-html.png').write_bytes(before)
++            (OUT/f'background-edges-{dpr}-{backend}.png').write_bytes(after)
++            check(comparison['changedPixels']==0,'Internal background edge mismatch: '+str(dict(dpr=dpr,**comparison)))
++            # The interior must still be painted, not replaced by a native
++            # whole-element hole to obtain the matching screenshot.
++            paints=page.evaluate("""()=>{
++              let color=null;for(const c of edgeRenderer.adapter.scene.commands){
++                if(30>=c.rect[0]&&50>=c.rect[1]&&30<c.rect[0]+c.rect[2]&&50<c.rect[1]+c.rect[3]&&30>=c.clip[0]&&50>=c.clip[1]&&30<c.clip[0]+c.clip[2]&&50<c.clip[1]+c.clip[3])color=c.hole?null:c.color;
++              }return color;
++            }""")
++            check(paints and paints[3]==1 and abs(paints[0]-192/255)<1e-9,'Background interior stopped using selected painter')
++            page.evaluate('edgeRenderer.dispose();undefined');check(not page.errors,str(page.errors));page.close()
++            results.append(dict(dpr=dpr,backend=backend,**comparison))
++        return {'comparisons':results,'opaqueInteriorsRetained':True}
++    case('layered background inner edges preserve exact pixels and opaque interiors across eight DPRs',layered_background_edges)
++
+     def mnemonic_stability():
+         # Native automatic underline coverage used to drift even when the GPU
+         # canvas was transparent. A single screenshot could pass by accident.
+diff --git a/tools/verify-rendering-report.py b/tools/verify-rendering-report.py
+index e142e07..cbc358a 100644
+--- a/tools/verify-rendering-report.py
++++ b/tools/verify-rendering-report.py
+@@ -8,7 +8,7 @@ import argparse
+ import json
+ from pathlib import Path
+ 
+-EXPECTED_CASES = 34
++EXPECTED_CASES = 35
+ 
+ def verify(report, backend):
+     expected = {'passed': EXPECTED_CASES, 'failed': 0, 'skipped': 0}

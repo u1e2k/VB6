@@ -1,0 +1,75 @@
+name: Integrate reviewed fractional background painting
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.rendering-background.patch, .github/workflows/rendering-background-integrate.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-reviewed-integration
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preserve latest native debugger changes and apply reviewed image-edge correction
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 2a45fce5f25b5f9e214acb82384119d00d7510cc || true
+          python - <<'PY'
+          import subprocess,hashlib
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          for path in conflicts:
+              if path.startswith(('dist/','examples/')) or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js']:
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+              elif path=='.gitignore':
+                  ours=subprocess.check_output(['git','show',':2:.gitignore']).decode().splitlines()
+                  theirs=subprocess.check_output(['git','show',':3:.gitignore']).decode().splitlines()
+                  assert not any(line.startswith('!') for line in ours+theirs)
+                  Path(path).write_text('\n'.join(dict.fromkeys(ours+theirs))+'\n')
+              elif path=='src/runtime/host.js':
+                  main=subprocess.check_output(['git','show','2a45fce5f25b5f9e214acb82384119d00d7510cc:src/runtime/host.js']).decode()
+                  before="if(options.bridgeToken)window.addEventListener('message',this.messageHandler);}"
+                  after="if(options.bridgeToken)window.addEventListener('message',this.messageHandler);if(options.rendering!==false){this.renderingSession=retainRenderer(container.ownerDocument,options.rendering||project.settings?.rendering||{});this.renderer=this.renderingSession.renderer;}}"
+                  assert main.count(before)==1 and main.count('dispose(){this.disposed=true;')==1
+                  main="import {retainRenderer} from '../rendering/renderer.js';\n"+main.replace(before,after).replace('dispose(){this.disposed=true;','dispose(){this.disposed=true;this.renderingSession?.release();')
+                  Path(path).write_text(main)
+              else:
+                  raise RuntimeError('Unreviewed authored conflict: '+path)
+              subprocess.run(['git','add','--',path],check=True)
+          assert Path('.git/MERGE_HEAD').exists()
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          assert hashlib.sha256(Path('.rendering-background.patch').read_bytes()).hexdigest()=='43c72750ed8e64a205b9b435f283fd56284c140b5bfa7428febda3023b44582e'
+          PY
+          git apply --check .rendering-background.patch
+          git apply .rendering-background.patch
+          npm run build && npm test
+      - name: Commit combined source and reproducible distributions
+        run: |
+          git rm .rendering-background.patch
+          git add src/rendering/background.js src/rendering/dom-scene.js tests/rendering-background.test.mjs tools/browser-rendering-tests.py tools/verify-rendering-report.py dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'fix(rendering): preserve fractional background-edge coverage with retained GPU interiors'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git bundle create /tmp/rendering-validated-source.bundle HEAD refs/remotes/origin/main
+          git rev-parse HEAD > /tmp/rendering-validated-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-background-reviewed-source
+          path: |
+            /tmp/rendering-validated-source.bundle
+            /tmp/rendering-validated-head.txt
+          retention-days: 7
