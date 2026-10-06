@@ -7,13 +7,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: rendering-container-${{ github.head_ref || github.ref }}
+  group: rendering-container-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   gpu:
-    # Independent software-driver correctness coverage on a lightweight runner.
-    # No physical-GPU speed or whole-IDE performance certification is inferred.
-    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners
+    # Software-driver correctness on a memory-constrained runner, not hardware qualification.
     runs-on: ubuntu-slim
     timeout-minutes: 15
     strategy:
@@ -51,12 +49,7 @@ jobs:
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
       - name: Complete case execution and reproducible distributions
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          report=json.loads(Path('reports/rendering/report.json').read_text())
-          assert report['summary']=={'passed':31,'failed':0,'skipped':0}, report['summary']
-          PY
+          python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
           git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
         if: always()

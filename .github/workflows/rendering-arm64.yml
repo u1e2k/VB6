@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: rendering-arm64-${{ github.head_ref || github.ref }}
+  group: rendering-arm64-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   gpu:
@@ -48,12 +48,7 @@ jobs:
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
       - name: Require complete case execution and reproducible distributions
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          report=json.loads(Path('reports/rendering/report.json').read_text())
-          assert report['summary']=={'passed':31,'failed':0,'skipped':0}, report['summary']
-          PY
+          python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
           git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
         if: always()
