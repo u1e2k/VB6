@@ -55,6 +55,12 @@ native debugger, editor/IME, agent and data-provider changes. The unpublished
 corrections, retaining both sets of regression tests. Generated outputs are rebuilt
 from combined source, never selected from one side of a merge conflict.
 
+The final integration `2b762488e515952ac3c3c0c24e681080b5f01e5a` also preserves
+main `31030f9dda549dcfacc83eb06f3b69b41d6fb39b`: Win32 browser services 0.5.0 and
+six samples, native DATE/cancellable debugger breaks, optional anchoring, standalone
+compute, OCX and all account/agent work. The standalone painter's shaders and the
+previously qualified rendering regressions are retained.
+
 Jordan Scales' HN/98.css staircase-bevel attribution and complete MIT notice remain
 in source, distributed CSS and release packages. Independent CSSOM, Web Animations,
 DOM, CSSWG, WebGPU and layout-batching guidance is attributed at the relevant code.
@@ -96,6 +102,21 @@ python tools/test_rendering_pixels.py
 python tools/browser-rendering-tests.py --require-webgpu --software-gpu
 python tools/verify-rendering-report.py reports/rendering/report.json --backend webgpu
 ```
+
+Source checkouts and source ZIPs must be built first. The 26 large IDE/runtime,
+embedded-payload and standalone-sample products follow main's generated-artifact
+policy: they are not tracked snapshots. Every normal build checks their exact
+path, byte length and SHA-256 against `tools/ide-artifacts.json`. Updating those
+expectations is a separate explicit authoring operation, prohibited in CI.
+Other tracked generated CSS/SDK files retain their existing reproducibility guards.
+See [IDE-BUILD-ARTIFACTS.md](IDE-BUILD-ARTIFACTS.md).
+
+The combined implementation passed **4,014 Node tests**, both in the working
+checkout and in a fresh source-only extraction. All **1,054 source files** stayed
+unchanged after the fresh build/test; all 26 generated-product fingerprints matched.
+Local rendering passed 30 cases with eight explicitly unavailable-GPU skips, and
+classic HTML passed 14 cases. These are local-source checks, not replacements for
+the required 38-case GPU jobs on the final PR head.
 
 Restricted local browser runs explicitly skip unavailable APIs; those skips are
 not GPU qualification. Automated adapters are normally software SwiftShader.
