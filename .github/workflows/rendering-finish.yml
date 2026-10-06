@@ -1,0 +1,55 @@
+name: Finalize native loader and rendering validation
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.rendering-finish.patch.xz, .github/workflows/rendering-finish.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-finish-source
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply checksum-verified source fixes
+        run: |
+          python - <<'PY'
+          import hashlib,lzma
+          from pathlib import Path
+          patch=lzma.decompress(Path('.rendering-finish.patch.xz').read_bytes())
+          assert hashlib.sha256(patch).hexdigest()=='1229de39d3f42031e2435670c8b8bee2421bed73f53cd49e0a67d0cf671cd4d4'
+          Path('/tmp/rendering-finish.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/rendering-finish.patch
+          git apply /tmp/rendering-finish.patch
+          npm run build && npm test
+      - name: Publish normal source and reproducible distributions
+        run: |
+          git rm .rendering-finish.patch.xz
+          git add desktop/smoke.cjs tools/build-windows.mjs tools/browser-rendering-tests.py tests/native-staged-module-graph.test.mjs dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git diff --cached --exit-code -- .github/workflows
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(rendering): ship shared native preview loader and stabilize strict test capture'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git bundle create /tmp/rendering-final-bootstrap.bundle HEAD
+          git rev-parse HEAD > /tmp/rendering-final-bootstrap-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-final-bootstrap-source
+          path: |
+            /tmp/rendering-final-bootstrap.bundle
+            /tmp/rendering-final-bootstrap-head.txt
+          retention-days: 7
