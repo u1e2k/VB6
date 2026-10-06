@@ -1048,6 +1048,13 @@ body{font-family:var(--vb-font);font-size:11px;color:var(--vb-text)}
 .gutter-line.has-bookmark{box-shadow:inset 3px 0 var(--vb-selection)}.bookmark-symbol{display:block;margin:auto;width:8px;height:10px;border:1px solid var(--vb-selection);background:var(--vb-selection);clip-path:polygon(0 0,100% 0,100% 100%,50% 70%,0 100%)}
 @media(max-width:620px){.object-columns{grid-template-columns:minmax(80px,35%) 4px minmax(90px,1fr)}.object-toolbar button{font-size:10px;padding:1px 3px}.object-search{flex-wrap:wrap}.object-search label{font-size:10px}.object-definition{height:80px}.project-search-fields{flex-wrap:wrap}.project-search-fields label:first-child{flex-basis:55%}.project-replace-row label{flex-direction:column;align-items:stretch}.project-search-options{font-size:10px;gap:3px}}
 
+/* These authored native border islands must not share raster invalidation with
+   a newly attached transparent rendering layer. This establishes their local
+   stacking boundaries without changing box geometry, clipping escaped popups,
+   or requesting a persistent GPU promotion with will-change/transform.
+   https://www.w3.org/TR/compositing-1/#isolation */
+.mdi-client,.layout-monitor { isolation:isolate; }
+
 .source-info{position:absolute;z-index:30;max-width:min(620px,100%);max-height:90px;overflow:auto;padding:4px 6px;border:1px solid var(--vb-dark);box-shadow:1px 1px var(--vb-shadow);background:var(--vb-info);color:var(--vb-info-text);font:12px/17px Tahoma,Arial,sans-serif;white-space:pre-wrap;user-select:text}
 .source-info strong{font-weight:700}
 .source-editor .completion-list{width:240px;max-height:190px;padding:0;overflow:auto;box-sizing:border-box}
@@ -1243,6 +1250,18 @@ html:has(.browser-window-root), body:has(> .browser-window-root) { width:100%; h
 @media(max-width:680px){.agent-task>.agent-field{flex-direction:row;align-items:center}.agent-task>.agent-field>span{flex:0 0 auto}.agent-thread-view>.agent-conversation{padding:5px}.agent-composer>.agent-field{flex-direction:row}.agent-composer>.agent-field>span{flex-basis:48px}.agent-message-heading{gap:5px;flex-wrap:wrap}.agent-tool>summary>.agent-message-state{float:none}.agent-thread-entry.agent-user{width:calc(100% - 12px)}}
 
 .agent-plain-tail{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto;font:inherit}
+
+.agent-limit-recovery{flex:0 0 auto;padding:6px;border:1px solid var(--vb-shadow);background:var(--vb-face);color:var(--vb-text);font:inherit}
+.agent-limit-recovery p{margin:0 0 5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.agent-limit-recovery[hidden]{display:none}
+
+/* Permission controls use the same classic theme tokens, never a separate chat shell. */
+.agent-permission-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.agent-permission-bar .agent-field{flex:1;min-width:240px;margin:0}
+.agent-permission-badge{padding:4px 2px;font-size:11px;overflow-wrap:anywhere}
+.agent-permission-badge[data-profile="full"]{font-weight:bold;border-bottom:1px solid var(--button-shadow,#808080)}
+.agent-full-confirm{display:flex;align-items:flex-start;gap:6px;font-weight:bold;padding:8px;border:1px solid var(--button-shadow,#808080)}
+.agent-full-confirm input{flex:none}
 
 /*!
  * Classic staircase bevels adapted from the inset box-shadow technique in

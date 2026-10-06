@@ -6,6 +6,7 @@ import {TextAtlas} from './atlas.js';
 import {DOMScene} from './dom-scene.js';
 import {RetainedScene} from './retained-scene.js';
 import {subscribeStyleActivity} from './style-activity.js';
+import {canReuseTextStyles} from './mutations.js';
 const sessions = new WeakMap();
 export async function createPainter(name, canvas, options = {}) {
   if (name === 'webgpu') return WebGPUPainter.create(canvas, options);
@@ -23,6 +24,7 @@ export class UIRenderer {
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
     this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
   }
@@ -44,7 +46,12 @@ export class UIRenderer {
         if (node?.closest('[data-vb-render-layer]')) continue;
         if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        this.stylesDirty = true;
+        if (canReuseTextStyles(r, node)) {
+          // textContent replaces a Text node; do not keep the removed child in
+          // cached paint order. CharacterData keeps the existing node identity.
+          if (r.type === 'childList') this.adapter.invalidateChildren(node);
+          this.metrics.textStyleReuses++;
+        } else this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
@@ -116,7 +123,7 @@ export class UIRenderer {
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
         this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
-        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true, characterDataOldValue: true});
         this.releaseStyleActivity = subscribeStyleActivity(this.view, () => { this.stylesDirty = true; this.invalidate(); });
         this.renderNow();
         if (this.driver === painter) this.publish();
@@ -145,8 +152,8 @@ export class UIRenderer {
   invalidate() {
     if (this.disposed || this.printing || this.document.hidden || !this.driver) return;
     this.metrics.invalidations++;
-    if (this.frame) return;
-    this.frame = this.view.requestAnimationFrame(() => { this.frame = 0; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
+    if (this.frame != null) return;
+    this.frame = this.view.requestAnimationFrame(() => { this.frame = null; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
   syncResizeTargets() {
     if (!this.resizeObserver) return;
@@ -182,14 +189,14 @@ export class UIRenderer {
     this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, submitted: painted, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
     if (animating) this.invalidate();
   }
-  cancelFrame() { if (this.frame) this.view.cancelAnimationFrame(this.frame); this.frame = 0; }
+  cancelFrame() { if (this.frame != null) this.view.cancelAnimationFrame(this.frame); this.frame = null; }
   publish() {
     this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-status', {detail: this.getStats()}));
   }
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
-      frames: this.metrics.frames, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+      frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
   releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {

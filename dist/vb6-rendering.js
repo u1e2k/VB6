@@ -878,12 +878,47 @@ function subscribeStyleActivity(view, callback) {
 return {requiresNativeShadowPaint,subscribeStyleActivity};
 })();
 
-/* dom-scene.js */
+/* paint-compat.js */
 __modules[10]=(()=>{
+const {parseColor}=__modules[1];
+
+/** A canvas overlay cannot alpha-blend a CSS paint over its already painted
+ * DOM equivalent: that would apply its opacity twice. Opaque colors and fully
+ * transparent no-ops are safe. All partial alpha stays browser-native.
+ * https://www.w3.org/TR/compositing-1/#simplealphacompositing
+ */
+function hasPartialAlpha(paint) {
+  const partial = color => color && color[3] > 0 && color[3] < 1;
+  return partial(paint.background) || (paint.gradient && (paint.gradient.start[3] < 1 || paint.gradient.end[3] < 1) && (paint.gradient.start[3] > 0 || paint.gradient.end[3] > 0)) ||
+    paint.borders.some(edge => edge.width > 0 && partial(edge.color)) ||
+    paint.shadows.some(shadow => partial(shadow.color)) ||
+    (paint.layers || []).some(layer => partial(layer.color));
+}
+
+/** Root/background propagation uses used paint, not blindly the body's
+ * computed background. A nontransparent root background prevents propagation.
+ * Unknown/partial-alpha canvas paint stays transparent to the native backdrop.
+ * https://www.w3.org/TR/css-backgrounds-3/#special-backgrounds
+ */
+function canvasBackground(root, body) {
+  const rootColor = parseColor(root.backgroundColor);
+  const propagated = rootColor[3] === 0 && root.backgroundImage === 'none';
+  const style = propagated ? body : root;
+  const color = parseColor(style.backgroundColor);
+  return {propagated, color, native: color[3] !== 1 || style.backgroundImage !== 'none'};
+}
+
+return {hasPartialAlpha,canvasBackground};
+})();
+
+/* dom-scene.js */
+__modules[11]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
 const {solidBackgroundLayers, paintBackgroundLayers}=__modules[8];
 const {requiresNativeShadowPaint}=__modules[9];
+const {hasPartialAlpha, canvasBackground}=__modules[10];
+
 
 
 
@@ -918,11 +953,12 @@ class DOMScene {
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
     this.elements = new Set(); this.boxes = new WeakMap();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
-    let background;
-    try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
-    if (background[3] === 0) { try { background = parseColor(this.style(this.document.documentElement).backgroundColor); } catch {} }
-    if (background[3] === 0) background = [1, 1, 1, 1];
-    scene.add([0, 0, width, height], background);
+    let backdrop;
+    try { backdrop = canvasBackground(this.style(this.document.documentElement), this.style(this.document.body)); }
+    catch { backdrop = {propagated: false, native: true}; }
+    this.propagatedBodyBackground = backdrop.propagated;
+    if (backdrop.native) scene.native(scene.clip, scene.clip, 'native canvas background');
+    else scene.add(scene.clip, backdrop.color);
     this.element(this.document.body, scene.clip, 0);
     return scene;
   }
@@ -963,6 +999,7 @@ class DOMScene {
     }
     return style;
   }
+  invalidateChildren(node) { this.order.delete(node); }
   invalidateStyles(node = null) {
     this.order = new WeakMap();
     if (!node || node === this.document.body || node === this.document.documentElement || node === this.document.head) { this.styles = new WeakMap(); return; }
@@ -1028,8 +1065,11 @@ class DOMScene {
         const layered = splitCSS(style.backgroundImage || 'none').length > 1;
         style.paint = {borders: sourceBorders, shadows: shadowParts(style.boxShadow), background: parseColor(style.backgroundColor), gradient: layered ? null : this.gradient(style.backgroundImage), layers: layered ? solidBackgroundLayers(style) : null};
       }
+      const paint = node === this.document.body && this.propagatedBodyBackground
+        ? {...style.paint, background: [0, 0, 0, 0], gradient: null, layers: null} : style.paint;
+      if (hasPartialAlpha(paint)) throw new Error('native alpha compositing');
       borders = scaleX === 1 && scaleY === 1 ? style.paint.borders : style.paint.borders.map((b, i) => ({...b, width: b.width * (i % 2 ? scaleX : scaleY)}));
-      ({shadows, background, gradient, layers} = style.paint);
+      ({shadows, background, gradient, layers} = paint);
     } catch (error) { if (visible && inView) this.native(node, rect, clip, error.message); else this.children(node, clip, depth); return; }
     if (visible && inView) {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
@@ -1127,7 +1167,7 @@ return {DOMScene};
 })();
 
 /* retained-scene.js */
-__modules[11]=(()=>{
+__modules[12]=(()=>{
 
 /** Exact retained-scene comparison, not a probabilistic hash. The UI can receive
  * focus/selection/layout notifications without changing any painted pixels.
@@ -1178,16 +1218,48 @@ class RetainedScene {
 return {sameGeometry,RetainedScene};
 })();
 
+/* mutations.js */
+__modules[13]=(()=>{
+
+/** Reuse paint styles only when a mutation cannot change selector matching.
+ * Text geometry is still rebuilt: this never caches layout across frames.
+ * Sources (original implementation, not copied source):
+ * https://www.w3.org/TR/selectors-4/#the-empty-pseudo
+ * https://html.spec.whatwg.org/multipage/dom.html#the-dir-attribute
+ * https://dom.spec.whatwg.org/#interface-mutationrecord
+ */
+function canReuseTextStyles(record, parent) {
+  if (!parent || parent.nodeType !== 1 || parent.closest('head,style,script,title,textarea,option,bdi,[dir="auto" i]')) return false;
+  let before, after;
+  if (record.type === 'characterData' && record.target.nodeType === 3) {
+    before = record.oldValue; after = record.target.data;
+  } else if (record.type === 'childList' && record.addedNodes.length === 1 && record.removedNodes.length === 1) {
+    const a = record.addedNodes[0], b = record.removedNodes[0];
+    if (a.nodeType !== 3 || b.nodeType !== 3) return false;
+    before = b.data; after = a.data;
+  } else return false;
+  // Requiring visible text on both sides preserves :empty under both current
+  // and whitespace-ignoring Selectors definitions. Direction-sensitive and
+  // form/default-value ancestors above deliberately use full invalidation.
+  return typeof before === 'string' && typeof after === 'string' && /\S/.test(before) && /\S/.test(after);
+}
+
+
+return {canReuseTextStyles};
+})();
+
 /* renderer.js */
-__modules[12]=(()=>{
+__modules[14]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
 const {CanvasPainter}=__modules[7];
 const {WebGPUPainter}=__modules[5];
 const {WebGLPainter}=__modules[6];
 const {TextAtlas}=__modules[2];
-const {DOMScene}=__modules[10];
-const {RetainedScene}=__modules[11];
+const {DOMScene}=__modules[11];
+const {RetainedScene}=__modules[12];
 const {subscribeStyleActivity}=__modules[9];
+const {canReuseTextStyles}=__modules[13];
+
 
 
 
@@ -1213,6 +1285,7 @@ class UIRenderer {
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
     this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
   }
@@ -1234,7 +1307,12 @@ class UIRenderer {
         if (node?.closest('[data-vb-render-layer]')) continue;
         if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        this.stylesDirty = true;
+        if (canReuseTextStyles(r, node)) {
+          // textContent replaces a Text node; do not keep the removed child in
+          // cached paint order. CharacterData keeps the existing node identity.
+          if (r.type === 'childList') this.adapter.invalidateChildren(node);
+          this.metrics.textStyleReuses++;
+        } else this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
@@ -1306,7 +1384,7 @@ class UIRenderer {
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
         this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
-        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true, characterDataOldValue: true});
         this.releaseStyleActivity = subscribeStyleActivity(this.view, () => { this.stylesDirty = true; this.invalidate(); });
         this.renderNow();
         if (this.driver === painter) this.publish();
@@ -1335,8 +1413,8 @@ class UIRenderer {
   invalidate() {
     if (this.disposed || this.printing || this.document.hidden || !this.driver) return;
     this.metrics.invalidations++;
-    if (this.frame) return;
-    this.frame = this.view.requestAnimationFrame(() => { this.frame = 0; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
+    if (this.frame != null) return;
+    this.frame = this.view.requestAnimationFrame(() => { this.frame = null; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
   syncResizeTargets() {
     if (!this.resizeObserver) return;
@@ -1372,14 +1450,14 @@ class UIRenderer {
     this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, submitted: painted, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
     if (animating) this.invalidate();
   }
-  cancelFrame() { if (this.frame) this.view.cancelAnimationFrame(this.frame); this.frame = 0; }
+  cancelFrame() { if (this.frame != null) this.view.cancelAnimationFrame(this.frame); this.frame = null; }
   publish() {
     this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-status', {detail: this.getStats()}));
   }
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
-      frames: this.metrics.frames, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+      frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
   releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
@@ -1404,9 +1482,9 @@ return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
 /* benchmark.js */
-__modules[13]=(()=>{
+__modules[15]=(()=>{
 const {PaintScene}=__modules[1];
-const {createPainter}=__modules[12];
+const {createPainter}=__modules[14];
 const {deadline}=__modules[3];
 
 
@@ -1494,15 +1572,15 @@ return {timingSummary,PassTimer,benchmarkRendering};
 })();
 
 /* entry.js */
-__modules[14]=(()=>{
+__modules[16]=(()=>{
 const {BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect}=__modules[0];
 const {PaintScene, parseColor}=__modules[1];
 const {TextAtlas}=__modules[2];
 const {WebGPUPainter, UI_SHADER}=__modules[5];
 const {WebGLPainter}=__modules[6];
 const {CanvasPainter}=__modules[7];
-const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[12];
-const {benchmarkRendering, timingSummary}=__modules[13];
+const {UIRenderer, createPainter, retainRenderer, rendererForDocument}=__modules[14];
+const {benchmarkRendering, timingSummary}=__modules[15];
 
 
 
@@ -1514,5 +1592,5 @@ const {benchmarkRendering, timingSummary}=__modules[13];
 
 return {benchmarkRendering,timingSummary,BACKENDS,DEFAULT_RENDERING,normalizeRendering,renderingCandidates,physicalSize,snapRect,intersect,PaintScene,parseColor,TextAtlas,WebGPUPainter,UI_SHADER,WebGLPainter,CanvasPainter,UIRenderer,createPainter,retainRenderer,rendererForDocument};
 })();
-globalThis["VB6Rendering"]=__modules[14];
+globalThis["VB6Rendering"]=__modules[16];
 })();

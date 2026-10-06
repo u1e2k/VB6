@@ -1559,12 +1559,47 @@ function subscribeStyleActivity(view, callback) {
 return {requiresNativeShadowPaint,subscribeStyleActivity};
 })();
 
-/* ../rendering/dom-scene.js */
+/* ../rendering/paint-compat.js */
 __modules[10]=(()=>{
+const {parseColor}=__modules[1];
+
+/** A canvas overlay cannot alpha-blend a CSS paint over its already painted
+ * DOM equivalent: that would apply its opacity twice. Opaque colors and fully
+ * transparent no-ops are safe. All partial alpha stays browser-native.
+ * https://www.w3.org/TR/compositing-1/#simplealphacompositing
+ */
+function hasPartialAlpha(paint) {
+  const partial = color => color && color[3] > 0 && color[3] < 1;
+  return partial(paint.background) || (paint.gradient && (paint.gradient.start[3] < 1 || paint.gradient.end[3] < 1) && (paint.gradient.start[3] > 0 || paint.gradient.end[3] > 0)) ||
+    paint.borders.some(edge => edge.width > 0 && partial(edge.color)) ||
+    paint.shadows.some(shadow => partial(shadow.color)) ||
+    (paint.layers || []).some(layer => partial(layer.color));
+}
+
+/** Root/background propagation uses used paint, not blindly the body's
+ * computed background. A nontransparent root background prevents propagation.
+ * Unknown/partial-alpha canvas paint stays transparent to the native backdrop.
+ * https://www.w3.org/TR/css-backgrounds-3/#special-backgrounds
+ */
+function canvasBackground(root, body) {
+  const rootColor = parseColor(root.backgroundColor);
+  const propagated = rootColor[3] === 0 && root.backgroundImage === 'none';
+  const style = propagated ? body : root;
+  const color = parseColor(style.backgroundColor);
+  return {propagated, color, native: color[3] !== 1 || style.backgroundImage !== 'none'};
+}
+
+return {hasPartialAlpha,canvasBackground};
+})();
+
+/* ../rendering/dom-scene.js */
+__modules[11]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
 const {solidBackgroundLayers, paintBackgroundLayers}=__modules[8];
 const {requiresNativeShadowPaint}=__modules[9];
+const {hasPartialAlpha, canvasBackground}=__modules[10];
+
 
 
 
@@ -1599,11 +1634,12 @@ class DOMScene {
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
     this.elements = new Set(); this.boxes = new WeakMap();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
-    let background;
-    try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
-    if (background[3] === 0) { try { background = parseColor(this.style(this.document.documentElement).backgroundColor); } catch {} }
-    if (background[3] === 0) background = [1, 1, 1, 1];
-    scene.add([0, 0, width, height], background);
+    let backdrop;
+    try { backdrop = canvasBackground(this.style(this.document.documentElement), this.style(this.document.body)); }
+    catch { backdrop = {propagated: false, native: true}; }
+    this.propagatedBodyBackground = backdrop.propagated;
+    if (backdrop.native) scene.native(scene.clip, scene.clip, 'native canvas background');
+    else scene.add(scene.clip, backdrop.color);
     this.element(this.document.body, scene.clip, 0);
     return scene;
   }
@@ -1644,6 +1680,7 @@ class DOMScene {
     }
     return style;
   }
+  invalidateChildren(node) { this.order.delete(node); }
   invalidateStyles(node = null) {
     this.order = new WeakMap();
     if (!node || node === this.document.body || node === this.document.documentElement || node === this.document.head) { this.styles = new WeakMap(); return; }
@@ -1709,8 +1746,11 @@ class DOMScene {
         const layered = splitCSS(style.backgroundImage || 'none').length > 1;
         style.paint = {borders: sourceBorders, shadows: shadowParts(style.boxShadow), background: parseColor(style.backgroundColor), gradient: layered ? null : this.gradient(style.backgroundImage), layers: layered ? solidBackgroundLayers(style) : null};
       }
+      const paint = node === this.document.body && this.propagatedBodyBackground
+        ? {...style.paint, background: [0, 0, 0, 0], gradient: null, layers: null} : style.paint;
+      if (hasPartialAlpha(paint)) throw new Error('native alpha compositing');
       borders = scaleX === 1 && scaleY === 1 ? style.paint.borders : style.paint.borders.map((b, i) => ({...b, width: b.width * (i % 2 ? scaleX : scaleY)}));
-      ({shadows, background, gradient, layers} = style.paint);
+      ({shadows, background, gradient, layers} = paint);
     } catch (error) { if (visible && inView) this.native(node, rect, clip, error.message); else this.children(node, clip, depth); return; }
     if (visible && inView) {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
@@ -1808,7 +1848,7 @@ return {DOMScene};
 })();
 
 /* ../rendering/retained-scene.js */
-__modules[11]=(()=>{
+__modules[12]=(()=>{
 
 /** Exact retained-scene comparison, not a probabilistic hash. The UI can receive
  * focus/selection/layout notifications without changing any painted pixels.
@@ -1859,16 +1899,48 @@ class RetainedScene {
 return {sameGeometry,RetainedScene};
 })();
 
+/* ../rendering/mutations.js */
+__modules[13]=(()=>{
+
+/** Reuse paint styles only when a mutation cannot change selector matching.
+ * Text geometry is still rebuilt: this never caches layout across frames.
+ * Sources (original implementation, not copied source):
+ * https://www.w3.org/TR/selectors-4/#the-empty-pseudo
+ * https://html.spec.whatwg.org/multipage/dom.html#the-dir-attribute
+ * https://dom.spec.whatwg.org/#interface-mutationrecord
+ */
+function canReuseTextStyles(record, parent) {
+  if (!parent || parent.nodeType !== 1 || parent.closest('head,style,script,title,textarea,option,bdi,[dir="auto" i]')) return false;
+  let before, after;
+  if (record.type === 'characterData' && record.target.nodeType === 3) {
+    before = record.oldValue; after = record.target.data;
+  } else if (record.type === 'childList' && record.addedNodes.length === 1 && record.removedNodes.length === 1) {
+    const a = record.addedNodes[0], b = record.removedNodes[0];
+    if (a.nodeType !== 3 || b.nodeType !== 3) return false;
+    before = b.data; after = a.data;
+  } else return false;
+  // Requiring visible text on both sides preserves :empty under both current
+  // and whitespace-ignoring Selectors definitions. Direction-sensitive and
+  // form/default-value ancestors above deliberately use full invalidation.
+  return typeof before === 'string' && typeof after === 'string' && /\S/.test(before) && /\S/.test(after);
+}
+
+
+return {canReuseTextStyles};
+})();
+
 /* ../rendering/renderer.js */
-__modules[12]=(()=>{
+__modules[14]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
 const {CanvasPainter}=__modules[2];
 const {WebGPUPainter}=__modules[5];
 const {WebGLPainter}=__modules[6];
 const {TextAtlas}=__modules[7];
-const {DOMScene}=__modules[10];
-const {RetainedScene}=__modules[11];
+const {DOMScene}=__modules[11];
+const {RetainedScene}=__modules[12];
 const {subscribeStyleActivity}=__modules[9];
+const {canReuseTextStyles}=__modules[13];
+
 
 
 
@@ -1894,6 +1966,7 @@ class UIRenderer {
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
     this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
   }
@@ -1915,7 +1988,12 @@ class UIRenderer {
         if (node?.closest('[data-vb-render-layer]')) continue;
         if (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === 1 && n.hasAttribute('data-vb-render-layer'))) continue;
         changed = true;
-        this.stylesDirty = true;
+        if (canReuseTextStyles(r, node)) {
+          // textContent replaces a Text node; do not keep the removed child in
+          // cached paint order. CharacterData keeps the existing node identity.
+          if (r.type === 'childList') this.adapter.invalidateChildren(node);
+          this.metrics.textStyleReuses++;
+        } else this.stylesDirty = true;
       }
       if (changed) this.invalidate();
     });
@@ -1987,7 +2065,7 @@ class UIRenderer {
         }});
         if (this.disposed || generation !== this.generation) { painter?.dispose(); canvas.remove(); return this.getStats(); }
         this.canvas = canvas; this.driver = painter; this.backend = name; this.stylesDirty = true;
-        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
+        this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true, characterDataOldValue: true});
         this.releaseStyleActivity = subscribeStyleActivity(this.view, () => { this.stylesDirty = true; this.invalidate(); });
         this.renderNow();
         if (this.driver === painter) this.publish();
@@ -2016,8 +2094,8 @@ class UIRenderer {
   invalidate() {
     if (this.disposed || this.printing || this.document.hidden || !this.driver) return;
     this.metrics.invalidations++;
-    if (this.frame) return;
-    this.frame = this.view.requestAnimationFrame(() => { this.frame = 0; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
+    if (this.frame != null) return;
+    this.frame = this.view.requestAnimationFrame(() => { this.frame = null; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
   syncResizeTargets() {
     if (!this.resizeObserver) return;
@@ -2053,14 +2131,14 @@ class UIRenderer {
     this.metrics.last = {buildMs: built - start, submitCpuMs: submitted - built, submitted: painted, commands: scene.commands.length, dpr: scene.dpr, width: this.canvas.width, height: this.canvas.height, ...scene.stats};
     if (animating) this.invalidate();
   }
-  cancelFrame() { if (this.frame) this.view.cancelAnimationFrame(this.frame); this.frame = 0; }
+  cancelFrame() { if (this.frame != null) this.view.cancelAnimationFrame(this.frame); this.frame = null; }
   publish() {
     this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-status', {detail: this.getStats()}));
   }
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
-      frames: this.metrics.frames, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+      frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
   releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
@@ -2085,7 +2163,7 @@ return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
 /* ../../packages/win32-browser/src/gpu-presenter.js */
-__modules[13]=(()=>{
+__modules[15]=(()=>{
 
 /** WebGPU presentation of a retained, CPU-readable GDI surface. Raster operations
  * remain synchronous in the compatibility engine; only presentation is GPU work.
@@ -2139,7 +2217,7 @@ return {GPURasterPresenter};
 })();
 
 /* ../../packages/win32-browser/src/core.js */
-__modules[14]=(()=>{
+__modules[16]=(()=>{
 
 /** MIT. A bounded, process-private 32-bit address and handle space. */
 const ERROR = Object.freeze({SUCCESS:0,FILE_NOT_FOUND:2,PATH_NOT_FOUND:3,ACCESS_DENIED:5,INVALID_HANDLE:6,NOT_ENOUGH_MEMORY:8,INVALID_DATA:13,SHARING_VIOLATION:32,NOT_SUPPORTED:50,FILE_EXISTS:80,INVALID_PARAMETER:87,INSUFFICIENT_BUFFER:122,MOD_NOT_FOUND:126,PROC_NOT_FOUND:127,DIR_NOT_EMPTY:145,ALREADY_EXISTS:183,ENVVAR_NOT_FOUND:203,MORE_DATA:234,NO_MORE_ITEMS:259,OPERATION_ABORTED:995,INVALID_WINDOW_HANDLE:1400});
@@ -2204,8 +2282,8 @@ return {ERROR,Win32Error,integer,unsigned,Handles,encodeANSI,decodeANSI,Memory,M
 })();
 
 /* ../../packages/win32-browser/src/gdi-transform.js */
-__modules[15]=(()=>{
-const {Win32Error,integer}=__modules[14];
+__modules[17]=(()=>{
+const {Win32Error,integer}=__modules[16];
 
 const TRANSFORM_CONSTANTS=Object.freeze({GM_COMPATIBLE:1,GM_ADVANCED:2,MWT_IDENTITY:1,MWT_LEFTMULTIPLY:2,MWT_RIGHTMULTIPLY:3,MM_TEXT:1,MM_LOMETRIC:2,MM_HIMETRIC:3,MM_LOENGLISH:4,MM_HIENGLISH:5,MM_TWIPS:6,MM_ISOTROPIC:7,MM_ANISOTROPIC:8});
 const IDENTITY=Object.freeze([1,0,0,1,0,0]);
@@ -2246,9 +2324,9 @@ return {TRANSFORM_CONSTANTS,IDENTITY,multiply,inverse,mapPoint,mapping,translate
 })();
 
 /* ../../packages/win32-browser/src/gdi-path.js */
-__modules[16]=(()=>{
-const {Win32Error,integer}=__modules[14];
-const {mapping,mapPoint,inverse,IDENTITY}=__modules[15];
+__modules[18]=(()=>{
+const {Win32Error,integer}=__modules[16];
+const {mapping,mapPoint,inverse,IDENTITY}=__modules[17];
 
 
 const PATH_CONSTANTS=Object.freeze({ALTERNATE:1,WINDING:2,PT_CLOSEFIGURE:1,PT_LINETO:2,PT_BEZIERTO:4,PT_MOVETO:6});
@@ -2339,9 +2417,9 @@ return {PATH_CONSTANTS,installPaths};
 })();
 
 /* ../../packages/win32-browser/src/gdi-text.js */
-__modules[17]=(()=>{
-const {Win32Error,integer,unsigned}=__modules[14];
-const {mapping,multiply,mapPoint,mapBounds}=__modules[15];
+__modules[19]=(()=>{
+const {Win32Error,integer,unsigned}=__modules[16];
+const {mapping,multiply,mapPoint,mapBounds}=__modules[17];
 
 
 const TEXT_CONSTANTS=Object.freeze({OBJ_FONT:6,FW_NORMAL:400,FW_BOLD:700,ANSI_CHARSET:0,DEFAULT_CHARSET:1,TRANSPARENT:1,OPAQUE:2,TA_NOUPDATECP:0,TA_UPDATECP:1,TA_LEFT:0,TA_RIGHT:2,TA_CENTER:6,TA_TOP:0,TA_BOTTOM:8,TA_BASELINE:24,TA_RTLREADING:256,ETO_OPAQUE:2,ETO_CLIPPED:4,ETO_RTLREADING:128,ETO_PDY:8192,DT_CENTER:1,DT_RIGHT:2,DT_VCENTER:4,DT_BOTTOM:8,DT_WORDBREAK:16,DT_SINGLELINE:32,DT_EXPANDTABS:64,DT_CALCRECT:1024,DT_NOPREFIX:2048});
@@ -2448,8 +2526,8 @@ return {TEXT_CONSTANTS,installText};
 })();
 
 /* ../../packages/win32-browser/src/user32-paint.js */
-__modules[18]=(()=>{
-const {Win32Error,integer,unsigned}=__modules[14];
+__modules[20]=(()=>{
+const {Win32Error,integer,unsigned}=__modules[16];
 
 const PAINT_CONSTANTS=Object.freeze({WM_PAINT:15,WM_ERASEBKGND:20,RDW_INVALIDATE:1,RDW_INTERNALPAINT:2,RDW_ERASE:4,RDW_VALIDATE:8,RDW_NOINTERNALPAINT:16,RDW_NOERASE:32,RDW_NOCHILDREN:64,RDW_ALLCHILDREN:128,RDW_UPDATENOW:256,RDW_ERASENOW:512,RDW_FRAME:1024,RDW_NOFRAME:2048,DCX_WINDOW:1,DCX_CACHE:2,DCX_INTERSECTRGN:128,DCX_EXCLUDERGN:64});
 /** Window-owned HRGNs and independent pending/active update regions. All state is
@@ -2554,8 +2632,8 @@ return {PAINT_CONSTANTS,installPainting};
 })();
 
 /* ../../packages/win32-browser/src/gdi-geometry.js */
-__modules[19]=(()=>{
-const {Win32Error,integer}=__modules[14];
+__modules[21]=(()=>{
+const {Win32Error,integer}=__modules[16];
 
 const point=n=>integer(n,-0x4000000,0x3ffffff);
 const quota=()=>{throw new Win32Error('Region scan conversion work quota exceeded',8);};
@@ -2648,10 +2726,10 @@ return {polygonRegion,roundedRegion,transformRegion,frameRegion};
 })();
 
 /* ../../packages/win32-browser/src/gdi-region.js */
-__modules[20]=(()=>{
-const {polygonRegion,roundedRegion,transformRegion,frameRegion}=__modules[19];
-const {mapping,devicePoint,mapBounds,inverse,readTransform}=__modules[15];
-const {Win32Error,integer}=__modules[14];
+__modules[22]=(()=>{
+const {polygonRegion,roundedRegion,transformRegion,frameRegion}=__modules[21];
+const {mapping,devicePoint,mapBounds,inverse,readTransform}=__modules[17];
+const {Win32Error,integer}=__modules[16];
 
 
 
@@ -2848,9 +2926,9 @@ return {REGION_CONSTANTS,RegionStore,installRegions};
 })();
 
 /* ../../packages/win32-browser/src/gdi-bitmap.js */
-__modules[21]=(()=>{
-const {mapping,inverse,mapPoint,mapBounds,devicePoint,translatedOnly}=__modules[15];
-const {Win32Error,integer,unsigned}=__modules[14];
+__modules[23]=(()=>{
+const {mapping,inverse,mapPoint,mapBounds,devicePoint,translatedOnly}=__modules[17];
+const {Win32Error,integer,unsigned}=__modules[16];
 
 
 // All bitmap addresses are process-private. DIBs use Win32 BGR/BGRA scan lines,
@@ -2950,8 +3028,8 @@ return {GDI_CONSTANTS,coord,intersect,rgbBytes,rgbValue,ropInfo,BitmapStore};
 })();
 
 /* ../../packages/win32-browser/src/clipboard.js */
-__modules[22]=(()=>{
-const {Win32Error,unsigned}=__modules[14];
+__modules[24]=(()=>{
+const {Win32Error,unsigned}=__modules[16];
 
 /** Synchronous, app-private clipboard. System clipboard synchronization is explicit. */
 function installClipboard(w){
@@ -2982,8 +3060,8 @@ return {installClipboard};
 })();
 
 /* ../../packages/win32-browser/src/kernel32.js */
-__modules[23]=(()=>{
-const {ERROR,Win32Error,integer,unsigned}=__modules[14];
+__modules[25]=(()=>{
+const {ERROR,Win32Error,integer,unsigned}=__modules[16];
 
 function installKernel32(w){
   const m=w.memory,h=w.handles,fs=w.fs;
@@ -3073,8 +3151,8 @@ return {installKernel32};
 })();
 
 /* ../../packages/win32-browser/src/user32.js */
-__modules[24]=(()=>{
-const {Win32Error,integer,unsigned}=__modules[14];
+__modules[26]=(()=>{
+const {Win32Error,integer,unsigned}=__modules[16];
 
 /** Registered windows only: never queries or controls unrelated page DOM. */
 function installUser32(w){
@@ -3157,8 +3235,8 @@ return {installUser32};
 })();
 
 /* ../../packages/win32-browser/src/advapi32.js */
-__modules[25]=(()=>{
-const {Win32Error,integer,unsigned}=__modules[14];
+__modules[27]=(()=>{
+const {Win32Error,integer,unsigned}=__modules[16];
 
 /** App-private registry: no machine registry is read or modified. */
 function installRegistry(w){
@@ -3185,14 +3263,14 @@ return {installRegistry};
 })();
 
 /* ../../packages/win32-browser/src/gdi32.js */
-__modules[26]=(()=>{
-const {installTransforms,mapping,translatedOnly,IDENTITY}=__modules[15];
-const {installPaths}=__modules[16];
-const {installText}=__modules[17];
-const {installPainting}=__modules[18];
-const {Win32Error,integer,unsigned}=__modules[14];
-const {RegionStore,installRegions}=__modules[20];
-const {BitmapStore,GDI_CONSTANTS,coord,intersect,rgbBytes,rgbValue,ropInfo}=__modules[21];
+__modules[28]=(()=>{
+const {installTransforms,mapping,translatedOnly,IDENTITY}=__modules[17];
+const {installPaths}=__modules[18];
+const {installText}=__modules[19];
+const {installPainting}=__modules[20];
+const {Win32Error,integer,unsigned}=__modules[16];
+const {RegionStore,installRegions}=__modules[22];
+const {BitmapStore,GDI_CONSTANTS,coord,intersect,rgbBytes,rgbValue,ropInfo}=__modules[23];
 
 
 
@@ -3318,20 +3396,20 @@ return {colorRef,installGDI};
 })();
 
 /* ../../packages/win32-browser/src/index.js */
-__modules[27]=(()=>{
-const {GPURasterPresenter}=__modules[13];
-const {TRANSFORM_CONSTANTS}=__modules[15];
-const {PATH_CONSTANTS}=__modules[16];
-const {TEXT_CONSTANTS}=__modules[17];
-const {PAINT_CONSTANTS}=__modules[18];
-const {REGION_CONSTANTS,RegionStore}=__modules[20];
-const {GDI_CONSTANTS}=__modules[21];
-const {installClipboard}=__modules[22];
-const {ERROR,Win32Error,Handles,Memory,MemoryFileSystem,integer,unsigned,encodeANSI,decodeANSI}=__modules[14];
-const {installKernel32}=__modules[23];
-const {installUser32}=__modules[24];
-const {installRegistry}=__modules[25];
-const {installGDI,colorRef}=__modules[26];
+__modules[29]=(()=>{
+const {GPURasterPresenter}=__modules[15];
+const {TRANSFORM_CONSTANTS}=__modules[17];
+const {PATH_CONSTANTS}=__modules[18];
+const {TEXT_CONSTANTS}=__modules[19];
+const {PAINT_CONSTANTS}=__modules[20];
+const {REGION_CONSTANTS,RegionStore}=__modules[22];
+const {GDI_CONSTANTS}=__modules[23];
+const {installClipboard}=__modules[24];
+const {ERROR,Win32Error,Handles,Memory,MemoryFileSystem,integer,unsigned,encodeANSI,decodeANSI}=__modules[16];
+const {installKernel32}=__modules[25];
+const {installUser32}=__modules[26];
+const {installRegistry}=__modules[27];
+const {installGDI,colorRef}=__modules[28];
 
 
 
@@ -3377,7 +3455,7 @@ return {WIN32_CONSTANTS,normalizeDLL,Win32Browser,createWin32,GPURasterPresenter
 })();
 
 /* ../language/errors.js */
-__modules[28]=(()=>{
+__modules[30]=(()=>{
 
 class VBError extends Error {
   constructor(message, number = 5, source = null, line = 0, column = 0) { super(message); this.name = 'VBError'; this.number = number; this.source = source; this.line = line; this.column = column; }
@@ -3387,8 +3465,8 @@ return {VBError};
 })();
 
 /* calendar.js */
-__modules[29]=(()=>{
-const {VBError}=__modules[28];
+__modules[31]=(()=>{
+const {VBError}=__modules[30];
 /** Gregorian/OLE DATE support. Numeric dates encode civil time, not UTC instants.
  * System-default week settings deliberately use the documented invariant defaults
  * (Sunday / week containing January 1); no Windows NLS API is available here.
@@ -3465,9 +3543,9 @@ return {validateDate,dateOrdinal,dateToSerial,serialToDate,asDate,dateAdd,dateDi
 })();
 
 /* ../language/lexer.js */
-__modules[30]=(()=>{
-const {asDate}=__modules[29];
-const {VBError}=__modules[28];
+__modules[32]=(()=>{
+const {asDate}=__modules[31];
+const {VBError}=__modules[30];
 
 /** VB lexical scanner. Tokens retain original source offsets for editor/debugger use. */
 
@@ -3559,8 +3637,8 @@ return {tokenize,splitTop,logicalLines,VBError};
 })();
 
 /* decimal.js */
-__modules[31]=(()=>{
-const {VBError}=__modules[28];
+__modules[33]=(()=>{
+const {VBError}=__modules[30];
 
 const MAX=(1n<<96n)-1n;
 const abs=n=>n<0n?-n:n;
@@ -3637,7 +3715,7 @@ return {VBDecimal};
 })();
 
 /* ../core/window-context.js */
-__modules[32]=(()=>{
+__modules[34]=(()=>{
 
 /** Documents belonging to one live IDE session. No global DOM monkey-patching. */
 const documents = new Set();
@@ -3669,8 +3747,8 @@ return {registerUIDocument,uiDocuments,uiDocument,hasUIDialog};
 })();
 
 /* ../core/core.js */
-__modules[33]=(()=>{
-const {uiDocument}=__modules[32];
+__modules[35]=(()=>{
+const {uiDocument}=__modules[34];
 
 /** Small framework-independent primitives shared by the IDE and runtime. */
 class Signal {
@@ -3732,11 +3810,11 @@ return {Signal,History,clone,lower,escapeHTML,debounce,download,el,safeName,VERS
 })();
 
 /* values.js */
-__modules[34]=(()=>{
-const {VBDecimal}=__modules[31];
-const {asDate,dateToSerial}=__modules[29];
-const { VBError }=__modules[30];
-const { lower }=__modules[33];
+__modules[36]=(()=>{
+const {VBDecimal}=__modules[33];
+const {asDate,dateToSerial}=__modules[31];
+const { VBError }=__modules[32];
+const { lower }=__modules[35];
 
 
 function bankersRound(n) { if(!Number.isFinite(n))throw new VBError('Overflow',6);const floor=Math.floor(n), f=n-floor;return f===0.5?(floor%2===0?floor:floor+1):Math.round(n); }
@@ -3929,9 +4007,9 @@ return {bankersRound,NOTHING,MISSING,VBErrorValue,explicitErrorValue,VBInterface
 })();
 
 /* automation.js */
-__modules[35]=(()=>{
-const {VBError}=__modules[30];
-const {Ref,MISSING}=__modules[34];
+__modules[37]=(()=>{
+const {VBError}=__modules[32];
+const {Ref,MISSING}=__modules[36];
 /** Trusted host-installed Automation adapters. Projects never supply executable factories. */
 
 
@@ -3989,7 +4067,7 @@ return {isAutomationObject,automationDefaultName,automationInvoke,automationMemb
 })();
 
 /* ../controls/adapters.js */
-__modules[36]=(()=>{
+__modules[38]=(()=>{
 
 /** Host code only. Native project data cannot register code or fetch plug-ins. */
 class ControlAdapterRegistry {
@@ -4014,9 +4092,9 @@ return {ControlAdapterRegistry};
 })();
 
 /* ../data/common.js */
-__modules[37]=(()=>{
-const {VBError}=__modules[30];
-const {VBArray, VBCurrency, VBDecimal}=__modules[34];
+__modules[39]=(()=>{
+const {VBError}=__modules[32];
+const {VBArray, VBCurrency, VBDecimal}=__modules[36];
 
 
 const DATA_LIMITS = Object.freeze({rows:100000, cells:1000000, bytes:20*1024*1024, pages:100});
@@ -4194,7 +4272,7 @@ return {DATA_LIMITS,DATA_CONSTANTS,dataError,assertData,after,dataList,sqlValue,
 })();
 
 /* ../data/defaults.js */
-__modules[38]=(()=>{
+__modules[40]=(()=>{
 
 // Registration is private to trusted library objects; a forged __type never grants a default property.
 const values = new WeakSet();
@@ -4210,8 +4288,8 @@ return {dataDefault,hasDataDefault,dataMembers,hasDataMember};
 })();
 
 /* ../data/collection.js */
-__modules[39]=(()=>{
-const {assertData}=__modules[37];
+__modules[41]=(()=>{
+const {assertData}=__modules[39];
 
 class DataCollection {
   constructor(items=[]){this.items=items;}
@@ -4233,10 +4311,10 @@ return {DataCollection,NamedCollection};
 })();
 
 /* ../data/recordset.js */
-__modules[40]=(()=>{
-const {dataDefault}=__modules[38];
-const {VBError}=__modules[30];
-const {VBArray,VBCurrency,VBDecimal,coerce,bankersRound,numeric,binary,truth}=__modules[34];
+__modules[42]=(()=>{
+const {dataDefault}=__modules[40];
+const {VBError}=__modules[32];
+const {VBArray,VBCurrency,VBDecimal,coerce,bankersRound,numeric,binary,truth}=__modules[36];
 
 
 
@@ -4359,9 +4437,9 @@ return {fieldValue,DisconnectedRecordset};
 })();
 
 /* ../data/provider-recordset.js */
-__modules[41]=(()=>{
-const {DisconnectedRecordset,fieldValue}=__modules[40];
-const {assertData,after,DATA_LIMITS,sameValue}=__modules[37];
+__modules[43]=(()=>{
+const {DisconnectedRecordset,fieldValue}=__modules[42];
+const {assertData,after,DATA_LIMITS,sameValue}=__modules[39];
 
 
 /** The same observable cursor as the bound controls use, with awaited provider writes. */
@@ -4478,11 +4556,11 @@ return {ProviderRecordset};
 })();
 
 /* ../data/connected-recordset.js */
-__modules[42]=(()=>{
-const {VBDecimal,VBCurrency,coerce}=__modules[34];
-const {ProviderRecordset}=__modules[41];
-const {DisconnectedRecordset,fieldValue}=__modules[40];
-const {assertData,after,dataList,sameValue}=__modules[37];
+__modules[44]=(()=>{
+const {VBDecimal,VBCurrency,coerce}=__modules[36];
+const {ProviderRecordset}=__modules[43];
+const {DisconnectedRecordset,fieldValue}=__modules[42];
+const {assertData,after,dataList,sameValue}=__modules[39];
 
 
 
@@ -4711,8 +4789,8 @@ return {ConnectedRecordset};
 })();
 
 /* ../data/sql-parameters.js */
-__modules[43]=(()=>{
-const {assertData}=__modules[37];
+__modules[45]=(()=>{
+const {assertData}=__modules[39];
 
 /** Lossless SQL token positions. Parameter substitution never visits quoted strings or comments. */
 function sqlTokens(source) {
@@ -4789,10 +4867,10 @@ return {sqlTokens,DAO_TYPES,parameterPlan,simpleSelect};
 })();
 
 /* ../data/criteria.js */
-__modules[44]=(()=>{
-const {VBDecimal,VBCurrency}=__modules[34];
-const {assertData}=__modules[37];
-const {sqlTokens}=__modules[43];
+__modules[46]=(()=>{
+const {VBDecimal,VBCurrency}=__modules[36];
+const {assertData}=__modules[39];
+const {sqlTokens}=__modules[45];
 
 
 
@@ -4859,12 +4937,12 @@ return {compareData,compileCriteria};
 })();
 
 /* ../data/dao-recordset.js */
-__modules[45]=(()=>{
-const {dataDefault}=__modules[38];
-const {assertData,after,dataList,sameValue}=__modules[37];
-const {fieldValue}=__modules[40];
-const {compileCriteria,compareData}=__modules[44];
-const {DAO_TYPES}=__modules[43];
+__modules[47]=(()=>{
+const {dataDefault}=__modules[40];
+const {assertData,after,dataList,sameValue}=__modules[39];
+const {fieldValue}=__modules[42];
+const {compileCriteria,compareData}=__modules[46];
+const {DAO_TYPES}=__modules[45];
 
 
 
@@ -4968,15 +5046,15 @@ return {DAORecordset};
 })();
 
 /* ../data/rdo.js */
-__modules[46]=(()=>{
-const {assertData,DATA_LIMITS,quoteIdentifier}=__modules[37];
-const {dataDefault,dataMembers}=__modules[38];
-const {DataCollection}=__modules[39];
-const {ConnectedRecordset}=__modules[42];
-const {DAORecordset}=__modules[45];
-const {fieldValue}=__modules[40];
-const {sqlTokens,simpleSelect}=__modules[43];
-const {VBArray}=__modules[34];
+__modules[48]=(()=>{
+const {assertData,DATA_LIMITS,quoteIdentifier}=__modules[39];
+const {dataDefault,dataMembers}=__modules[40];
+const {DataCollection}=__modules[41];
+const {ConnectedRecordset}=__modules[44];
+const {DAORecordset}=__modules[47];
+const {fieldValue}=__modules[42];
+const {sqlTokens,simpleSelect}=__modules[45];
+const {VBArray}=__modules[36];
 
 
 
@@ -5152,7 +5230,7 @@ return {RDO_TYPES,RDO_CONSTANTS,RDOParameter,RDOQuery,RDOResultset,RDOConnection
 })();
 
 /* ../data/vendor/sqlite.js */
-__modules[47]=(()=>{
+__modules[49]=(()=>{
 
 // Generated by tools/vendor-sqlite.mjs. sql.js 1.14.2 (MIT); SQLite public domain.
 // JavaScript SHA256 35e39a73b2e0bc1c2202a4cadb23bcf7a3a77071a39c270f014402968785b95f; WASM SHA256 38c14f6e379210bc942bdc4ebca44e7bfdb4318ecc1c72ca666a28fdce96670a.
@@ -5349,15 +5427,15 @@ return {initializeSQLite};
 })();
 
 /* ../data/dao.js */
-__modules[48]=(()=>{
-const {dataDefault}=__modules[38];
-const {assertData,after,quoteIdentifier,connectionConfiguration,DATA_LIMITS}=__modules[37];
-const {DataCollection,NamedCollection}=__modules[39];
-const {ConnectedRecordset}=__modules[42];
-const {DAORecordset}=__modules[45];
-const {DAO_TYPES,parameterPlan,sqlTokens,simpleSelect}=__modules[43];
-const {fieldValue}=__modules[40];
-const {initializeSQLite}=__modules[47];
+__modules[50]=(()=>{
+const {dataDefault}=__modules[40];
+const {assertData,after,quoteIdentifier,connectionConfiguration,DATA_LIMITS}=__modules[39];
+const {DataCollection,NamedCollection}=__modules[41];
+const {ConnectedRecordset}=__modules[44];
+const {DAORecordset}=__modules[47];
+const {DAO_TYPES,parameterPlan,sqlTokens,simpleSelect}=__modules[45];
+const {fieldValue}=__modules[42];
+const {initializeSQLite}=__modules[49];
 
 
 
@@ -5544,9 +5622,9 @@ return {DAOField,DAOIndex,DAOTableDef,DAOParameter,DAOQueryDef,DAODatabase,DAOWo
 })();
 
 /* ../data/sqlite.js */
-__modules[49]=(()=>{
-const {initializeSQLite}=__modules[47];
-const {assertData,dataError,DATA_LIMITS,quoteIdentifier,sqlValue,columnType}=__modules[37];
+__modules[51]=(()=>{
+const {initializeSQLite}=__modules[49];
+const {assertData,dataError,DATA_LIMITS,quoteIdentifier,sqlValue,columnType}=__modules[39];
 
 
 /** Real embedded SQLite. A context owns a disk; connections share its live database handles. */
@@ -5680,9 +5758,9 @@ return {SQLiteProvider};
 })();
 
 /* ../data/wire.js */
-__modules[50]=(()=>{
-const {VBCurrency,VBDecimal}=__modules[34];
-const {assertData}=__modules[37];
+__modules[52]=(()=>{
+const {VBCurrency,VBDecimal}=__modules[36];
+const {assertData}=__modules[39];
 
 
 const arrayBufferByteLength=Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,'byteLength').get;
@@ -5719,9 +5797,9 @@ return {encodeCell,decodeCell,encodeResult,decodeResult};
 })();
 
 /* ../data/http.js */
-__modules[51]=(()=>{
-const {encodeCell,decodeResult}=__modules[50];
-const {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue}=__modules[37];
+__modules[53]=(()=>{
+const {encodeCell,decodeResult}=__modules[52];
+const {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue}=__modules[39];
 
 
 async function boundedBody(response,limit){
@@ -5861,9 +5939,9 @@ return {HTTPProvider,GatewayProvider};
 })();
 
 /* ../data/files.js */
-__modules[52]=(()=>{
-const {assertData,DATA_LIMITS,resultFromRows,sameValue,pathValue}=__modules[37];
-const {fieldValue}=__modules[40];
+__modules[54]=(()=>{
+const {assertData,DATA_LIMITS,resultFromRows,sameValue,pathValue}=__modules[39];
+const {fieldValue}=__modules[42];
 
 
 function parseCSV(text){
@@ -5916,13 +5994,13 @@ return {parseCSV,writeCSV,FileDataProvider};
 })();
 
 /* ../data/connection.js */
-__modules[53]=(()=>{
-const {dataDefault}=__modules[38];
-const {assertData,dataError,connectionConfiguration,dataList,after}=__modules[37];
-const {ConnectedRecordset}=__modules[42];
-const {fieldValue}=__modules[40];
-const {DataCollection}=__modules[39];
-const {DAOEngine,DAODatabase}=__modules[48];
+__modules[55]=(()=>{
+const {dataDefault}=__modules[40];
+const {assertData,dataError,connectionConfiguration,dataList,after}=__modules[39];
+const {ConnectedRecordset}=__modules[44];
+const {fieldValue}=__modules[42];
+const {DataCollection}=__modules[41];
+const {DAOEngine,DAODatabase}=__modules[50];
 
 
 
@@ -6030,9 +6108,9 @@ return {ADOConnection,ADOCommand,DataCollection,DAOEngine,DAODatabase};
 })();
 
 /* binary-codec.js */
-__modules[54]=(()=>{
-const {VBError}=__modules[30];
-const {VBArray,VBCurrency,VBDecimal,VBErrorValue,NOTHING,coerce,numeric,vbString,Cell,makeRecord : buildRecord}=__modules[34];
+__modules[56]=(()=>{
+const {VBError}=__modules[32];
+const {VBArray,VBCurrency,VBDecimal,VBErrorValue,NOTHING,coerce,numeric,vbString,Cell,makeRecord : buildRecord}=__modules[36];
 
 
 // Classic VB files use an ANSI code page. This browser runtime explicitly uses
@@ -6128,9 +6206,9 @@ return {encodeANSI,decodeANSI,makeRecord,recordLength,encodeVariable,decodeVaria
 })();
 
 /* filesystem.js */
-__modules[55]=(()=>{
-const { VBError }=__modules[30];
-const {encodeANSI,decodeANSI}=__modules[54];
+__modules[57]=(()=>{
+const { VBError }=__modules[32];
+const {encodeANSI,decodeANSI}=__modules[56];
 
 
 const MAX_FILE=20*1024*1024;
@@ -6194,16 +6272,16 @@ return {VirtualFileSystem};
 })();
 
 /* ../data/context.js */
-__modules[56]=(()=>{
-const {RDOEngine,RDOConnection,RDOQuery,RDO_CONSTANTS}=__modules[46];
-const {DAOEngine}=__modules[48];
-const {normalizeDataSources,assertData,DATA_CONSTANTS}=__modules[37];
-const {SQLiteProvider}=__modules[49];
-const {HTTPProvider,GatewayProvider}=__modules[51];
-const {FileDataProvider}=__modules[52];
-const {ADOConnection,ADOCommand,DataCollection}=__modules[53];
-const {ConnectedRecordset}=__modules[42];
-const {VirtualFileSystem}=__modules[55];
+__modules[58]=(()=>{
+const {RDOEngine,RDOConnection,RDOQuery,RDO_CONSTANTS}=__modules[48];
+const {DAOEngine}=__modules[50];
+const {normalizeDataSources,assertData,DATA_CONSTANTS}=__modules[39];
+const {SQLiteProvider}=__modules[51];
+const {HTTPProvider,GatewayProvider}=__modules[53];
+const {FileDataProvider}=__modules[54];
+const {ADOConnection,ADOCommand,DataCollection}=__modules[55];
+const {ConnectedRecordset}=__modules[44];
+const {VirtualFileSystem}=__modules[57];
 
 
 
@@ -6276,8 +6354,8 @@ return {DataContext};
 })();
 
 /* financial.js */
-__modules[57]=(()=>{
-const {VBError}=__modules[28];
+__modules[59]=(()=>{
+const {VBError}=__modules[30];
 /**
  * Double-precision financial functions for the browser VB runtime.
  * Pure ES module: no DOM, network, filesystem or dynamic evaluation.
@@ -6466,7 +6544,7 @@ return {FinancialError,FV,PV,PMT,IPMT,PPMT,NPER,NPV,RATE,IRR,MIRR,SLN,SYD,DDB,FI
 })();
 
 /* ../theme/theme.js */
-__modules[58]=(()=>{
+__modules[60]=(()=>{
 
 /** Theme data is shared by DOM controls, canvas/WebGPU drawing and the exporter.
  * Values are RGB, not OLE BGR. No proprietary font or artwork is embedded.
@@ -6523,9 +6601,9 @@ return {THEMES,SYSTEM_ROLES,SYSTEM_COLOR_NAMES,themeId,getTheme,applyTheme,color
 })();
 
 /* ../graphics/surface.js */
-__modules[59]=(()=>{
-const {GPURasterPresenter}=__modules[13];
-const { colorValue, getTheme }=__modules[58];
+__modules[61]=(()=>{
+const {GPURasterPresenter}=__modules[15];
+const { colorValue, getTheme }=__modules[60];
 
 
 /** Demand-rendered 2D primitives: WebGPU triangles, Canvas2D fallback, DOM text. */
@@ -6703,8 +6781,8 @@ return {refreshGraphicsSurfaces,oleColor,getGPUDevice,GraphicsSurface};
 })();
 
 /* native-windows.js */
-__modules[60]=(()=>{
-const {refreshGraphicsSurfaces}=__modules[59];
+__modules[62]=(()=>{
+const {refreshGraphicsSurfaces}=__modules[61];
 
 /** Native Windows adapter. One VM owns all forms; same-origin windows retain DOM/event identity. */
 function installNativeHost(host, bridge = globalThis.vb6Native) {
@@ -6896,8 +6974,8 @@ return {installNativeHost};
 })();
 
 /* ../project/binary-assets.js */
-__modules[61]=(()=>{
-const {VBError}=__modules[30];
+__modules[63]=(()=>{
+const {VBError}=__modules[32];
 
 const MAX_RESOURCE_BYTES=20*1024*1024;
 const fail=message=>{throw new VBError(message,1002);};
@@ -6908,10 +6986,10 @@ return {fromBase64,toBase64};
 })();
 
 /* ../project/native-text.js */
-__modules[62]=(()=>{
-const {decodeANSI,encodeANSI}=__modules[54];
-const {VBError}=__modules[30];
-const {fromBase64,toBase64}=__modules[61];
+__modules[64]=(()=>{
+const {decodeANSI,encodeANSI}=__modules[56];
+const {VBError}=__modules[32];
+const {fromBase64,toBase64}=__modules[63];
 /** Native project text: preserve bytes, BOMs and line endings; never replace unmappable characters. */
 
 
@@ -6975,9 +7053,9 @@ return {NATIVE_ENCODINGS,bytesOf,equalBytes,linesOf,lineBody,lineEnding,preferre
 })();
 
 /* ../project/frx.js */
-__modules[63]=(()=>{
-const {VBError}=__modules[30];
-const {decodeNativeBytes,encodeNativeText,bytesOf}=__modules[62];
+__modules[65]=(()=>{
+const {VBError}=__modules[32];
+const {decodeNativeBytes,encodeNativeText,bytesOf}=__modules[64];
 /** Bounded FRX records; no COM deserialization, native code, or remote resource loads. */
 
 
@@ -7080,9 +7158,9 @@ return {MAX_RESOURCE_BYTES,cleanProjectPath,relativeProjectPath,resolveProjectPa
 })();
 
 /* ../project/res.js */
-__modules[64]=(()=>{
-const {VBError}=__modules[30];
-const {cleanProjectPath,fromBase64,toBase64,MAX_RESOURCE_BYTES}=__modules[63];
+__modules[66]=(()=>{
+const {VBError}=__modules[32];
+const {cleanProjectPath,fromBase64,toBase64,MAX_RESOURCE_BYTES}=__modules[65];
 /** Windows 32-bit .res containers. Payloads remain opaque unless explicitly edited. */
 
 
@@ -7174,11 +7252,11 @@ return {RESOURCE_TYPES,resourceKey,normalizeResources,readRES,writeRES,decodeStr
 })();
 
 /* resources.js */
-__modules[65]=(()=>{
-const {VBError}=__modules[30];
-const {VBArray,bankersRound,numeric}=__modules[34];
-const {normalizeResources,decodeStringTable}=__modules[64];
-const {fromBase64,rasterDataURL,toBase64,MAX_RESOURCE_BYTES}=__modules[63];
+__modules[67]=(()=>{
+const {VBError}=__modules[32];
+const {VBArray,bankersRound,numeric}=__modules[36];
+const {normalizeResources,decodeStringTable}=__modules[66];
+const {fromBase64,rasterDataURL,toBase64,MAX_RESOURCE_BYTES}=__modules[65];
 
 
 
@@ -7209,8 +7287,8 @@ return {ResourceStore};
 })();
 
 /* error-messages.js */
-__modules[66]=(()=>{
-const {VBError}=__modules[28];
+__modules[68]=(()=>{
+const {VBError}=__modules[30];
 
 /** Invariant English descriptions for the errors produced by this runtime.
  * Localized Windows resource tables and arbitrary COM HRESULT messages are not
@@ -7244,9 +7322,9 @@ return {errorDescription};
 })();
 
 /* strings.js */
-__modules[67]=(()=>{
-const {VBError}=__modules[30];
-const {MISSING,VBArray,coerce,vbString}=__modules[34];
+__modules[69]=(()=>{
+const {VBError}=__modules[32];
+const {MISSING,VBArray,coerce,vbString}=__modules[36];
 
 
 const invalid=()=>{throw new VBError('Invalid procedure call or argument',5);};
@@ -7339,10 +7417,10 @@ return {stringLibrary};
 })();
 
 /* financial-library.js */
-__modules[68]=(()=>{
-const {VBError}=__modules[28];
-const {MISSING,VBArray,numeric}=__modules[34];
-const {FINANCIAL_FUNCTIONS}=__modules[57];
+__modules[70]=(()=>{
+const {VBError}=__modules[30];
+const {MISSING,VBArray,numeric}=__modules[36];
+const {FINANCIAL_FUNCTIONS}=__modules[59];
 
 
 
@@ -7370,8 +7448,8 @@ return {financialLibrary};
 })();
 
 /* signatures.js */
-__modules[69]=(()=>{
-const {FINANCIAL_SIGNATURES}=__modules[57];
+__modules[71]=(()=>{
+const {FINANCIAL_SIGNATURES}=__modules[59];
 
 /** Public names for named-argument binding. A trailing ? denotes Optional. */
 const BUILTIN_SIGNATURES={
@@ -7393,7 +7471,7 @@ return {BUILTIN_SIGNATURES,signatureParameters};
 })();
 
 /* constants.js */
-__modules[70]=(()=>{
+__modules[72]=(()=>{
 
 /** Shared immutable compiler/runtime intrinsic constants. */
 const VB_CONSTANTS = {
@@ -7420,19 +7498,19 @@ return {VB_CONSTANTS};
 })();
 
 /* library.js */
-__modules[71]=(()=>{
-const {errorDescription}=__modules[66];
-const {stringLibrary}=__modules[67];
-const {financialLibrary}=__modules[68];
-const {ResourceStore}=__modules[65];
-const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,weekday,weekdayName,monthName}=__modules[29];
-const {BUILTIN_SIGNATURES,signatureParameters}=__modules[69];
-const {DisconnectedRecordset}=__modules[40];
-const {recordLength}=__modules[54];
-const { VBError }=__modules[30];
-const { lower }=__modules[33];
-const { NOTHING, MISSING, VBErrorValue, explicitErrorValue, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, decimal, numeric, vbString, coerce, bankersRound, truth, binary }=__modules[34];
-const {VB_CONSTANTS}=__modules[70];
+__modules[73]=(()=>{
+const {errorDescription}=__modules[68];
+const {stringLibrary}=__modules[69];
+const {financialLibrary}=__modules[70];
+const {ResourceStore}=__modules[67];
+const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,weekday,weekdayName,monthName}=__modules[31];
+const {BUILTIN_SIGNATURES,signatureParameters}=__modules[71];
+const {DisconnectedRecordset}=__modules[42];
+const {recordLength}=__modules[56];
+const { VBError }=__modules[32];
+const { lower }=__modules[35];
+const { NOTHING, MISSING, VBErrorValue, explicitErrorValue, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, decimal, numeric, vbString, coerce, bankersRound, truth, binary }=__modules[36];
+const {VB_CONSTANTS}=__modules[72];
 
 
 
@@ -7511,9 +7589,9 @@ return {MemoryRecordset,createLibrary,VB_CONSTANTS};
 })();
 
 /* ../controls/rtf.js */
-__modules[72]=(()=>{
-const {VBError}=__modules[30];
-const {decodeANSI}=__modules[54];
+__modules[74]=(()=>{
+const {VBError}=__modules[32];
+const {decodeANSI}=__modules[56];
 /** An original bounded RTF reader/writer and UTF-16 rich-text run model.
  * HTML, native OLE objects, embedded code and external links are never executed.
  */
@@ -7622,9 +7700,9 @@ return {RTF_LIMITS,RICH_DEFAULTS,richText,parseRTF,writeRTF,RichTextDocument};
 })();
 
 /* ../controls/input.js */
-__modules[73]=(()=>{
-const {Cell,truth}=__modules[34];
-const {lower}=__modules[33];
+__modules[75]=(()=>{
+const {Cell,truth}=__modules[36];
+const {lower}=__modules[35];
 
 
 // Browser/Windows button bitmasks agree, but `button` is an ordinal and a
@@ -7738,8 +7816,8 @@ return {shiftMask,mouseButton,pointerMouseEvent,virtualKey,characterKey,acceptsI
 })();
 
 /* ../controls/form-window.js */
-__modules[74]=(()=>{
-const {el}=__modules[33];
+__modules[76]=(()=>{
+const {el}=__modules[35];
 
 /** Pointer-capture lifecycle shared by runtime form moving and resizing. */
 function installFormWindow(form){
@@ -7764,9 +7842,9 @@ return {installFormWindow};
 })();
 
 /* ../controls/native-widgets.js */
-__modules[75]=(()=>{
-const {el}=__modules[33];
-const {getTheme}=__modules[58];
+__modules[77]=(()=>{
+const {el}=__modules[35];
+const {getTheme}=__modules[60];
 
 
 /** Bounds-only model used by the classic two-button spin control. */
@@ -7840,8 +7918,8 @@ return {stepperValue,ClassicUpDown,ClassicCombo};
 })();
 
 /* ../controls/scrollbar.js */
-__modules[76]=(()=>{
-const {el}=__modules[33];
+__modules[78]=(()=>{
+const {el}=__modules[35];
 
 /** Scroll-bar geometry is independent from DOM and remains stable at fractional DPR. */
 function scrollbarGeometry(min,max,value,length,page=1){
@@ -7881,7 +7959,7 @@ return {scrollbarGeometry,ClassicScrollbar};
 })();
 
 /* ../theme/icon-art.js */
-__modules[77]=(()=>{
+__modules[79]=(()=>{
 
 /** Authored classic IDE pixel artwork, not extracted Microsoft resources.
  * Every cell is one native 16px pixel. Keep semantic variants separate: a size,
@@ -8040,8 +8118,8 @@ return {ICON_PALETTE,ICON_ART,CONTROL_ART};
 })();
 
 /* ../theme/icons.js */
-__modules[78]=(()=>{
-const {ICON_ART,CONTROL_ART,ICON_PALETTE}=__modules[77];
+__modules[80]=(()=>{
+const {ICON_ART,CONTROL_ART,ICON_PALETTE}=__modules[79];
 /** Offline, font-independent classic glyph renderer, shared by IDE and runtime. */
 
 const ICON_NAMES=Object.freeze(Object.keys(ICON_ART));
@@ -8068,11 +8146,11 @@ return {ICON_NAMES,CONTROL_ICON_TYPES,hasIcon,hasControlIcon,iconSVG,icon,contro
 })();
 
 /* ../theme/menu.js */
-__modules[79]=(()=>{
-const {uiDocument}=__modules[32];
-const {el}=__modules[33];
-const {icon}=__modules[78];
-const {getTheme}=__modules[58];
+__modules[81]=(()=>{
+const {uiDocument}=__modules[34];
+const {el}=__modules[35];
+const {icon}=__modules[80];
+const {getTheme}=__modules[60];
 /** Shared IDE/runtime popup menus: one session, a retained submenu stack, no leaked listeners. */
 
 
@@ -8157,10 +8235,10 @@ return {mnemonicText,menuIsOpen,closeMenu,showMenu};
 })();
 
 /* ../controls/richtext.js */
-__modules[80]=(()=>{
-const {parseRTF,RichTextDocument,richText}=__modules[72];
-const {VBError}=__modules[30];
-const {oleColor}=__modules[59];
+__modules[82]=(()=>{
+const {parseRTF,RichTextDocument,richText}=__modules[74];
+const {VBError}=__modules[32];
+const {oleColor}=__modules[61];
 /** RichTextBox DOM adapter. All content is constructed as text nodes, never innerHTML. */
 
 
@@ -8248,11 +8326,11 @@ return {RichTextController,RICH_SELECTION_PROPERTIES};
 })();
 
 /* ../project/model.js */
-__modules[81]=(()=>{
-const {normalizeDataSources}=__modules[37];
-const { clone, lower, safeName }=__modules[33];
-const {normalizeResources}=__modules[64];
-const { VBError }=__modules[30];
+__modules[83]=(()=>{
+const {normalizeDataSources}=__modules[39];
+const { clone, lower, safeName }=__modules[35];
+const {normalizeResources}=__modules[66];
+const { VBError }=__modules[32];
 
 
 
@@ -8319,9 +8397,9 @@ return {PROJECT_SCHEMA,newId,BASIC_CONTROL_TYPES,EXTENDED_CONTROL_TYPES,CONTROL_
 })();
 
 /* ../controls/collections.js */
-__modules[82]=(()=>{
-const { VBError }=__modules[30];
-const { lower }=__modules[33];
+__modules[84]=(()=>{
+const { VBError }=__modules[32];
+const { lower }=__modules[35];
 
 
 class ControlCollection {
@@ -8367,23 +8445,23 @@ return {ControlCollection,TreeNodes,ListItems,ColumnHeaders,ToolbarButtons,Statu
 })();
 
 /* ../controls/controls.js */
-__modules[83]=(()=>{
-const {bindMouseInput,bindKeyboardInput,ownsInputEvent,acceptsInput,inputScaleFactor}=__modules[73];
-const {installFormWindow}=__modules[74];
-const {ClassicCombo,ClassicUpDown}=__modules[75];
-const {ClassicScrollbar}=__modules[76];
-const {showMenu : openClassicMenu,closeMenu,menuIsOpen}=__modules[79];
-const {RichTextController,RICH_SELECTION_PROPERTIES}=__modules[80];
-const {parseRTF}=__modules[72];
-const { el, lower, clone }=__modules[33];
-const { VBError }=__modules[30];
-const { NOTHING, Ref, Cell, truth, VBArray, vbString }=__modules[34];
-const { MemoryRecordset }=__modules[71];
-const { GraphicsSurface }=__modules[59];
-const { cssColor : oleColor, fontFamily, getTheme }=__modules[58];
-const { icon, controlIcon }=__modules[78];
-const { CONTROL_DEFAULTS, createControl, newId }=__modules[81];
-const { ControlCollection, TreeNodes, ListItems, ColumnHeaders, ToolbarButtons, StatusPanels, TabItems, ImageItems, ControlArray }=__modules[82];
+__modules[85]=(()=>{
+const {bindMouseInput,bindKeyboardInput,ownsInputEvent,acceptsInput,inputScaleFactor}=__modules[75];
+const {installFormWindow}=__modules[76];
+const {ClassicCombo,ClassicUpDown}=__modules[77];
+const {ClassicScrollbar}=__modules[78];
+const {showMenu : openClassicMenu,closeMenu,menuIsOpen}=__modules[81];
+const {RichTextController,RICH_SELECTION_PROPERTIES}=__modules[82];
+const {parseRTF}=__modules[74];
+const { el, lower, clone }=__modules[35];
+const { VBError }=__modules[32];
+const { NOTHING, Ref, Cell, truth, VBArray, vbString }=__modules[36];
+const { MemoryRecordset }=__modules[73];
+const { GraphicsSurface }=__modules[61];
+const { cssColor : oleColor, fontFamily, getTheme }=__modules[60];
+const { icon, controlIcon }=__modules[80];
+const { CONTROL_DEFAULTS, createControl, newId }=__modules[83];
+const { ControlCollection, TreeNodes, ListItems, ColumnHeaders, ToolbarButtons, StatusPanels, TabItems, ImageItems, ControlArray }=__modules[84];
 
 
 
@@ -8751,10 +8829,10 @@ return {NONVISUAL_TYPES,DEFAULT_EVENTS,CONTROL_EVENTS,BrowserControl,BrowserForm
 })();
 
 /* agent-control.js */
-__modules[84]=(()=>{
-const {CONTROL_EVENTS, DEFAULT_EVENTS}=__modules[83];
-const {clone}=__modules[33];
-const {newId}=__modules[81];
+__modules[86]=(()=>{
+const {CONTROL_EVENTS, DEFAULT_EVENTS}=__modules[85];
+const {clone}=__modules[35];
+const {newId}=__modules[83];
 /** Structured automation of the runtime only; never queries the owner IDE's DOM. */
 
 
@@ -8833,10 +8911,10 @@ return {RuntimeAgentControl};
 })();
 
 /* mdi.js */
-__modules[85]=(()=>{
-const {VBError}=__modules[30];
-const {el}=__modules[33];
-const {NOTHING}=__modules[34];
+__modules[87]=(()=>{
+const {VBError}=__modules[32];
+const {el}=__modules[35];
+const {NOTHING}=__modules[36];
 
 
 
@@ -8893,9 +8971,9 @@ return {arrangeMDIRects,RuntimeMDI};
 })();
 
 /* ../controls/dialog.js */
-__modules[86]=(()=>{
-const {el}=__modules[33];
-const {icon}=__modules[78];
+__modules[88]=(()=>{
+const {el}=__modules[35];
+const {icon}=__modules[80];
 
 
 /** The supported MsgBox style bits. Help/system-modal options remain host limitations. */
@@ -8930,11 +9008,11 @@ return {messageBoxOptions,runtimeDialog};
 })();
 
 /* ../language/binding.js */
-__modules[87]=(()=>{
-const {VBError}=__modules[28];
-const {lower}=__modules[33];
-const {VB_CONSTANTS}=__modules[70];
-const {VBCurrency,coerce,unary,binary}=__modules[34];
+__modules[89]=(()=>{
+const {VBError}=__modules[30];
+const {lower}=__modules[35];
+const {VB_CONSTANTS}=__modules[72];
+const {VBCurrency,coerce,unary,binary}=__modules[36];
 
 
 
@@ -9046,8 +9124,8 @@ return {bindConstants};
 })();
 
 /* ../language/default-types.js */
-__modules[88]=(()=>{
-const {VBError}=__modules[30];
+__modules[90]=(()=>{
+const {VBError}=__modules[32];
 
 /** VB6 module-scoped default types. Later VB.NET-only integer types are not accepted. */
 const DEFAULT_TYPE_NAMES=Object.freeze({defbool:'Boolean',defbyte:'Byte',defint:'Integer',deflng:'Long',defcur:'Currency',defsng:'Single',defdbl:'Double',defdate:'Date',defstr:'String',defobj:'Object',defvar:'Variant'});
@@ -9073,8 +9151,8 @@ return {DEFAULT_TYPE_NAMES,addDefaultTypes,defaultIdentifierType};
 })();
 
 /* ../language/interfaces.js */
-__modules[89]=(()=>{
-const {lower}=__modules[33];
+__modules[91]=(()=>{
+const {lower}=__modules[35];
 
 const json=x=>JSON.stringify(x);
 function shape(p){return {kind:p.kind,accessor:p.accessor,type:lower(p.returnType),params:p.params.map(a=>({type:lower(a.type),byRef:a.byRef,optional:a.optional,paramArray:a.paramArray,array:a.bounds!==null,initial:a.initial}))};}
@@ -9117,8 +9195,8 @@ return {validateInterfaces};
 })();
 
 /* ../language/expression.js */
-__modules[90]=(()=>{
-const { tokenize, VBError }=__modules[30];
+__modules[92]=(()=>{
+const { tokenize, VBError }=__modules[32];
 
 const PRECEDENCE = {imp:1,eqv:2,xor:3,or:4,and:5,'=':7,'<>':7,'<':7,'>':7,'<=':7,'>=':7,is:7,like:7,'&':8,'+':9,'-':9,mod:10,'\\':11,'*':12,'/':12,'^':14};
 class ExpressionParser {
@@ -9195,10 +9273,10 @@ return {ExpressionParser,parseExpression,parseCall};
 })();
 
 /* ../language/conditional.js */
-__modules[91]=(()=>{
-const { VBError }=__modules[30];
-const { parseExpression }=__modules[90];
-const { binary, unary, truth }=__modules[34];
+__modules[93]=(()=>{
+const { VBError }=__modules[32];
+const { parseExpression }=__modules[92];
+const { binary, unary, truth }=__modules[36];
 
 
 
@@ -9237,14 +9315,14 @@ return {preprocess};
 })();
 
 /* ../language/compiler.js */
-__modules[92]=(()=>{
-const {bindConstants}=__modules[87];
-const {defaultIdentifierType,addDefaultTypes}=__modules[88];
-const {validateInterfaces}=__modules[89];
-const { preprocess }=__modules[91];
-const { VBError, logicalLines, splitTop, tokenize }=__modules[30];
-const { parseExpression, parseCall }=__modules[90];
-const { lower }=__modules[33];
+__modules[94]=(()=>{
+const {bindConstants}=__modules[89];
+const {defaultIdentifierType,addDefaultTypes}=__modules[90];
+const {validateInterfaces}=__modules[91];
+const { preprocess }=__modules[93];
+const { VBError, logicalLines, splitTop, tokenize }=__modules[32];
+const { parseExpression, parseCall }=__modules[92];
+const { lower }=__modules[35];
 
 
 
@@ -9476,10 +9554,10 @@ return {parseDeclarations,parseParameters,compileModule,compileProject,validateC
 })();
 
 /* debug-control.js */
-__modules[93]=(()=>{
-const {VBError,tokenize}=__modules[30];
-const {lower}=__modules[33];
-const {truth}=__modules[34];
+__modules[95]=(()=>{
+const {VBError,tokenize}=__modules[32];
+const {lower}=__modules[35];
+const {truth}=__modules[36];
 
 
 
@@ -9620,10 +9698,10 @@ return {StopExecution,isSequencePoint,statementIndex,RuntimeDebugger,immediateSt
 })();
 
 /* win32.js */
-__modules[94]=(()=>{
-const {createWin32,Win32Error,encodeANSI,decodeANSI}=__modules[27];
-const {VBError}=__modules[30];
-const {VBArray,VBCurrency,numeric,coerce}=__modules[34];
+__modules[96]=(()=>{
+const {createWin32,Win32Error,encodeANSI,decodeANSI}=__modules[29];
+const {VBError}=__modules[32];
+const {VBArray,VBCurrency,numeric,coerce}=__modules[36];
 
 
 
@@ -9744,8 +9822,8 @@ return {VBWin32Bridge};
 })();
 
 /* debug-evaluation.js */
-__modules[95]=(()=>{
-const {VBError}=__modules[30];
+__modules[97]=(()=>{
+const {VBError}=__modules[32];
 
 /** Not a VB exception: Resume Next must not defeat user cancellation. */
 class DebugEvaluationAbort extends VBError {
@@ -9773,11 +9851,11 @@ return {DebugEvaluationAbort,DebugEvaluationSession};
 })();
 
 /* debug-inspector.js */
-__modules[96]=(()=>{
-const {VBError}=__modules[30];
-const {parseExpression}=__modules[90];
-const {lower}=__modules[33];
-const {Cell,LazyCell,Ref,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,VBErrorValue,NOTHING,MISSING,objectSupports,unary,binary,coerce,truth}=__modules[34];
+__modules[98]=(()=>{
+const {VBError}=__modules[32];
+const {parseExpression}=__modules[92];
+const {lower}=__modules[35];
+const {Cell,LazyCell,Ref,VBArray,VBCollection,VBDictionary,VBCurrency,VBDecimal,VBErrorValue,NOTHING,MISSING,objectSupports,unary,binary,coerce,truth}=__modules[36];
 
 
 
@@ -9827,8 +9905,8 @@ return {debugDescription,DebugInspector};
 })();
 
 /* instruction-map.js */
-__modules[97]=(()=>{
-const {VBError}=__modules[30];
+__modules[99]=(()=>{
+const {VBError}=__modules[32];
 
 const instructionKey=ins=>{const {line,column,endColumn,source,procedure,sequencePoint,...rest}=ins;return JSON.stringify(rest);};
 const key=instructionKey;
@@ -9854,10 +9932,10 @@ return {instructionKey,linearInstruction,instructionMap};
 })();
 
 /* live-edit.js */
-__modules[98]=(()=>{
-const {statementIndex}=__modules[93];
-const {instructionMap,linearInstruction,instructionKey}=__modules[97];
-const {VBError}=__modules[30];
+__modules[100]=(()=>{
+const {statementIndex}=__modules[95];
+const {instructionMap,linearInstruction,instructionKey}=__modules[99];
+const {VBError}=__modules[32];
 
 
 
@@ -9919,25 +9997,25 @@ return {sameActiveLayout,planLiveEdit,nextStatementIndex};
 })();
 
 /* vm.js */
-__modules[99]=(()=>{
-const {RuntimeDebugger,StopExecution,isSequencePoint,statementIndex,immediateStatements}=__modules[93];
-const {VBWin32Bridge}=__modules[94];
-const {isAutomationObject,automationDefaultName,automationMember,automationReference,automationInvoke,automationEnumerate}=__modules[35];
-const {DataContext}=__modules[56];
-const {errorDescription}=__modules[66];
-const {DebugEvaluationSession}=__modules[95];
-const {hasDataDefault,hasDataMember}=__modules[38];
-const {defaultIdentifierType}=__modules[88];
-const {DebugInspector}=__modules[96];
-const {planLiveEdit,nextStatementIndex}=__modules[98];
-const {encodeVariable,decodeVariable,makeRecord}=__modules[54];
-const { Signal, lower, VERSION }=__modules[33];
-const { VBError, splitTop, tokenize }=__modules[30];
-const { parseExpression, parseCall }=__modules[90];
-const { compileProject }=__modules[92];
-const { NOTHING, MISSING, objectIdentity, objectSupports, VBErrorValue, LazyCell, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, cloneValue, coerce, defaultValue, numeric, truth, vbString, unary, binary, describe }=__modules[34];
-const { VirtualFileSystem }=__modules[55];
-const { createLibrary, MemoryRecordset }=__modules[71];
+__modules[101]=(()=>{
+const {RuntimeDebugger,StopExecution,isSequencePoint,statementIndex,immediateStatements}=__modules[95];
+const {VBWin32Bridge}=__modules[96];
+const {isAutomationObject,automationDefaultName,automationMember,automationReference,automationInvoke,automationEnumerate}=__modules[37];
+const {DataContext}=__modules[58];
+const {errorDescription}=__modules[68];
+const {DebugEvaluationSession}=__modules[97];
+const {hasDataDefault,hasDataMember}=__modules[40];
+const {defaultIdentifierType}=__modules[90];
+const {DebugInspector}=__modules[98];
+const {planLiveEdit,nextStatementIndex}=__modules[100];
+const {encodeVariable,decodeVariable,makeRecord}=__modules[56];
+const { Signal, lower, VERSION }=__modules[35];
+const { VBError, splitTop, tokenize }=__modules[32];
+const { parseExpression, parseCall }=__modules[92];
+const { compileProject }=__modules[94];
+const { NOTHING, MISSING, objectIdentity, objectSupports, VBErrorValue, LazyCell, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency, VBDecimal, cloneValue, coerce, defaultValue, numeric, truth, vbString, unary, binary, describe }=__modules[36];
+const { VirtualFileSystem }=__modules[57];
+const { createLibrary, MemoryRecordset }=__modules[73];
 
 
 
@@ -10530,20 +10608,20 @@ return {VBInstance,VirtualMachine};
 })();
 
 /* host.js */
-__modules[100]=(()=>{
-const {retainRenderer}=__modules[12];
-const {RuntimeAgentControl}=__modules[84];
-const {RuntimeMDI}=__modules[85];
-const {runtimeDialog,messageBoxOptions}=__modules[86];
-const { applyTheme, themeId }=__modules[58];
-const { icon }=__modules[78];
-const {rasterDataURL}=__modules[63];
-const { el, download, lower, clone }=__modules[33];
-const { compileProject }=__modules[92];
-const { VirtualMachine }=__modules[99];
-const { VirtualFileSystem }=__modules[55];
-const { describe }=__modules[34];
-const { BrowserForm }=__modules[83];
+__modules[102]=(()=>{
+const {retainRenderer}=__modules[14];
+const {RuntimeAgentControl}=__modules[86];
+const {RuntimeMDI}=__modules[87];
+const {runtimeDialog,messageBoxOptions}=__modules[88];
+const { applyTheme, themeId }=__modules[60];
+const { icon }=__modules[80];
+const {rasterDataURL}=__modules[65];
+const { el, download, lower, clone }=__modules[35];
+const { compileProject }=__modules[94];
+const { VirtualMachine }=__modules[101];
+const { VirtualFileSystem }=__modules[57];
+const { describe }=__modules[36];
+const { BrowserForm }=__modules[85];
 
 
 
@@ -10602,32 +10680,32 @@ return {ApplicationHost};
 })();
 
 /* entry.js */
-__modules[101]=(()=>{
-const {UIRenderer, retainRenderer, rendererForDocument}=__modules[12];
+__modules[103]=(()=>{
+const {UIRenderer, retainRenderer, rendererForDocument}=__modules[14];
 const {normalizeRendering, DEFAULT_RENDERING}=__modules[0];
-const {createWin32,Win32Browser,WIN32_CONSTANTS}=__modules[27];
-const {AutomationRegistry}=__modules[35];
-const {ControlAdapterRegistry}=__modules[36];
-const {DataContext}=__modules[56];
-const {ADOConnection,ADOCommand}=__modules[53];
-const {ConnectedRecordset}=__modules[42];
-const {DATA_CONSTANTS}=__modules[37];
-const {FINANCIAL_FUNCTIONS}=__modules[57];
-const {installNativeHost}=__modules[60];
-const {ResourceStore}=__modules[65];
-const {readRES,writeRES,setResource,setResourceString}=__modules[64];
-const {THEMES,applyTheme,colorValue}=__modules[58];
-const {MemoryRecordset}=__modules[71];
-const {RichTextDocument,parseRTF,writeRTF}=__modules[72];
-const { ApplicationHost }=__modules[100];
-const { VirtualMachine }=__modules[99];
-const { compileProject, compileModule }=__modules[92];
-const { parseExpression }=__modules[90];
-const { NOTHING, MISSING, VBErrorValue, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency,VBDecimal }=__modules[34];
-const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,dateToSerial,serialToDate}=__modules[29];
-const { VirtualFileSystem }=__modules[55];
-const { BrowserControl, BrowserForm }=__modules[83];
-const { GraphicsSurface }=__modules[59];
+const {createWin32,Win32Browser,WIN32_CONSTANTS}=__modules[29];
+const {AutomationRegistry}=__modules[37];
+const {ControlAdapterRegistry}=__modules[38];
+const {DataContext}=__modules[58];
+const {ADOConnection,ADOCommand}=__modules[55];
+const {ConnectedRecordset}=__modules[44];
+const {DATA_CONSTANTS}=__modules[39];
+const {FINANCIAL_FUNCTIONS}=__modules[59];
+const {installNativeHost}=__modules[62];
+const {ResourceStore}=__modules[67];
+const {readRES,writeRES,setResource,setResourceString}=__modules[66];
+const {THEMES,applyTheme,colorValue}=__modules[60];
+const {MemoryRecordset}=__modules[73];
+const {RichTextDocument,parseRTF,writeRTF}=__modules[74];
+const { ApplicationHost }=__modules[102];
+const { VirtualMachine }=__modules[101];
+const { compileProject, compileModule }=__modules[94];
+const { parseExpression }=__modules[92];
+const { NOTHING, MISSING, VBErrorValue, Cell, Ref, VBArray, VBCollection, VBDictionary, VBCurrency,VBDecimal }=__modules[36];
+const {asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,dateToSerial,serialToDate}=__modules[31];
+const { VirtualFileSystem }=__modules[57];
+const { BrowserControl, BrowserForm }=__modules[85];
+const { GraphicsSurface }=__modules[61];
 
 
 
@@ -10658,6 +10736,6 @@ const RuntimeAPI={UIRenderer,retainRenderer,rendererForDocument,normalizeRenderi
 
 return {mountApplication,RuntimeAPI};
 })();
-globalThis["VB6Runtime"]=__modules[101];
+globalThis["VB6Runtime"]=__modules[103];
 })();
 VB6Runtime.mountApplication(JSON.parse(document.getElementById('vb6-project').textContent),document.getElementById('app'),{"persist":true}).then(host=>{globalThis.vb6Application=host;});</script></body></html>

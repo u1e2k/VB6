@@ -68,13 +68,7 @@ def new_page(browser, dpr=1, ide=False):
     page.add_script_tag(content=BUNDLE)
     return page
 
-def pixels(a, b):
-    first, second = Image.open(io.BytesIO(a)).convert('RGB'), Image.open(io.BytesIO(b)).convert('RGB')
-    check(first.size == second.size, 'Framebuffer dimensions differ')
-    diff = ImageChops.difference(first, second)
-    data = list(diff.getdata())
-    count = sum(any(p) for p in data)
-    return {'changedPixels': count, 'pixels': len(data), 'fraction': count / len(data), 'maxChannelError': max(max(p) for p in data), 'meanChannelError': sum(sum(p) for p in data)/(len(data)*3)}
+from rendering_pixels import compare_pixels as pixels
 
 with sync_playwright() as playwright:
     executable = os.environ.get('CHROMIUM_PATH') or shutil.which('chromium') or playwright.chromium.executable_path
@@ -630,6 +624,52 @@ with sync_playwright() as playwright:
         check(page.evaluate('JSON.stringify({policy:vb6Studio.rendering.policy,settings:vb6Studio.project.settings})')==before,'Options Cancel changed measurement policy')
         check(not page.errors,str(page.errors));page.close();return {'cancelled':True,'settingsPreserved':True}
     case('classic Options measurement can cancel without changing renderer or export settings',options_measurement)
+
+    def text_style_reuse():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate('''async backend=>{
+          document.body.innerHTML='<style>#label{font:16px monospace;width:160px;height:30px;background:rgb(10,20,30)}body:has(#label:empty) #peer{background:rgb(40,50,60)}#peer{width:30px;height:30px;background:rgb(70,80,90)}</style><div id="label">First</div><div id="peer"></div><div id="rtl" dir="auto">English</div>';
+          window.r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
+          for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
+        }''',backend)
+        result=page.evaluate('''async()=>{
+          const label=document.querySelector('#label'),peer=document.querySelector('#peer'),rtl=document.querySelector('#rtl');
+          const settle=async()=>{for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)};
+          const sceneData=()=>JSON.stringify(r.retained.scene.commands.map(c=>({rect:c.rect,clip:c.clip,color:c.color,color2:c.color2,hole:c.hole})));
+          const initial=r.adapter.style(label),start=r.metrics.textStyleReuses;
+          const retained=[];
+          for(let i=0;i<8;i++){
+            if(i%2)label.firstChild.data=i%4===1?'Other':'First';else label.textContent=i%4===0?'First':'Other';
+            await settle();retained.push(r.adapter.style(label)===initial);
+          }
+          const optimized=sceneData();r.invalidateStyles();await settle();const identical=optimized===sceneData();
+          label.textContent='';await settle();const emptyColor=r.adapter.style(peer).backgroundColor;
+          rtl.firstChild.data='עברית';await settle();const direction=r.adapter.style(rtl).direction;
+          const output={active:r.backend,styleReuses:r.metrics.textStyleReuses-start,retained,identical,emptyColor,direction};r.dispose();return output;
+        }''')
+        check(result['active']==backend,str(result))
+        check(result['styleReuses']==8 and all(result['retained']), 'Unchanged selector styles were reread: '+str(result))
+        check(result['identical'],'Retained style scene differs from a complete resample')
+        check(result['emptyColor']=='rgb(40, 50, 60)' and result['direction']=='rtl', 'Selector-sensitive text was not invalidated: '+str(result))
+        check(not page.errors,str(page.errors));page.close();return result
+    case('text changes reuse computed styles while preserving replacement nodes, empty selectors and direction',text_style_reuse)
+
+    def translucent_paint():
+        page = new_page(browser, dpr=1.5)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate('''()=>{
+          document.body.innerHTML='<style>body{margin:0;background:rgb(30,50,90)}.sample{position:absolute;width:90px;height:90px;top:20px}.alpha{left:20px;background:rgba(255,0,0,.5)}.border{left:140px;background:white;border:8px solid rgba(0,255,0,.5)}.gradient{left:280px;background:linear-gradient(90deg,rgba(255,0,0,.4),rgba(0,0,255,.8))}.shadow{left:420px;background:white;box-shadow:3px 3px rgba(0,0,0,.4)}</style><div class="sample alpha">Alpha</div><div class="sample border"></div><div class="sample gradient"></div><div class="sample shadow"></div>';
+          window.r=new VB6Rendering.UIRenderer(document,{backend:'html'});
+        }''')
+        page.evaluate('document.fonts.ready');before=page.screenshot()
+        page.evaluate('backend=>r.setOptions({backend,fallbacks:["html"]})',backend)
+        page.wait_for_timeout(150);after=page.screenshot();comparison=pixels(before,after)
+        (OUT/'translucent-html.png').write_bytes(before);(OUT/f'translucent-{backend}.png').write_bytes(after)
+        check(page.evaluate('r.backend')==backend,'Alpha test silently fell back')
+        check(comparison['changedPixels']==0,'CSS opacity applied twice: '+str(comparison))
+        page.evaluate('r.dispose();undefined');check(not page.errors,str(page.errors));page.close();return comparison
+    case('partial-alpha backgrounds, borders, gradients and shadows are not composited twice',translucent_paint)
 
     def benchmark():
         page=new_page(browser,ide=True)

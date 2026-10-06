@@ -2,6 +2,7 @@ import {PaintScene, parseColor, splitCSS} from './scene.js';
 import {intersect} from './policy.js';
 import {solidBackgroundLayers, paintBackgroundLayers} from './background.js';
 import {requiresNativeShadowPaint} from './style-activity.js';
+import {hasPartialAlpha, canvasBackground} from './paint-compat.js';
 const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
 const NATIVE = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'IFRAME', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IMG', 'OBJECT', 'EMBED', 'TABLE', 'METER', 'PROGRESS']);
 const rectOf = rect => [rect.left, rect.top, rect.width, rect.height];
@@ -32,11 +33,12 @@ export class DOMScene {
     const scene = new PaintScene(width, height, {dpr: view.devicePixelRatio || 1, pixelSnap: policy.pixelSnap});
     this.elements = new Set(); this.boxes = new WeakMap();
     this.scene = scene; this.policy = policy; this.selection = this.document.getSelection(); this.atlas.begin();
-    let background;
-    try { background = parseColor(this.style(this.document.body).backgroundColor); } catch { background = [1, 1, 1, 1]; }
-    if (background[3] === 0) { try { background = parseColor(this.style(this.document.documentElement).backgroundColor); } catch {} }
-    if (background[3] === 0) background = [1, 1, 1, 1];
-    scene.add([0, 0, width, height], background);
+    let backdrop;
+    try { backdrop = canvasBackground(this.style(this.document.documentElement), this.style(this.document.body)); }
+    catch { backdrop = {propagated: false, native: true}; }
+    this.propagatedBodyBackground = backdrop.propagated;
+    if (backdrop.native) scene.native(scene.clip, scene.clip, 'native canvas background');
+    else scene.add(scene.clip, backdrop.color);
     this.element(this.document.body, scene.clip, 0);
     return scene;
   }
@@ -77,6 +79,7 @@ export class DOMScene {
     }
     return style;
   }
+  invalidateChildren(node) { this.order.delete(node); }
   invalidateStyles(node = null) {
     this.order = new WeakMap();
     if (!node || node === this.document.body || node === this.document.documentElement || node === this.document.head) { this.styles = new WeakMap(); return; }
@@ -142,8 +145,11 @@ export class DOMScene {
         const layered = splitCSS(style.backgroundImage || 'none').length > 1;
         style.paint = {borders: sourceBorders, shadows: shadowParts(style.boxShadow), background: parseColor(style.backgroundColor), gradient: layered ? null : this.gradient(style.backgroundImage), layers: layered ? solidBackgroundLayers(style) : null};
       }
+      const paint = node === this.document.body && this.propagatedBodyBackground
+        ? {...style.paint, background: [0, 0, 0, 0], gradient: null, layers: null} : style.paint;
+      if (hasPartialAlpha(paint)) throw new Error('native alpha compositing');
       borders = scaleX === 1 && scaleY === 1 ? style.paint.borders : style.paint.borders.map((b, i) => ({...b, width: b.width * (i % 2 ? scaleX : scaleY)}));
-      ({shadows, background, gradient, layers} = style.paint);
+      ({shadows, background, gradient, layers} = paint);
     } catch (error) { if (visible && inView) this.native(node, rect, clip, error.message); else this.children(node, clip, depth); return; }
     if (visible && inView) {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
