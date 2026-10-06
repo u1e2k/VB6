@@ -1,0 +1,77 @@
+name: Integrate current OCX and rendering sources
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-ocx-sync.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-final-main-sync
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Integrate pinned OCX main with explicit source resolutions
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff b6f623d5c9e55efd4f2da39c5b22e0a609427491 || true
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          assert Path('.git/MERGE_HEAD').exists()
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          for path in conflicts:
+              if path.startswith(('dist/','examples/')) or path in ['src/exporter/runtime-payload.js','src/editor/diagnostics-payload.js']:
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+              elif path=='src/runtime/entry.js':
+                  # Keep all current OCX exports and add precisely the existing
+                  # rendering API; neither long export list may overwrite the other.
+                  source=subprocess.check_output(['git','show',':3:'+path],text=True)
+                  assert source.count('export const RuntimeAPI={')==1
+                  assert 'OcxPropertyBag,OcxControlSite,ocxControlSite,automationSubscribe' in source
+                  source="import {UIRenderer, retainRenderer, rendererForDocument} from '../rendering/renderer.js';\nimport {normalizeRendering, DEFAULT_RENDERING} from '../rendering/policy.js';\n"+source
+                  source=source.replace('export const RuntimeAPI={','export const RuntimeAPI={UIRenderer,retainRenderer,rendererForDocument,normalizeRendering,DEFAULT_RENDERING,',1)
+                  Path(path).write_text(source)
+              else:
+                  raise RuntimeError('Unreviewed source conflict: '+path)
+              subprocess.run(['git','add','--',path],check=True)
+          # Preserve the improved bootstrap diagnostic and packaged import graph.
+          assert 'Native bootstrap failed: ' in Path('desktop/smoke.cjs').read_text()
+          assert 'web/runtime-document-loader.mjs' in Path('tools/build-windows.mjs').read_text()
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          PY
+          npm run build && npm test
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'merge: preserve OCX runtime controls and staged native loader in WebGPU integration'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+      - name: Capture integrated source and any conflict diagnostics
+        if: always()
+        run: |
+          git bundle create /tmp/rendering-ocx-source.bundle HEAD refs/remotes/origin/main
+          git status --short > /tmp/rendering-ocx-status.txt
+          git diff --cc > /tmp/rendering-ocx-conflicts.txt
+          git rev-parse HEAD > /tmp/rendering-ocx-head.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-ocx-integrated-source
+          path: |
+            /tmp/rendering-ocx-source.bundle
+            /tmp/rendering-ocx-status.txt
+            /tmp/rendering-ocx-conflicts.txt
+            /tmp/rendering-ocx-head.txt
+          retention-days: 7
