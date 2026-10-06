@@ -163,9 +163,34 @@ base.CASES += [with_events_dropdown,single_timer_event,live_event_declarations,i
 # Qualified type paths, implicit ReDim declarations and inert project metadata.
 MODELS={'id':'models','name':'Models','kind':'module','code':'Public Type Point\nX As Long\nEnd Type\nPrivate Type Secret\nHidden As Long\nEnd Type'}
 
+def press_completion_key(p, key):
+    """Observe delivery of one real editor key, not a desired completion result.
+
+    keyboard.press acknowledges protocol input; keep event delivery separate
+    from the immediate source/list assertions below. A missing event times out;
+    a delivered key producing a stale list still fails, without pressing again.
+    https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
+    """
+    delivery=p.evaluate_handle("""key=>{
+      const input=vb6Studio.editor.input,view=input.ownerDocument.defaultView;
+      if(input.ownerDocument.activeElement!==input)throw Error('Completion input lost focus before '+key);
+      const state={seen:false,input,view,key};
+      state.listener=event=>{
+        if(event.key===key&&event.target===input)queueMicrotask(()=>{state.seen=true;});
+      };
+      view.addEventListener('keyup',state.listener);
+      return state;
+    }""",key)
+    try:
+        p.keyboard.press(key)
+        p.wait_for_function('state=>state.seen',arg=delivery,timeout=8000)
+    finally:
+        delivery.evaluate('state=>state.view.removeEventListener("keyup",state.listener)')
+        delivery.dispose()
+
 def qualified_module_path(p):
     setup(p,'Private Sub Form_Load()\nDim location As ',others=[MODELS])
-    p.keyboard.press('Control+j');put(p,'Models');check(names(p)==['Models'],names(p));p.keyboard.press('.')
+    p.keyboard.press('Control+j');put(p,'Models');check(names(p)==['Models'],names(p));press_completion_key(p,'.')
     check(names(p)==['Point'],names(p));put(p,'Poi');p.keyboard.press('Tab')
     check(p.evaluate('vb6Studio.editor.text.endsWith("As Models.Point")'))
     setup(p,'Private Sub Form_Load()\nDim location As Models.Point\nlocation',others=[MODELS]);put(p,'.')
@@ -174,7 +199,7 @@ def qualified_module_path(p):
 def project_type_path(p):
     setup(p,'Private Sub Form_Load()\nDim location As IntelliSenseLab.',others=[MODELS,base.CUSTOMER])
     p.keyboard.press('Control+j');check('Models' in names(p),names(p));check('Customer' in names(p));check('Point' not in names(p))
-    put(p,'Models');p.keyboard.press('.');check(names(p)==['Point'],names(p));p.keyboard.press('Tab')
+    put(p,'Models');press_completion_key(p,'.');check(names(p)==['Point'],names(p));press_completion_key(p,'Tab')
     check(p.evaluate('vb6Studio.editor.text.endsWith("As IntelliSenseLab.Models.Point")'))
 
 def unicode_type_path(p):
