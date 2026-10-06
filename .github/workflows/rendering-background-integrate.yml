@@ -2,7 +2,7 @@ name: Integrate reviewed fractional background painting
 on:
   push:
     branches: [feat/webgpu-ui-rendering]
-    paths: [.rendering-background.patch, .github/workflows/rendering-background-integrate.yml]
+    paths: [.rendering-background.patch, .rendering-preview.patch, .github/workflows/rendering-background-integrate.yml]
 permissions:
   contents: write
 concurrency:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Preserve latest native debugger changes and apply reviewed image-edge correction
+      - name: Reconcile native preview loading and reviewed fractional-edge source
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -40,12 +40,15 @@ jobs:
                   theirs=subprocess.check_output(['git','show',':3:.gitignore']).decode().splitlines()
                   assert not any(line.startswith('!') for line in ours+theirs)
                   Path(path).write_text('\n'.join(dict.fromkeys(ours+theirs))+'\n')
-              elif path=='src/runtime/host.js':
-                  main=subprocess.check_output(['git','show','2a45fce5f25b5f9e214acb82384119d00d7510cc:src/runtime/host.js']).decode()
-                  before="if(options.bridgeToken)window.addEventListener('message',this.messageHandler);}"
-                  after="if(options.bridgeToken)window.addEventListener('message',this.messageHandler);if(options.rendering!==false){this.renderingSession=retainRenderer(container.ownerDocument,options.rendering||project.settings?.rendering||{});this.renderer=this.renderingSession.renderer;}}"
-                  assert main.count(before)==1 and main.count('dispose(){this.disposed=true;')==1
-                  main="import {retainRenderer} from '../rendering/renderer.js';\n"+main.replace(before,after).replace('dispose(){this.disposed=true;','dispose(){this.disposed=true;this.renderingSession?.release();')
+              elif path=='desktop/studio.mjs':
+                  # The checked patch below unifies both loader implementations.
+                  subprocess.run(['git','checkout','--ours','--',path],check=True)
+              elif path=='src/ide/main.js':
+                  main=subprocess.check_output(['git','show','2a45fce5f25b5f9e214acb82384119d00d7510cc:src/ide/main.js']).decode()
+                  marker='JSON.stringify({project:this.project,breakpoints:this.breakpoints,watches:this.watches,layout:this.layoutSnapshot()})'
+                  assert main.count(marker)==1
+                  main="import {projectWithPassiveReferences} from '../editor/reference-metadata.js';\n"+main.replace(marker,marker.replace('project:this.project','project:projectWithPassiveReferences(this.project)'))
+                  assert 'loadRuntimeDocument(this,frame,' in main and 'this.bridgeToken===token' in main
                   Path(path).write_text(main)
               else:
                   raise RuntimeError('Unreviewed authored conflict: '+path)
@@ -53,16 +56,19 @@ jobs:
           assert Path('.git/MERGE_HEAD').exists()
           subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
           assert hashlib.sha256(Path('.rendering-background.patch').read_bytes()).hexdigest()=='43c72750ed8e64a205b9b435f283fd56284c140b5bfa7428febda3023b44582e'
+          assert hashlib.sha256(Path('.rendering-preview.patch').read_bytes()).hexdigest()=='2bbccfbe7950b904f5cb5bc4f385a79905d4a745840c1a008f8e836165e5d4e9'
           PY
           git apply --check .rendering-background.patch
           git apply .rendering-background.patch
+          git apply --check .rendering-preview.patch
+          git apply .rendering-preview.patch
           npm run build && npm test
       - name: Commit combined source and reproducible distributions
         run: |
-          git rm .rendering-background.patch
-          git add src/rendering/background.js src/rendering/dom-scene.js tests/rendering-background.test.mjs tools/browser-rendering-tests.py tools/verify-rendering-report.py dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git rm .rendering-background.patch .rendering-preview.patch
+          git add desktop/studio.mjs src/ide/main.js tests/native-preview-navigation.test.mjs src/rendering/background.js src/rendering/dom-scene.js tests/rendering-background.test.mjs tools/browser-rendering-tests.py tools/verify-rendering-report.py dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
           git diff --cached --exit-code -- .github/workflows
-          git commit -m 'fix(rendering): preserve fractional background-edge coverage with retained GPU interiors'
+          git commit -m 'fix(rendering): preserve fractional bevel pixels and shared native preview navigation'
           git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
           git bundle create /tmp/rendering-validated-source.bundle HEAD refs/remotes/origin/main
           git rev-parse HEAD > /tmp/rendering-validated-head.txt
