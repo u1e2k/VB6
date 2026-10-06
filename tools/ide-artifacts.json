@@ -1,0 +1,109 @@
+{
+  "version": 2,
+  "files": {
+    "dist/studio.js": {
+      "bytes": 5497261,
+      "sha256": "9d8d3bd725a7157b53c8b27a9a8783eecc8b4447b02cb925e1c9e8404efc4846"
+    },
+    "dist/VB6-Studio-Web.html": {
+      "bytes": 5652927,
+      "sha256": "892b96d46ff0e602a7de4d44d52db73093aa48da3b06bcff5f80f7c80aa5c8db"
+    },
+    "dist/vb6-runtime.js": {
+      "bytes": 2072183,
+      "sha256": "e55c62b68b5a3414f3fd53daa5e0dac468fc682e21406937f20825005848377d"
+    },
+    "src/exporter/runtime-payload.js": {
+      "bytes": 2151252,
+      "sha256": "d0d3955e4d1e33f2dfdb2c061de9acc831949ec33fcf4ddc0ce8bd07fe84c2b5"
+    },
+    "dist/examples/orders.html": {
+      "bytes": 2151904,
+      "sha256": "01bbd1f228510281ae4b78812aa77f5c5262c6d7f309319562b446218cfc3714"
+    },
+    "dist/examples/calculator.html": {
+      "bytes": 2146221,
+      "sha256": "16578af43fdb1d1376da17d33b46af107e15b8845e965e115637db545a12d50c"
+    },
+    "dist/examples/clock.html": {
+      "bytes": 2139869,
+      "sha256": "82fa07710364f55210f3c2d0838b2e46ce2fe23c622655aa41e40a8f2c4cc40b"
+    },
+    "dist/examples/graphics.html": {
+      "bytes": 2139584,
+      "sha256": "315d961f1c225393e90ca4913d1a96a476be3f21f66552faa7d3b934ce5a2e82"
+    },
+    "dist/examples/data.html": {
+      "bytes": 2141733,
+      "sha256": "d90fb811c21f2a968b910c583e302be38220de890387a5ca42d6620755ea6cb3"
+    },
+    "dist/examples/controls.html": {
+      "bytes": 2142154,
+      "sha256": "a50488c4b693881c213efdaa12bbbdf87ce71d252f7bc3096327f8aadefbe47b"
+    },
+    "dist/examples/language.html": {
+      "bytes": 2137835,
+      "sha256": "d29a716677b83d195131fa874d546ec1596fc2f0f6ec041cc05d609c871bb170"
+    },
+    "dist/examples/events.html": {
+      "bytes": 2142613,
+      "sha256": "bf445c9c06cc7014af4c8d218b28671e96a26c9ee7eacf42bd299b78923c4664"
+    },
+    "dist/examples/richtext.html": {
+      "bytes": 2145348,
+      "sha256": "296520848cf0f489cc71339dac302a91ae0f5f6e28bb4337f777a63b65e16e76"
+    },
+    "dist/examples/compatibility.html": {
+      "bytes": 2147449,
+      "sha256": "5d019aab8cad150ede4971552d3f3a912387e62861a32d175490948ae8989aeb"
+    },
+    "dist/examples/mdi.html": {
+      "bytes": 2142607,
+      "sha256": "829607838bab816c509fb3f97cb093b69882da3adf76a0dcd7bb1c7f64ae6845"
+    },
+    "dist/examples/sqlite-customers.html": {
+      "bytes": 2144794,
+      "sha256": "9a81ee3845cba02bf15a82315dfbb7a15e34440612f266e67831c9f3de0fb407"
+    },
+    "dist/examples/rest-customers.html": {
+      "bytes": 2144610,
+      "sha256": "79f9fbc3d64dda8a7d48239f31f5e98cd5dc8ff18fc33c1442c284151a3f5deb"
+    },
+    "dist/examples/rest-public-users.html": {
+      "bytes": 2144391,
+      "sha256": "43dd93e8d1a76b48fe17d61276d04ca629b9b647d5e6f41a82327f3214975390"
+    },
+    "dist/examples/graphql-customers.html": {
+      "bytes": 2144516,
+      "sha256": "b4aa828fb7371ca5c2ec6d26a9c49555135b094e57cf7efa0fec6869e45e3505"
+    },
+    "dist/examples/win32.html": {
+      "bytes": 2153625,
+      "sha256": "bd6d51cee1b61378034101e31e5447c20423349d333465dcd572a8b1d1839f34"
+    },
+    "dist/examples/win32-files.html": {
+      "bytes": 2144090,
+      "sha256": "f16f58d971aa4d0176b604aef9d91081d373515933b4d35770ded43e45fb12cb"
+    },
+    "dist/examples/win32-text.html": {
+      "bytes": 2141579,
+      "sha256": "1ac1fc1d58527d8fca9722227842a1f7f4012080a205dd7054e384f3750ef90b"
+    },
+    "dist/examples/win32-sync.html": {
+      "bytes": 2141784,
+      "sha256": "0cd66e295d4e202d6c69d381c1cf7b64458c6c2432301ad870397466b41b21c6"
+    },
+    "dist/examples/win32-registry.html": {
+      "bytes": 2142541,
+      "sha256": "32bd5a48d2be7f068f6d194a6009bfd8a19ac292c98e61fe0d7b91f2ade22a2a"
+    },
+    "dist/examples/win32-guid.html": {
+      "bytes": 2141931,
+      "sha256": "41ecf7640c83a19a7c3fa25de9180186169df90dd093f30e568280e75afa356e"
+    },
+    "dist/examples/win32-properties.html": {
+      "bytes": 2141614,
+      "sha256": "b9dd620e9c2f1807917d87308b22244411c5bc0ebb38ddbd5f18cf4027debf24"
+    }
+  }
+}
