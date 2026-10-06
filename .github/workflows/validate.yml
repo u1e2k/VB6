@@ -116,7 +116,16 @@ jobs:
         run: |
           # Source: Chris Gervang, https://github.com/visgl/luma.gl/issues/2874
           args=()
-          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          if [ "$DISPLAY_MODE" = headed ]; then
+            args+=(--headed)
+            # The headed native HTML scrollbar raster alternates one channel
+            # level before a GPU layer exists. Fix only its native-tile raster
+            # path for this oracle; WebGPU/WebGL2 draws and GPU readback remain
+            # mandatory. Headless retains GPU native-tile raster coverage.
+            # Chromium flag semantics (not --disable-gpu):
+            # https://chromium.googlesource.com/chromium/src/+/3662e2b281fb1aa7997b352651f42e43fef6a6af/gpu/config/gpu_switches.cc
+            export RENDERING_BROWSER_FLAGS="$RENDERING_BROWSER_FLAGS --disable-gpu-rasterization"
+          fi
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
       - name: Require all 39 cases and unchanged generated products
         run: |
