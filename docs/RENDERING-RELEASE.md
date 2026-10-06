@@ -1,115 +1,100 @@
-# Dual-renderer release
+# Dual-renderer integration
 
-## Release-candidate configuration
+## Configuration
 
-WebGPU is the preferred UI painter. HTML/CSS remains selectable in
-**Tools → Options → Rendering**, with ordered fallback choices (WebGPU, WebGL2,
-Canvas2D) and an unconditional final HTML safety path. The default order is
-WebGPU → WebGL2 → Canvas2D → HTML. Existing saved HTML preferences are respected.
-The implementation paints supported geometry with the selected canvas backend
-and retains browser-native surfaces for exact native editing, accessibility,
-text, controls and unsupported CSS. It is a **hybrid renderer**, not a replacement
-browser layout engine or a claim of a completely GPU-only IDE.
+WebGPU is the preferred UI backend. **Tools → Options → Rendering** keeps
+HTML/CSS available and selects ordered WebGL2/Canvas2D fallbacks, pixel snapping,
+native or experimental atlas text, and an explicit policy for exported apps.
+The default chain is WebGPU → WebGL2 → Canvas2D → HTML/CSS. HTML is always the
+terminal safety path. Existing saved HTML preferences, Cancel and undo remain
+respected. Backend selection applies live without replacing the editor/project.
 
-The earlier classic HTML bevel/list work is included, with HN/Jordan Scales/98.css
-source attribution and the full MIT notice retained in the source and shipped CSS.
+The standalone `dist/vb6-rendering.js` library and the same modular painters are
+integrated into the IDE, runtime, detached documents and standalone HTML exports.
+Frames use the actual device pixel ratio; device/memory limits trigger a reported
+fallback instead of silent resolution downscaling. Context/device loss and stale
+startup results release resources and advance through the selected fallbacks.
 
-## Final integration changes
+## Rendering architecture and performance
 
-- Reconciles main `f4ee8d47bed69ae26b65d20637b8f5f8da13d815`, including current
-  native Date, call/region, input, debugger, IntelliSense, RDO/data providers
-  and coding-agent conversation threads. Generated
-  bundles are rebuilt from combined sources rather than resolved by discarding
-  either branch's generated output.
-- Event-driven CSSOM and Web Animations invalidation: stylesheet rule insertion,
-  deletion/replacement, rule properties/selectors, adopted-sheet assignment,
-  media/disabled changes, programmatic animation start/pause/cancel, scrubbing
-  and keyframe/timing changes. No idle polling. Realm-scoped descriptors are
-  shared between subscribers and restored on the last release; native declaration
-  identity, method results, errors and asynchronous replacement promises remain
-  intact. Renderer layer writes never trigger an invalidation loop.
-- Per-build element measurement reuse, cached local stacking order, one reusable
-  DOM Range, unchanged WebGPU uniform-upload suppression, and no synchronous
-  WebGL limits/error query on every unchanged opaque draw. Geometry is not cached
-  across independent scene builds, so scroll/resize updates remain accurate.
-- Shadow-root hosts fall back to native painting rather than hiding untraversed
-  shadow content under a solid overlay.
-- **Measure Rendering / Cancel Measurement / Save Report** in the classic Options
-  tab. Measures the actual local backend on a bounded sealed-primitive workload
-  without changing document contents or renderer/project preferences. Raw CPU
-  submission samples and optional WebGPU pass timestamps are reported separately.
-  GPU timestamps are requested only where supported and are never inferred from
-  CPU clocks. Normal production frames allocate no queries or readback buffers.
+This is a **hybrid DOM/GPU renderer**, not a DOM-free UI or browser layout engine.
+GPU painters draw supported backgrounds, clipped geometry, borders, classic
+bevel layers and optional text atlases. DOM layout, accessibility, editing/IME,
+native text/widgets/icons, existing graphics canvases and unsupported CSS remain
+native. Native islands and partially transparent paints are not falsely reported
+as GPU-painted surfaces. The native HTML path is intentionally retained.
 
-Additional completion fixes cover keyboard-active/checked/validity/popover states,
-late stylesheet resource events, adopted stylesheet getter/index accesses and
-saved-array mutators, observed closed shadow hosts, and persisted page lifecycle
-restoration. Foreign descriptor changes survive subscription teardown; observation
-capabilities are exposed in renderer diagnostics. First-frame failure and HTML
-fallback clear scene, atlas and observer resources. Cancellation is checked again
-after yielding to the event loop.
+Exact retained-scene comparison reuses immutable geometry, packed instances and
+draw batches. Unchanged output skips submission; image revisions, dimensions and
+canvas identities invalidate image uploads independently. Scene construction
+reuses per-build measurements, stacking information and a DOM Range. Native text
+avoids unnecessary font serialization. Redundant uniforms and synchronous WebGL
+queries are avoided. These mechanisms do not by themselves prove a whole-IDE
+speedup over the browser's HTML compositor.
 
-Native-text geometry builds no longer read or serialize computed font shorthands
-for every element. Atlas text loads those metrics lazily into the same invalidated
-style snapshot. A same-browser cold-style comparison preserved all 1,497 drawing
-commands; six alternating rounds measured 255.1 ms versus 244.6 ms median totals
-for ten builds. This bounded, noisy CPU microbenchmark is not a whole-IDE or
-hardware-GPU speedup certification.
+Event-driven mutation, CSSOM, input, resize and animation observation wakes paint
+when required and returns to idle afterward. The October 6 lifecycle correction
+defers newly encountered ResizeObserver targets to a coalesced task outside an
+active resize-delivery loop. It cancels and clears pending registrations during
+failure, backend replacement and disposal. See [RENDERING-RESIZE-LIFECYCLE.md](RENDERING-RESIZE-LIFECYCLE.md).
 
-## Acceptance evidence
+**Measure Rendering / Cancel Measurement / Save Report** runs a bounded workload
+on the actual local adapter without changing project or renderer preferences.
+It preserves raw CPU submission samples and optional real WebGPU pass timestamps.
+Normal frames do not allocate diagnostic query/readback buffers. Adapter identity,
+software fallback and timer quantization remain explicit; GPU time, presentation
+latency, FPS and CPU submission time are not interchangeable measurements.
 
-The local combined source passed **2,606 Node tests (56 rendering tests)** and
-**22 browser cases with 8 GPU-dependent cases explicitly skipped** in the restricted
-local browser. The strict GPU workflow rejects fallback output and runs all
-**30 browser cases** independently for WebGPU/WebGL2 in headed/headless Chromium.
-The CI artifacts on the final PR head are the authoritative GPU results.
+## Integration and attribution
 
-New coverage includes 15 actual shipped control implementations in normal,
-changed/disabled/checked and focused text-selection states; classic, Windows
-Standard and high-contrast themes; fractional DPI; a narrow mobile viewport;
-a real detached Properties window with live backend changes and independent
-cleanup; and the shipped standalone calculator with exact screenshot comparisons,
-input execution and renderer disposal. Existing six-DPI primitive framebuffer
-readback, four-DPI IDE goldens, device/context loss, race/lifetime and retained
-scene/texture regression gates are retained unchanged.
+The source incorporates main `728a9201806a4d455113867d2778c3262666a05b`, including
+its visual-fidelity CSS, caption/menu behavior and portable generated bundles,
+as well as the preceding scalar runtime, editor/IME, agent, native interoperability
+and data-provider work. Generated outputs are rebuilt from the combined source,
+not selected from one side of a merge conflict.
 
-## Deterministic mnemonic marks
+Jordan Scales' HN/98.css staircase-bevel attribution and complete MIT notice remain
+in source, distributed CSS and release packages. Independent CSSOM, Web Animations,
+DOM, CSSWG, WebGPU and layout-batching guidance is attributed at the relevant code.
+No third-party fonts are included by this change. Classic mnemonic marks use a
+scoped filled strip to avoid automatic underline raster drift; native glyphs,
+inline layout, prose underlines and high-contrast fallback are preserved.
 
-A repeated-switch investigation isolated a two-pixel automatic-underline drift
-at DPR 1.5: native HTML captures could differ even while the overlay framebuffer
-contained transparent pixels. Increasing native-hole padding, forcing underline
-thickness/offset or making the mnemonic an inline block did not reliably fix it.
+## Acceptance and reproducibility
 
-The classic mnemonic selectors now paint a one-CSS-pixel filled background strip,
-with no change to glyphs, font shaping, inline geometry, selection or inherited
-text color. General prose underlines are untouched. Forced-colors mode restores
-a native underline because author background images may be suppressed. CSSWG
-and CSS Backgrounds attribution is beside the source rule; it is separate from
-the attributed 98.css bevel implementation.
+The shared `tools/verify-rendering-report.py` gate requires **34 passed cases,
+zero failed and zero skipped** for each required GPU API. x64, ARM64 and container
+matrices exercise WebGPU/WebGL2 in headed/headless Chromium. Each requires actual
+API execution, exact framebuffer/presentation pixels and reproducible generated
+outputs. Consult the run on the PR's exact head; historical 19/30/33-case runs are
+not substitutes for current-source qualification.
 
-The diagnostic comparison alternated native and explicit-strip variants: all 16
-strip-based renderer switches and their intervening HTML/hidden-overlay captures
-were identical, while native underline variants still drifted. The permanent
-thirtieth browser case repeats HTML/Canvas2D/required-GPU transitions, compares
-whole-IDE screenshots at zero pixel tolerance, and checks inline geometry,
-larger fonts, disabled colors, prose scoping and forced colors. No reference
-image was overwritten with GPU output and no tolerance was increased.
+Coverage includes six-DPI primitives/holes/clips/textures, four-DPI whole-IDE
+comparisons against HTML, repeated mnemonic switching, actual runtime controls
+and changed/disabled/selected states, multiple themes, mobile layout, detached
+Properties ownership, standalone calculator execution, CSSOM/animation wakeups,
+resize reentrancy, alpha compositing, retained scenes/textures, loss recovery,
+settings/measurement cancellation, persisted-page lifecycle and cleanup.
+The screenshot comparator's counts, errors and difference bounds are separately
+checked against scalar calculations, including single-channel and sparse changes.
+Neither pixel tolerance nor failure handling is relaxed.
 
-## Measurement boundaries
+```
+npm run build
+npm test
+python tools/test_rendering_pixels.py
+python tools/browser-rendering-tests.py --require-webgpu --software-gpu
+python tools/verify-rendering-report.py reports/rendering/report.json --backend webgpu
+```
 
-The automated GPU environment uses **software SwiftShader**, not a physical GPU.
-The reports certify only the tested API/pixel cases. They do **not** certify all
-native Windows VB6 pixels, hardware acceleration, whole-IDE speedup, input latency,
-sustained FPS, power consumption or physical desktop/mobile performance. The local
-measurement tool makes real adapter/timestamp evidence obtainable without reporting
-those unsupported claims as completed certification.
+Restricted local browser runs explicitly skip unavailable APIs; those skips are
+not GPU qualification. Automated adapters are normally software SwiftShader.
+The evidence does **not** certify complete native Windows VB6 golden-image parity,
+a fully GPU-only IDE, physical desktop/mobile acceleration, sustained frame pacing,
+power consumption or an end-to-end performance improvement over HTML/CSS.
 
-Pre-captured native CSSOM methods and saved declaration references can bypass
-instrumentation. Indexed edits through the `adoptedStyleSheets` getter and saved
-array push/splice/etc are observed; direct index writes through a previously saved
-array reference still need `renderer.invalidateStyles()`. Custom elements and
-observed open/closed shadow hosts stay native. A built-in element with an
-unobservable closed shadow root created before observation must be marked
-`data-vb-native-render` by its integration.
-A physical native-Windows reference matrix and replacing every native-painted
-surface remain broader compatibility goals, not completed release claims.
+Pre-captured native CSSOM methods/declarations and direct writes through previously
+saved adopted-sheet arrays can bypass observation; integrations can explicitly
+call `renderer.invalidateStyles()`. A built-in closed shadow root created before
+observation requires `data-vb-native-render`. These limitations remain documented
+rather than silently presented as complete browser-paint emulation.

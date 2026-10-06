@@ -14,11 +14,22 @@ class PixelTests(unittest.TestCase):
                 second=first if same else Image.frombytes('RGB',first.size,rng.randbytes(width*height*3))
                 scalar=list(ImageChops.difference(first,second).getdata())
                 count=len(scalar);changed=sum(any(p) for p in scalar)
-                expected={'changedPixels':changed,'pixels':count,'fraction':changed/count,'maxChannelError':max(max(p) for p in scalar),'meanChannelError':sum(sum(p) for p in scalar)/(count*3)}
+                points=[(i%width,i//width) for i,pixel in enumerate(scalar) if any(pixel)]
+                bounds=(min(x for x,y in points),min(y for x,y in points),max(x for x,y in points)+1,max(y for x,y in points)+1) if points else None
+                expected={'bounds':bounds,'changedPixels':changed,'pixels':count,'fraction':changed/count,'maxChannelError':max(max(p) for p in scalar),'meanChannelError':sum(sum(p) for p in scalar)/(count*3)}
                 self.assertEqual(compare_pixels(png(first),png(second)),expected)
     def test_one_channel_difference_is_not_lost(self):
         a=Image.new('RGB',(5,5));b=a.copy();b.putpixel((3,3),(0,0,1))
-        self.assertEqual(compare_pixels(png(a),png(b))['changedPixels'],1)
+        result=compare_pixels(png(a),png(b))
+        self.assertEqual(result['changedPixels'],1)
+        self.assertEqual(result['bounds'],(3,3,4,4))
+    def test_sparse_bounds_and_identical_images(self):
+        a=Image.new('RGB',(11,9));b=a.copy()
+        b.putpixel((8,2),(1,0,0));b.putpixel((2,6),(0,1,0))
+        result=compare_pixels(png(a),png(b))
+        self.assertEqual(result['bounds'],(2,2,9,7))
+        self.assertEqual(result['changedPixels'],2)
+        self.assertIsNone(compare_pixels(png(a),png(a))['bounds'])
     def test_mismatched_dimensions_fail(self):
         with self.assertRaisesRegex(AssertionError,'Framebuffer dimensions differ'):
             compare_pixels(png(Image.new('RGB',(1,1))),png(Image.new('RGB',(2,1))))
