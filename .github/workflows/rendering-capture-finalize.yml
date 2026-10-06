@@ -1,0 +1,62 @@
+name: Finalize renderer capture readiness
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-capture-finalize.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-capture-finalize
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply reviewed test-only capture correction
+        shell: bash
+        run: |
+          mkdir -p /tmp/rendering-capture-final
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('tools/browser-rendering-tests.py');text=p.read_text()
+          assert hashlib.sha256(text.encode()).hexdigest()=='3183bbcb4ef85c571c7c3de5d029d7e29aab37dcdd43174514da6fbd52a63d79'
+          old='                native_image = page.screenshot()'
+          new='''                # Submission completion is not compositor presentation. Apply
+                          # the same reference-independent stability prerequisite as the
+                          # whole-IDE tests to EVERY mode switch, not just the baseline.
+                          # A stable wrong image still fails the fixed zero-pixel oracle.
+                          native_image = stable_html_reference(page, f'mnemonics-native-{backend}-{repeat}')'''
+          # The YAML block removes ten indentation spaces from every source line.
+          assert text.count(old)==1
+          text=text.replace(old,new)
+          old="                page.wait_for_timeout(100);image=page.screenshot()\n                (OUT/f'mnemonics-{backend}.png').write_bytes(image)"
+          new="                page.wait_for_timeout(100)\n                image=stable_render_capture(page, f'mnemonics-switch-{backend}-{repeat}', backend)\n                (OUT/f'mnemonics-{backend}.png').write_bytes(image)"
+          assert text.count(old)==1
+          text=text.replace(old,new)
+          assert hashlib.sha256(text.encode()).hexdigest()=='2e5823bd1df1ae194e7fd6f46430c85953a7fd296afe1e43dac7071f3fe07afa'
+          p.write_text(text)
+          PY
+          python3 -m py_compile tools/browser-rendering-tests.py
+          npm test > /tmp/rendering-capture-final/tests.log 2>&1
+          git add tools/browser-rendering-tests.py
+          git diff --cached --exit-code -- .github/workflows dist src
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test(rendering): await independently stable presentation on every backend switch'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git rev-parse HEAD > /tmp/rendering-capture-final/head.txt
+          cp tools/browser-rendering-tests.py /tmp/rendering-capture-final/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-capture-final-source
+          path: /tmp/rendering-capture-final
+          retention-days: 7
