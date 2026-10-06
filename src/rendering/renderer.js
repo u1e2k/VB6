@@ -24,6 +24,7 @@ export class UIRenderer {
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
     this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.resizeTargetsTask = null; this.pendingResizeTargets = null;
     this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
@@ -133,7 +134,7 @@ export class UIRenderer {
         if (this.disposed || generation !== this.generation) return this.getStats();
         // The first frame can fail after observe() connected. HTML fallback
         // must not retain an observer (or a queued frame) from the failed driver.
-        this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.resizeObserver?.disconnect();
+        this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.disconnectResizeTargets();
         this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
@@ -156,11 +157,34 @@ export class UIRenderer {
     this.frame = this.view.requestAnimationFrame(() => { this.frame = null; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
   syncResizeTargets() {
-    if (!this.resizeObserver) return;
+    if (!this.resizeObserver || !this.driver || this.disposed) return;
     const next = this.adapter.elements || new Set([this.document.body]);
-    for (const node of this.observedElements) if (!next.has(node)) this.resizeObserver.unobserve(node);
-    for (const node of next) if (!this.observedElements.has(node)) this.resizeObserver.observe(node);
-    this.observedElements = next;
+    const same = next.size === this.observedElements.size && [...next].every(node => this.observedElements.has(node));
+    // A caller can render synchronously from its own ResizeObserver callback.
+    // Adding a shallower target during that delivery creates skipped observations
+    // and a resize-loop error, despite this renderer never changing layout.
+    // Defer target registration to a task, NOT a microtask in the delivery loop.
+    // Sources: https://www.w3.org/TR/resize-observer/#broadcast-active-observations
+    //          https://www.w3.org/TR/resize-observer/#deliver-resize-loop-error
+    if (same && !this.resizeTargetsTask) return;
+    this.pendingResizeTargets = new Set(next);
+    if (this.resizeTargetsTask) return;
+    const task = {generation: this.generation, handle: null};
+    this.resizeTargetsTask = task;
+    task.handle = this.view.setTimeout(() => {
+      if (this.resizeTargetsTask !== task) return;
+      this.resizeTargetsTask = null;
+      const targets = this.pendingResizeTargets; this.pendingResizeTargets = null;
+      if (this.disposed || !this.driver || task.generation !== this.generation || !targets) return;
+      for (const node of this.observedElements) if (!targets.has(node)) this.resizeObserver.unobserve(node);
+      for (const node of targets) if (!this.observedElements.has(node)) this.resizeObserver.observe(node);
+      this.observedElements = targets;
+    }, 0);
+  }
+  disconnectResizeTargets() {
+    if (this.resizeTargetsTask) this.view.clearTimeout(this.resizeTargetsTask.handle);
+    this.resizeTargetsTask = null; this.pendingResizeTargets = null;
+    this.resizeObserver?.disconnect(); this.observedElements.clear();
   }
   renderNow({force = false} = {}) {
     if (this.disposed || !this.driver || this.printing) return;
@@ -198,7 +222,7 @@ export class UIRenderer {
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.disconnectResizeTargets(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();

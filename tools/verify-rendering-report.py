@@ -8,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 
-EXPECTED_CASES = 33
+EXPECTED_CASES = 34
 
 def verify(report, backend):
     expected = {'passed': EXPECTED_CASES, 'failed': 0, 'skipped': 0}

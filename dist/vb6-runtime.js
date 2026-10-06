@@ -2,7 +2,7 @@
 (()=>{'use strict';
 const __modules=[];
 
-/* ../rendering/policy.js */
+/* ..\rendering\policy.js */
 __modules[0]=(()=>{
 
 /** Serializable, dependency-free rendering policy. HTML is always the final safety net. */
@@ -49,7 +49,7 @@ function snapRect(rect, dpr = 1) {
 return {BACKENDS,DEFAULT_RENDERING,RENDERING_STORAGE_KEY,normalizeRendering,renderingCandidates,readRendering,writeRendering,physicalSize,intersect,snapRect};
 })();
 
-/* ../rendering/scene.js */
+/* ..\rendering\scene.js */
 __modules[1]=(()=>{
 const {intersect, snapRect}=__modules[0];
 
@@ -118,7 +118,7 @@ function rgbaCSS(c) { return `rgba(${c[0] * 255},${c[1] * 255},${c[2] * 255},${c
 return {PaintScene,parseColor,splitCSS,rgbaCSS};
 })();
 
-/* ../rendering/canvas2d.js */
+/* ..\rendering\canvas2d.js */
 __modules[2]=(()=>{
 const {physicalSize}=__modules[0];
 const {rgbaCSS}=__modules[1];
@@ -157,7 +157,7 @@ class CanvasPainter {
 return {CanvasPainter};
 })();
 
-/* ../rendering/device.js */
+/* ..\rendering\device.js */
 __modules[3]=(()=>{
 
 const devices = new WeakMap();
@@ -209,7 +209,7 @@ function subscribeDeviceLoss(device, callback) {
 return {deadline,acquireDevice,subscribeDeviceLoss};
 })();
 
-/* ../rendering/instances.js */
+/* ..\rendering\instances.js */
 __modules[4]=(()=>{
 
 /** Shared WebGPU/WebGL2 instance encoder. Colors remain unpremultiplied sRGB.
@@ -270,7 +270,7 @@ function prepareBatches(painter, scene) {
 return {INSTANCE_FLOATS,INSTANCE_BYTES,encodeInstances,canReuseInstances,rememberInstances,prepareBatches};
 })();
 
-/* ../rendering/webgpu.js */
+/* ..\rendering\webgpu.js */
 __modules[5]=(()=>{
 const {acquireDevice, deadline, subscribeDeviceLoss}=__modules[3];
 const {physicalSize}=__modules[0];
@@ -466,7 +466,7 @@ class WebGPUPainter {
 return {UI_SHADER,WebGPUPainter};
 })();
 
-/* ../rendering/webgl2.js */
+/* ..\rendering\webgl2.js */
 __modules[6]=(()=>{
 const {physicalSize}=__modules[0];
 const {encodeInstances, canReuseInstances, rememberInstances, prepareBatches}=__modules[4];
@@ -566,7 +566,7 @@ class WebGLPainter {
 return {WebGLPainter};
 })();
 
-/* ../rendering/atlas.js */
+/* ..\rendering\atlas.js */
 __modules[7]=(()=>{
 
 /** Browser-shaped text runs are rasterized once, then sampled by GPU quads.
@@ -621,7 +621,7 @@ class TextAtlas {
 return {TextAtlas};
 })();
 
-/* ../rendering/background.js */
+/* ..\rendering\background.js */
 __modules[8]=(()=>{
 const {parseColor, splitCSS}=__modules[1];
 
@@ -670,7 +670,7 @@ function paintBackgroundLayers(scene, rect, clip, layers) {
 return {solidBackgroundLayers,paintBackgroundLayers};
 })();
 
-/* ../rendering/style-activity.js */
+/* ..\rendering\style-activity.js */
 __modules[9]=(()=>{
 
 /** Event-driven CSSOM / Web Animations invalidation, scoped to a Window.
@@ -878,7 +878,7 @@ function subscribeStyleActivity(view, callback) {
 return {requiresNativeShadowPaint,subscribeStyleActivity};
 })();
 
-/* ../rendering/paint-compat.js */
+/* ..\rendering\paint-compat.js */
 __modules[10]=(()=>{
 const {parseColor}=__modules[1];
 
@@ -911,7 +911,7 @@ function canvasBackground(root, body) {
 return {hasPartialAlpha,canvasBackground};
 })();
 
-/* ../rendering/dom-scene.js */
+/* ..\rendering\dom-scene.js */
 __modules[11]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
@@ -1166,7 +1166,7 @@ class DOMScene {
 return {DOMScene};
 })();
 
-/* ../rendering/retained-scene.js */
+/* ..\rendering\retained-scene.js */
 __modules[12]=(()=>{
 
 /** Exact retained-scene comparison, not a probabilistic hash. The UI can receive
@@ -1218,7 +1218,7 @@ class RetainedScene {
 return {sameGeometry,RetainedScene};
 })();
 
-/* ../rendering/mutations.js */
+/* ..\rendering\mutations.js */
 __modules[13]=(()=>{
 
 /** Reuse paint styles only when a mutation cannot change selector matching.
@@ -1248,7 +1248,7 @@ function canReuseTextStyles(record, parent) {
 return {canReuseTextStyles};
 })();
 
-/* ../rendering/renderer.js */
+/* ..\rendering\renderer.js */
 __modules[14]=(()=>{
 const {normalizeRendering, renderingCandidates}=__modules[0];
 const {CanvasPainter}=__modules[2];
@@ -1285,6 +1285,7 @@ class UIRenderer {
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
     this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.resizeTargetsTask = null; this.pendingResizeTargets = null;
     this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
     this.observe(); this.ready = this.setOptions(policy, {force: true});
@@ -1394,7 +1395,7 @@ class UIRenderer {
         if (this.disposed || generation !== this.generation) return this.getStats();
         // The first frame can fail after observe() connected. HTML fallback
         // must not retain an observer (or a queued frame) from the failed driver.
-        this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.resizeObserver?.disconnect();
+        this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.disconnectResizeTargets();
         this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
@@ -1417,11 +1418,34 @@ class UIRenderer {
     this.frame = this.view.requestAnimationFrame(() => { this.frame = null; try { this.renderNow(); } catch (error) { this.fallback(error.message || String(error)); } });
   }
   syncResizeTargets() {
-    if (!this.resizeObserver) return;
+    if (!this.resizeObserver || !this.driver || this.disposed) return;
     const next = this.adapter.elements || new Set([this.document.body]);
-    for (const node of this.observedElements) if (!next.has(node)) this.resizeObserver.unobserve(node);
-    for (const node of next) if (!this.observedElements.has(node)) this.resizeObserver.observe(node);
-    this.observedElements = next;
+    const same = next.size === this.observedElements.size && [...next].every(node => this.observedElements.has(node));
+    // A caller can render synchronously from its own ResizeObserver callback.
+    // Adding a shallower target during that delivery creates skipped observations
+    // and a resize-loop error, despite this renderer never changing layout.
+    // Defer target registration to a task, NOT a microtask in the delivery loop.
+    // Sources: https://www.w3.org/TR/resize-observer/#broadcast-active-observations
+    //          https://www.w3.org/TR/resize-observer/#deliver-resize-loop-error
+    if (same && !this.resizeTargetsTask) return;
+    this.pendingResizeTargets = new Set(next);
+    if (this.resizeTargetsTask) return;
+    const task = {generation: this.generation, handle: null};
+    this.resizeTargetsTask = task;
+    task.handle = this.view.setTimeout(() => {
+      if (this.resizeTargetsTask !== task) return;
+      this.resizeTargetsTask = null;
+      const targets = this.pendingResizeTargets; this.pendingResizeTargets = null;
+      if (this.disposed || !this.driver || task.generation !== this.generation || !targets) return;
+      for (const node of this.observedElements) if (!targets.has(node)) this.resizeObserver.unobserve(node);
+      for (const node of targets) if (!this.observedElements.has(node)) this.resizeObserver.observe(node);
+      this.observedElements = targets;
+    }, 0);
+  }
+  disconnectResizeTargets() {
+    if (this.resizeTargetsTask) this.view.clearTimeout(this.resizeTargetsTask.handle);
+    this.resizeTargetsTask = null; this.pendingResizeTargets = null;
+    this.resizeObserver?.disconnect(); this.observedElements.clear();
   }
   renderNow({force = false} = {}) {
     if (this.disposed || !this.driver || this.printing) return;
@@ -1459,7 +1483,7 @@ class UIRenderer {
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
       frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.resizeObserver?.disconnect(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.disconnectResizeTargets(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();
@@ -1481,7 +1505,7 @@ function rendererForDocument(document) { return sessions.get(document)?.renderer
 return {createPainter,UIRenderer,retainRenderer,rendererForDocument};
 })();
 
-/* ../../packages/win32-browser/src/gpu-presenter.js */
+/* ..\..\packages\win32-browser\src\gpu-presenter.js */
 __modules[15]=(()=>{
 
 /** WebGPU presentation of a retained, CPU-readable GDI surface. Raster operations
@@ -1535,7 +1559,7 @@ class GPURasterPresenter {
 return {GPURasterPresenter};
 })();
 
-/* ../../packages/win32-browser/src/core.js */
+/* ..\..\packages\win32-browser\src\core.js */
 __modules[16]=(()=>{
 
 /** MIT. A bounded, process-private 32-bit address and handle space. */
@@ -1600,7 +1624,7 @@ class MemoryFileSystem {
 return {ERROR,Win32Error,integer,unsigned,Handles,encodeANSI,decodeANSI,Memory,MemoryFileSystem};
 })();
 
-/* ../../packages/win32-browser/src/gdi-transform.js */
+/* ..\..\packages\win32-browser\src\gdi-transform.js */
 __modules[17]=(()=>{
 const {Win32Error,integer}=__modules[16];
 
@@ -1642,7 +1666,7 @@ function installTransforms(w,{dc,add}){
 return {TRANSFORM_CONSTANTS,IDENTITY,multiply,inverse,mapPoint,mapping,translatedOnly,devicePoint,mapBounds,readTransform,installTransforms};
 })();
 
-/* ../../packages/win32-browser/src/gdi-path.js */
+/* ..\..\packages\win32-browser\src\gdi-path.js */
 __modules[18]=(()=>{
 const {Win32Error,integer}=__modules[16];
 const {mapping,mapPoint,inverse,IDENTITY}=__modules[17];
@@ -1735,7 +1759,7 @@ function installPaths(w,{dc,bitmaps,regions,add,style}){
 return {PATH_CONSTANTS,installPaths};
 })();
 
-/* ../../packages/win32-browser/src/gdi-text.js */
+/* ..\..\packages\win32-browser\src\gdi-text.js */
 __modules[19]=(()=>{
 const {Win32Error,integer,unsigned}=__modules[16];
 const {mapping,multiply,mapPoint,mapBounds}=__modules[17];
@@ -1844,7 +1868,7 @@ function installText(w,{dc,bitmaps,regions,add,stock,stocks}){
 return {TEXT_CONSTANTS,installText};
 })();
 
-/* ../../packages/win32-browser/src/user32-paint.js */
+/* ..\..\packages\win32-browser\src\user32-paint.js */
 __modules[20]=(()=>{
 const {Win32Error,integer,unsigned}=__modules[16];
 
@@ -1950,7 +1974,7 @@ function installPainting(w,{dc,bitmaps,regions}){
 return {PAINT_CONSTANTS,installPainting};
 })();
 
-/* ../../packages/win32-browser/src/gdi-geometry.js */
+/* ..\..\packages\win32-browser\src\gdi-geometry.js */
 __modules[21]=(()=>{
 const {Win32Error,integer}=__modules[16];
 
@@ -2044,7 +2068,7 @@ function frameRegion(store,region,x,y){
 return {polygonRegion,roundedRegion,transformRegion,frameRegion};
 })();
 
-/* ../../packages/win32-browser/src/gdi-region.js */
+/* ..\..\packages\win32-browser\src\gdi-region.js */
 __modules[22]=(()=>{
 const {polygonRegion,roundedRegion,transformRegion,frameRegion}=__modules[21];
 const {mapping,devicePoint,mapBounds,inverse,readTransform}=__modules[17];
@@ -2244,7 +2268,7 @@ function installRegions(w,{dc,bitmaps,regions,add}){
 return {REGION_CONSTANTS,RegionStore,installRegions};
 })();
 
-/* ../../packages/win32-browser/src/gdi-bitmap.js */
+/* ..\..\packages\win32-browser\src\gdi-bitmap.js */
 __modules[23]=(()=>{
 const {mapping,inverse,mapPoint,mapBounds,devicePoint,translatedOnly}=__modules[17];
 const {Win32Error,integer,unsigned}=__modules[16];
@@ -2346,7 +2370,7 @@ class BitmapStore {
 return {GDI_CONSTANTS,coord,intersect,rgbBytes,rgbValue,ropInfo,BitmapStore};
 })();
 
-/* ../../packages/win32-browser/src/clipboard.js */
+/* ..\..\packages\win32-browser\src\clipboard.js */
 __modules[24]=(()=>{
 const {Win32Error,unsigned}=__modules[16];
 
@@ -2378,7 +2402,7 @@ function installClipboard(w){
 return {installClipboard};
 })();
 
-/* ../../packages/win32-browser/src/kernel32.js */
+/* ..\..\packages\win32-browser\src\kernel32.js */
 __modules[25]=(()=>{
 const {ERROR,Win32Error,integer,unsigned}=__modules[16];
 
@@ -2469,7 +2493,7 @@ function installProfiles(w,aw){
 return {installKernel32};
 })();
 
-/* ../../packages/win32-browser/src/user32.js */
+/* ..\..\packages\win32-browser\src\user32.js */
 __modules[26]=(()=>{
 const {Win32Error,integer,unsigned}=__modules[16];
 
@@ -2553,7 +2577,7 @@ function installRectangles(w,add){
 return {installUser32};
 })();
 
-/* ../../packages/win32-browser/src/advapi32.js */
+/* ..\..\packages\win32-browser\src\advapi32.js */
 __modules[27]=(()=>{
 const {Win32Error,integer,unsigned}=__modules[16];
 
@@ -2581,7 +2605,7 @@ function installRegistry(w){
 return {installRegistry};
 })();
 
-/* ../../packages/win32-browser/src/gdi32.js */
+/* ..\..\packages\win32-browser\src\gdi32.js */
 __modules[28]=(()=>{
 const {installTransforms,mapping,translatedOnly,IDENTITY}=__modules[17];
 const {installPaths}=__modules[18];
@@ -2714,7 +2738,7 @@ function installGDI(w){
 return {colorRef,installGDI};
 })();
 
-/* ../../packages/win32-browser/src/index.js */
+/* ..\..\packages\win32-browser\src\index.js */
 __modules[29]=(()=>{
 const {GPURasterPresenter}=__modules[15];
 const {TRANSFORM_CONSTANTS}=__modules[17];
@@ -2773,7 +2797,7 @@ function createWin32(options={}){return new Win32Browser(options);}
 return {WIN32_CONSTANTS,normalizeDLL,Win32Browser,createWin32,GPURasterPresenter,RegionStore,ERROR,Win32Error,Memory,MemoryFileSystem,encodeANSI,decodeANSI,colorRef};
 })();
 
-/* ../language/errors.js */
+/* ..\language\errors.js */
 __modules[30]=(()=>{
 
 class VBError extends Error {
@@ -2862,7 +2886,7 @@ function weekdayName(day,abbreviate=0,first=1){day=integer(day);if(day<1||day>7)
 return {validateDate,dateOrdinal,dateToSerial,serialToDate,asDate,dateAdd,dateDiff,datePart,dateSerial,timeSerial,weekday,monthName,weekdayName};
 })();
 
-/* ../language/lexer.js */
+/* ..\language\lexer.js */
 __modules[32]=(()=>{
 const {asDate}=__modules[31];
 const {VBError}=__modules[30];
@@ -3034,7 +3058,7 @@ class VBDecimal {
 return {VBDecimal};
 })();
 
-/* ../core/window-context.js */
+/* ..\core\window-context.js */
 __modules[34]=(()=>{
 
 /** Documents belonging to one live IDE session. No global DOM monkey-patching. */
@@ -3066,7 +3090,7 @@ function hasUIDialog() {
 return {registerUIDocument,uiDocuments,uiDocument,hasUIDialog};
 })();
 
-/* ../core/core.js */
+/* ..\core\core.js */
 __modules[35]=(()=>{
 const {uiDocument}=__modules[34];
 
@@ -3631,7 +3655,7 @@ async function automationEnumerate(o){const s=state(o);if(typeof s.adapter.enume
 return {isAutomationObject,automationDefaultName,automationInvoke,automationMember,automationReference,AutomationRegistry,automationEnumerate};
 })();
 
-/* ../controls/adapters.js */
+/* ..\controls\adapters.js */
 __modules[38]=(()=>{
 
 /** Host code only. Native project data cannot register code or fetch plug-ins. */
@@ -3656,7 +3680,7 @@ class ControlAdapterRegistry {
 return {ControlAdapterRegistry};
 })();
 
-/* ../data/common.js */
+/* ..\data\common.js */
 __modules[39]=(()=>{
 const {VBError}=__modules[32];
 const {VBArray, VBCurrency, VBDecimal}=__modules[36];
@@ -3836,7 +3860,7 @@ function resultFromRows(rows,fields){
 return {DATA_LIMITS,DATA_CONSTANTS,dataError,assertData,after,dataList,sqlValue,quoteIdentifier,sameValue,parseConnectionString,connectionConfiguration,assertPublicConfiguration,normalizeDataSources,safeHttpURL,pathValue,columnType,resultFromRows};
 })();
 
-/* ../data/defaults.js */
+/* ..\data\defaults.js */
 __modules[40]=(()=>{
 
 // Registration is private to trusted library objects; a forged __type never grants a default property.
@@ -3855,7 +3879,7 @@ function hasDataMember(object,name) { return members.get(object)?.has(String(nam
 return {dataDefault,dataDefaultType,hasDataDefault,dataMembers,hasDataMember};
 })();
 
-/* ../data/collection.js */
+/* ..\data\collection.js */
 __modules[41]=(()=>{
 const {assertData}=__modules[39];
 
@@ -3878,7 +3902,7 @@ NamedCollection.prototype.Append.vbRawArgs=true;
 return {DataCollection,NamedCollection};
 })();
 
-/* ../data/recordset.js */
+/* ..\data\recordset.js */
 __modules[42]=(()=>{
 const {dataDefault}=__modules[40];
 const {VBError}=__modules[32];
@@ -4005,7 +4029,7 @@ class DisconnectedRecordset {
 return {fieldScalarType,fieldValue,DisconnectedRecordset};
 })();
 
-/* ../data/provider-recordset.js */
+/* ..\data\provider-recordset.js */
 __modules[43]=(()=>{
 const {DisconnectedRecordset,fieldValue}=__modules[42];
 const {assertData,after,DATA_LIMITS,sameValue}=__modules[39];
@@ -4124,7 +4148,7 @@ class ProviderRecordset extends DisconnectedRecordset {
 return {ProviderRecordset};
 })();
 
-/* ../data/connected-recordset.js */
+/* ..\data\connected-recordset.js */
 __modules[44]=(()=>{
 const {VBDecimal,VBCurrency,coerce}=__modules[36];
 const {ProviderRecordset}=__modules[43];
@@ -4357,7 +4381,7 @@ class ConnectedRecordset extends ProviderRecordset {
 return {ConnectedRecordset};
 })();
 
-/* ../data/sql-parameters.js */
+/* ..\data\sql-parameters.js */
 __modules[45]=(()=>{
 const {assertData}=__modules[39];
 
@@ -4435,7 +4459,7 @@ function simpleSelect(source) {
 return {sqlTokens,DAO_TYPES,parameterPlan,simpleSelect};
 })();
 
-/* ../data/criteria.js */
+/* ..\data\criteria.js */
 __modules[46]=(()=>{
 const {VBDecimal,VBCurrency}=__modules[36];
 const {assertData}=__modules[39];
@@ -4505,7 +4529,7 @@ function compileCriteria(text,columns){
 return {compareData,compileCriteria};
 })();
 
-/* ../data/dao-recordset.js */
+/* ..\data\dao-recordset.js */
 __modules[47]=(()=>{
 const {dataDefault}=__modules[40];
 const {assertData,after,dataList,sameValue}=__modules[39];
@@ -4614,7 +4638,7 @@ class DAORecordset {
 return {DAORecordset};
 })();
 
-/* ../data/rdo.js */
+/* ..\data\rdo.js */
 __modules[48]=(()=>{
 const {assertData,DATA_LIMITS,quoteIdentifier}=__modules[39];
 const {dataDefault,dataMembers}=__modules[40];
@@ -4798,7 +4822,7 @@ for(const [prototype,method,names,required] of [
 return {RDO_TYPES,RDO_CONSTANTS,RDOParameter,RDOQuery,RDOResultset,RDOConnection,RDOEnvironment,RDOEngine};
 })();
 
-/* ../data/vendor/sqlite.js */
+/* ..\data\vendor\sqlite.js */
 __modules[49]=(()=>{
 
 // Generated by tools/vendor-sqlite.mjs. sql.js 1.14.2 (MIT); SQLite public domain.
@@ -4995,7 +5019,7 @@ function initializeSQLite(){return initSqlJs({wasmBinary:Uint8Array.from(atob(em
 return {initializeSQLite};
 })();
 
-/* ../data/dao.js */
+/* ..\data\dao.js */
 __modules[50]=(()=>{
 const {dataDefault}=__modules[40];
 const {assertData,after,quoteIdentifier,connectionConfiguration,DATA_LIMITS}=__modules[39];
@@ -5190,7 +5214,7 @@ class DAOEngine {
 return {DAOField,DAOIndex,DAOTableDef,DAOParameter,DAOQueryDef,DAODatabase,DAOWorkspace,DAOEngine};
 })();
 
-/* ../data/sqlite.js */
+/* ..\data\sqlite.js */
 __modules[51]=(()=>{
 const {initializeSQLite}=__modules[49];
 const {assertData,dataError,DATA_LIMITS,quoteIdentifier,sqlValue,columnType}=__modules[39];
@@ -5326,7 +5350,7 @@ class SQLiteProvider {
 return {SQLiteProvider};
 })();
 
-/* ../data/wire.js */
+/* ..\data\wire.js */
 __modules[52]=(()=>{
 const {VBCurrency,VBDecimal}=__modules[36];
 const {assertData}=__modules[39];
@@ -5365,7 +5389,7 @@ function decodeResult(result){assertData(Array.isArray(result.columns)&&Array.is
 return {encodeCell,decodeCell,encodeResult,decodeResult};
 })();
 
-/* ../data/http.js */
+/* ..\data\http.js */
 __modules[53]=(()=>{
 const {encodeCell,decodeResult}=__modules[52];
 const {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue}=__modules[39];
@@ -5507,7 +5531,7 @@ class GatewayProvider extends HTTPProvider {
 return {HTTPProvider,GatewayProvider};
 })();
 
-/* ../data/files.js */
+/* ..\data\files.js */
 __modules[54]=(()=>{
 const {assertData,DATA_LIMITS,resultFromRows,sameValue,pathValue}=__modules[39];
 const {fieldValue}=__modules[42];
@@ -5562,7 +5586,7 @@ class FileDataProvider {
 return {parseCSV,writeCSV,FileDataProvider};
 })();
 
-/* ../data/connection.js */
+/* ..\data\connection.js */
 __modules[55]=(()=>{
 const {dataDefault}=__modules[40];
 const {assertData,dataError,connectionConfiguration,dataList,after}=__modules[39];
@@ -5895,7 +5919,7 @@ class VirtualFileSystem {
 return {VirtualFileSystem};
 })();
 
-/* ../data/context.js */
+/* ..\data\context.js */
 __modules[59]=(()=>{
 const {RDOEngine,RDOConnection,RDOQuery,RDO_CONSTANTS}=__modules[48];
 const {DAOEngine}=__modules[50];
@@ -6167,7 +6191,7 @@ const FINANCIAL_FUNCTIONS = Object.freeze({FV,PV,PMT,IPMT,PPMT,NPER,RATE,NPV,IRR
 return {FinancialError,FV,PV,PMT,IPMT,PPMT,NPER,NPV,RATE,IRR,MIRR,SLN,SYD,DDB,FINANCIAL_SIGNATURES,FINANCIAL_FUNCTIONS};
 })();
 
-/* ../theme/theme.js */
+/* ..\theme\theme.js */
 __modules[61]=(()=>{
 
 /** Theme data is shared by DOM controls, canvas/WebGPU drawing and the exporter.
@@ -6224,7 +6248,7 @@ function normalizeAppearance(value={}) {
 return {THEMES,SYSTEM_ROLES,SYSTEM_COLOR_NAMES,themeId,getTheme,applyTheme,colorValue,cssColor,fontFamily,DEFAULT_APPEARANCE,normalizeAppearance};
 })();
 
-/* ../graphics/surface.js */
+/* ..\graphics\surface.js */
 __modules[62]=(()=>{
 const {GPURasterPresenter}=__modules[15];
 const { colorValue, getTheme }=__modules[61];
@@ -6597,7 +6621,7 @@ function installNativeHost(host, bridge = globalThis.vb6Native) {
 return {installNativeHost};
 })();
 
-/* ../project/binary-assets.js */
+/* ..\project\binary-assets.js */
 __modules[64]=(()=>{
 const {VBError}=__modules[32];
 
@@ -6609,7 +6633,7 @@ function toBase64(bytes){if(bytes.length>MAX_RESOURCE_BYTES)fail('resource excee
 return {fromBase64,toBase64};
 })();
 
-/* ../project/native-text.js */
+/* ..\project\native-text.js */
 __modules[65]=(()=>{
 const {decodeANSI,encodeANSI}=__modules[57];
 const {VBError}=__modules[32];
@@ -6676,7 +6700,7 @@ function encodeNativeText(text,document={encoding:'windows-1252',bom:false},over
 return {NATIVE_ENCODINGS,bytesOf,equalBytes,linesOf,lineBody,lineEnding,preferredEOL,unquote,nativePathValue,quote,commentAt,replaceLineValue,decodeNativeBytes,decodeNativeText,encodeNativeText};
 })();
 
-/* ../project/frx.js */
+/* ..\project\frx.js */
 __modules[66]=(()=>{
 const {VBError}=__modules[32];
 const {decodeNativeBytes,encodeNativeText,bytesOf}=__modules[65];
@@ -6781,7 +6805,7 @@ function prepareResources(project){
 return {MAX_RESOURCE_BYTES,cleanProjectPath,relativeProjectPath,resolveProjectPath,fromBase64,toBase64,resourceOffset,readFRXRecord,writeFRXRecord,rasterDataURL,rasterBytes,hydrateResources,prepareResources};
 })();
 
-/* ../project/res.js */
+/* ..\project\res.js */
 __modules[67]=(()=>{
 const {VBError}=__modules[32];
 const {cleanProjectPath,fromBase64,toBase64,MAX_RESOURCE_BYTES}=__modules[66];
@@ -7280,7 +7304,7 @@ function createLibrary(vm) {
 return {MemoryRecordset,createLibrary,VB_CONSTANTS};
 })();
 
-/* ../controls/rtf.js */
+/* ..\controls\rtf.js */
 __modules[76]=(()=>{
 const {VBError}=__modules[32];
 const {decodeANSI}=__modules[57];
@@ -7391,7 +7415,7 @@ class RichTextDocument {
 return {RTF_LIMITS,RICH_DEFAULTS,richText,parseRTF,writeRTF,RichTextDocument};
 })();
 
-/* ../controls/input.js */
+/* ..\controls\input.js */
 __modules[77]=(()=>{
 const {Cell,truth}=__modules[36];
 const {lower}=__modules[35];
@@ -7507,7 +7531,7 @@ function ownsInputEvent(control,event){return ownerOf(event.target)===control&&a
 return {shiftMask,mouseButton,pointerMouseEvent,virtualKey,characterKey,acceptsInput,inputScaleFactor,mouseCoordinates,bindMouseInput,bindKeyboardInput,ownsInputEvent};
 })();
 
-/* ../controls/form-window.js */
+/* ..\controls\form-window.js */
 __modules[78]=(()=>{
 const {el}=__modules[35];
 
@@ -7533,7 +7557,7 @@ function installFormWindow(form){
 return {installFormWindow};
 })();
 
-/* ../controls/native-widgets.js */
+/* ..\controls\native-widgets.js */
 __modules[79]=(()=>{
 const {el}=__modules[35];
 const {getTheme}=__modules[61];
@@ -7609,7 +7633,7 @@ class ClassicCombo {
 return {stepperValue,ClassicUpDown,ClassicCombo};
 })();
 
-/* ../controls/scrollbar.js */
+/* ..\controls\scrollbar.js */
 __modules[80]=(()=>{
 const {el}=__modules[35];
 
@@ -7650,7 +7674,7 @@ class ClassicScrollbar {
 return {scrollbarGeometry,ClassicScrollbar};
 })();
 
-/* ../theme/icon-art.js */
+/* ..\theme\icon-art.js */
 __modules[81]=(()=>{
 
 /** Authored classic IDE pixel artwork, not extracted Microsoft resources.
@@ -7809,7 +7833,7 @@ const CONTROL_ART=Object.freeze(controls);
 return {ICON_PALETTE,ICON_ART,CONTROL_ART};
 })();
 
-/* ../theme/icons.js */
+/* ..\theme\icons.js */
 __modules[82]=(()=>{
 const {ICON_ART,CONTROL_ART,ICON_PALETTE}=__modules[81];
 /** Offline, font-independent classic glyph renderer, shared by IDE and runtime. */
@@ -7837,7 +7861,7 @@ function controlIcon(type){return make(type,16,true);}
 return {ICON_NAMES,CONTROL_ICON_TYPES,hasIcon,hasControlIcon,iconSVG,icon,controlIcon};
 })();
 
-/* ../theme/menu.js */
+/* ..\theme\menu.js */
 __modules[83]=(()=>{
 const {uiDocument}=__modules[34];
 const {el}=__modules[35];
@@ -7884,7 +7908,7 @@ class MenuSession {
       row.append(mark,label,el('span',{class:'menu-shortcut'},item.shortcut||''),el('span',{class:'menu-arrow'},item.items?icon('arrow-right'):null));
       const entry={row,item,enabled,level:depth};state.rows.push(entry);
       row.addEventListener('click',()=>this.activate(state,entry));
-      row.addEventListener('pointerenter',()=>{if(!enabled)return;this.select(state,state.rows.indexOf(entry),false);clearTimeout(this.timer);this.timer=setTimeout(()=>{if(active===this&&entry.item.items)this.submenu(state,entry,false);else this.trim(depth+1);},180);});
+      row.addEventListener('pointerenter',()=>{if(!enabled)return;this.select(state,state.rows.indexOf(entry),true);clearTimeout(this.timer);this.timer=setTimeout(()=>{if(active===this&&entry.item.items)this.submenu(state,entry,false);else this.trim(depth+1);},180);});
       node.append(row);
     }
     node.addEventListener('keydown',e=>this.keydown(state,e));
@@ -7926,7 +7950,7 @@ function showMenu(items,x,y,onCommand,options={}){closeMenu(false);active=new Me
 return {mnemonicText,menuIsOpen,closeMenu,showMenu};
 })();
 
-/* ../controls/richtext.js */
+/* ..\controls\richtext.js */
 __modules[84]=(()=>{
 const {parseRTF,RichTextDocument,richText}=__modules[76];
 const {VBError}=__modules[32];
@@ -8017,7 +8041,7 @@ const RICH_SELECTION_PROPERTIES=Object.freeze(Object.keys(FIELDS));
 return {RichTextController,RICH_SELECTION_PROPERTIES};
 })();
 
-/* ../project/model.js */
+/* ..\project\model.js */
 __modules[85]=(()=>{
 const {normalizeDataSources}=__modules[39];
 const { clone, lower, safeName }=__modules[35];
@@ -8088,7 +8112,7 @@ function projectStats(project){return {modules:project.modules.length,forms:proj
 return {PROJECT_SCHEMA,newId,BASIC_CONTROL_TYPES,EXTENDED_CONTROL_TYPES,CONTROL_DEFAULTS,createControl,createForm,newProject,normalizeProject,uniqueName,findModule,projectStats};
 })();
 
-/* ../controls/collections.js */
+/* ..\controls\collections.js */
 __modules[86]=(()=>{
 const { VBError }=__modules[32];
 const { lower }=__modules[35];
@@ -8136,7 +8160,7 @@ class ControlArray {
 return {ControlCollection,TreeNodes,ListItems,ColumnHeaders,ToolbarButtons,StatusPanels,TabItems,ImageItems,ControlArray};
 })();
 
-/* ../controls/controls.js */
+/* ..\controls\controls.js */
 __modules[87]=(()=>{
 const {bindMouseInput,bindKeyboardInput,ownsInputEvent,acceptsInput,inputScaleFactor}=__modules[77];
 const {installFormWindow}=__modules[78];
@@ -8662,7 +8686,7 @@ class RuntimeMDI {
 return {arrangeMDIRects,RuntimeMDI};
 })();
 
-/* ../controls/dialog.js */
+/* ..\controls\dialog.js */
 __modules[90]=(()=>{
 const {el}=__modules[35];
 const {icon}=__modules[82];
@@ -8699,7 +8723,7 @@ function runtimeDialog(host,title,body,buttons,input=null,options={}){
 return {messageBoxOptions,runtimeDialog};
 })();
 
-/* ../language/binding.js */
+/* ..\language\binding.js */
 __modules[91]=(()=>{
 const {VBError}=__modules[30];
 const {lower}=__modules[35];
@@ -8817,7 +8841,7 @@ function bindConstants(modules) {
 return {bindConstants};
 })();
 
-/* ../language/default-types.js */
+/* ..\language\default-types.js */
 __modules[92]=(()=>{
 const {VBError}=__modules[32];
 
@@ -8844,7 +8868,7 @@ function defaultIdentifierType(name,table={}){
 return {DEFAULT_TYPE_NAMES,addDefaultTypes,defaultIdentifierType};
 })();
 
-/* ../language/interfaces.js */
+/* ..\language\interfaces.js */
 __modules[93]=(()=>{
 const {lower}=__modules[35];
 
@@ -8888,7 +8912,7 @@ function validateInterfaces(modules){
 return {validateInterfaces};
 })();
 
-/* ../language/expression.js */
+/* ..\language\expression.js */
 __modules[94]=(()=>{
 const { tokenize, VBError }=__modules[32];
 
@@ -8992,7 +9016,7 @@ function numericLiteralValue(token){
 return {ExpressionParser,parseExpression,parseCall};
 })();
 
-/* ../language/conditional.js */
+/* ..\language\conditional.js */
 __modules[95]=(()=>{
 const { VBError }=__modules[32];
 const { parseExpression }=__modules[94];
@@ -9034,7 +9058,7 @@ function preprocess(source, constants = {}, sourceName = '') {
 return {preprocess};
 })();
 
-/* ../language/compiler.js */
+/* ..\language\compiler.js */
 __modules[96]=(()=>{
 const {bindConstants}=__modules[91];
 const {defaultIdentifierType,addDefaultTypes}=__modules[92];

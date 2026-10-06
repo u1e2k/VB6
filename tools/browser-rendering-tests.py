@@ -393,6 +393,41 @@ with sync_playwright() as playwright:
         check(not page.errors,str(page.errors));page.close();return result
     case('retained live UI, CSSOM resize, animation completion and idle cleanup', live_invalidation)
 
+    def observer_reentrant_render():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        result = page.evaluate("""async backend=>{
+          document.body.innerHTML='<div><div><div id="resize-source" style="width:40px;height:20px"></div></div></div>';
+          const r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
+          const pause=()=>new Promise(done=>setTimeout(done,100));await pause();
+          let duringCallback=null,deliveries=0,panel=null;
+          const external=new ResizeObserver(()=>{
+            if(++deliveries!==1)return;
+            panel=document.createElement('div');panel.id='inserted-panel';
+            panel.style.cssText='position:absolute;left:100px;top:100px;width:80px;height:40px;background:rgb(0,0,255)';
+            document.body.append(panel);r.renderNow();
+            duringCallback=r.observedElements.has(panel);
+          });
+          external.observe(document.querySelector('#resize-source'));
+          try{
+            for(let i=0;i<20 && (!panel || !r.observedElements.has(panel));i++)await pause();
+            const registered=!!panel && r.observedElements.has(panel);
+            if(!panel)throw Error('External ResizeObserver did not execute');
+            panel.style.width='120px';
+            for(let i=0;i<20;i++){
+              await pause();
+              if(r.retained.scene.commands.some(c=>!c.hole && c.rect[0]===100 && c.rect[2]===120 && c.color[2]===1))break;
+            }
+            const resized=r.retained.scene.commands.some(c=>!c.hole && c.rect[0]===100 && c.rect[2]===120 && c.color[2]===1);
+            const active=r.backend;external.disconnect();r.dispose();await pause();
+            return {active,duringCallback,registered,resized,clean:r.observedElements.size===0 && !r.resizeTargetsTask && !r.pendingResizeTargets};
+          }finally{external.disconnect();r.dispose();}
+        }""",backend)
+        check(result['active']==backend, 'Resize observer case silently fell back: '+str(result))
+        check(result['duringCallback'] is False and result['registered'] and result['resized'] and result['clean'],str(result))
+        check(not page.errors,str(page.errors));page.close();return result
+    case('reentrant ResizeObserver rendering defers target registration and preserves resize cleanup',observer_reentrant_render)
+
     def replacement_texture():
         page = new_page(browser)
         backend = REQUIRED[0] if REQUIRED else 'canvas2d'
