@@ -66,7 +66,9 @@ See [Browser windows](docs/BROWSER-WINDOWS.md) for restoration, lifecycle, platf
 
 ### Themes
 
-Three shared themes are available: Windows Classic, Windows Standard (2000), and High Contrast Black. IDE appearance is independent of the exported application's theme. System colors resolve through the theme; authored RGB colors are retained.
+Windows Classic, Windows Standard (2000), and High Contrast Black remain available. IDE appearance is independent of the exported application's theme. System colors resolve through the theme; authored RGB colors are retained.
+
+**Tools → Options → General → Appearance → IDE theme** also offers **Fluent WinUI 3**, **macOS 26**, **X11 Motif** and **X11 CDE**, each in light and dark variants. Classic VB6 remains the default. Themes cover IDE chrome, controls, dialogs, tools, editors, debugger and agent/MCP surfaces, including live detached windows. System light/dark matching and reduced transparency/motion are optional; authored application forms and exported runtimes keep their own appearance. See [IDE themes, scope and validation](docs/IDE-THEMES.md).
 
 ### Optional anchoring and automatic layout
 

@@ -368,6 +368,35 @@ with sync_playwright() as playwright:
         return {'comparisons':results,'opaqueInteriorsRetained':True}
     case('layered background inner edges preserve exact pixels and opaque interiors across eight DPRs',layered_background_edges)
 
+    def optional_ide_themes():
+        # Theme and backend choices are independent. Use the native HTML result
+        # as the fixed reference for each optional theme; never regenerate it
+        # after inspecting GPU output or tolerate native-island differences.
+        page = new_page(browser, dpr=1.25, ide=True)
+        themes = ['fluent', 'fluent-dark', 'macos26', 'macos26-dark',
+                  'x11', 'x11-dark', 'x11-cde', 'x11-cde-dark']
+        before = page.evaluate('JSON.stringify(vb6Studio.project)')
+        undo = page.evaluate('vb6Studio.history.undoStack.length')
+        comparisons = []
+        for theme in themes:
+            page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})')
+            page.evaluate('theme=>{Object.assign(vb6Studio.appearance,{theme,reduceMotion:true});vb6Studio.applyAppearance();}', theme)
+            check(page.evaluate('document.documentElement.dataset.ideTheme') == theme, 'Optional theme did not apply')
+            reference = stable_html_reference(page, 'optional-theme-'+theme)
+            for backend in list(dict.fromkeys(['canvas2d'] + REQUIRED)):
+                page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"],text:"native"})', backend)
+                check(page.evaluate('vb6Studio.rendering.backend') == backend, 'Theme comparison silently fell back')
+                image = stable_render_capture(page, 'optional-theme-'+theme+'-'+backend, backend)
+                comparison = pixels(reference, image)
+                comparison.update(theme=theme, backend=backend, dpr=1.25)
+                comparisons.append(comparison)
+                check(comparison['changedPixels'] == 0, 'Optional IDE theme pixels differ: '+str(comparison))
+            check(page.evaluate('JSON.stringify(vb6Studio.project)') == before, 'IDE theme modified the project')
+            check(page.evaluate('vb6Studio.history.undoStack.length') == undo, 'IDE theme modified undo history')
+        check(not page.errors, str(page.errors));page.close()
+        return {'comparisons':comparisons, 'authoredProjectUnchanged':True, 'undoUnchanged':True}
+    case('optional IDE themes preserve exact HTML pixels and independent project state', optional_ide_themes)
+
     def mnemonic_stability():
         # Native automatic underline coverage used to drift even when the GPU
         # canvas was transparent. A single screenshot could pass by accident.
