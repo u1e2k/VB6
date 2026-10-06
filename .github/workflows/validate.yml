@@ -15,6 +15,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Archive exact source for reproducible validation
+        run: git archive --format=zip HEAD -o /tmp/vb6-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.sha }}
+          path: /tmp/vb6-source.zip
+          retention-days: 7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -68,6 +75,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:themes:browser
+      - name: Download every sample from the IDE and reopen exact HTML bytes
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:sample-exports
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,11 +86,30 @@ jobs:
           path: |
             reports/browser-windows
             reports/ide-themes
+            reports/win32-exports
           if-no-files-found: ignore
           retention-days: 7
+  win32-system-contracts:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Record installed Windows calendar and formatting contracts
+        shell: pwsh
+        run: ./tools/win32-system-oracle.ps1
+      - name: Compare every native field to the standalone browser package
+        run: node tools/compare-win32-system.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win32-system-contracts
+          path: reports/win32-system
+          retention-days: 7
   rendering-qualification:
-    # One final pre-merge qualification; the job is retired afterwards to keep
-    # main's essential Validate/Pages policy. No additional workflow is created.
+    # Temporary pre-merge check; preserve main's two-workflow policy afterwards.
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     strategy:
@@ -97,37 +127,34 @@ jobs:
           python-version: '3.12'
       - run: npm run build && npm test
       - run: python -m pip install playwright==1.57.0 Pillow
-      - name: Verify exact pixel-comparison statistics and bounds
-        run: python tools/test_rendering_pixels.py
+      - run: python tools/test_rendering_pixels.py
       - run: python -m playwright install --with-deps chromium
-      - name: Install software Vulkan presentation dependencies
-        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
-      - name: Resolve test browser
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - name: Resolve browser executable
         run: |
           python - <<'PY' >> "$GITHUB_ENV"
           from playwright.sync_api import sync_playwright
           with sync_playwright() as p: print('CHROMIUM_PATH=' + p.chromium.executable_path)
           PY
-      - name: Required GPU execution including all eight optional IDE themes
+      - name: Actual GPU API execution and exact theme pixels
         env:
           DISPLAY_MODE: ${{ matrix.display }}
           REQUIRED_BACKEND: ${{ matrix.backend }}
           RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist
         run: |
-          # Source: Chris Gervang, https://github.com/visgl/luma.gl/issues/2874
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then
             args+=(--headed)
-            # The headed native HTML scrollbar raster alternates one channel
-            # level before a GPU layer exists. Fix only its native-tile raster
-            # path for this oracle; WebGPU/WebGL2 draws and GPU readback remain
-            # mandatory. Headless retains GPU native-tile raster coverage.
-            # Chromium flag semantics (not --disable-gpu):
+            # Freeze native HTML tile rasterization, not the GPU painter. Headed
+            # SwiftShader scrollbars varied before the GPU overlay existed.
+            # Required WebGPU/WebGL2 execution and direct readback remain strict.
+            # Headless still covers GPU-native tile raster. Test flags are recorded
+            # in reports and are never applied by the shipped IDE/runtime.
             # https://chromium.googlesource.com/chromium/src/+/3662e2b281fb1aa7997b352651f42e43fef6a6af/gpu/config/gpu_switches.cc
             export RENDERING_BROWSER_FLAGS="$RENDERING_BROWSER_FLAGS --disable-gpu-rasterization"
           fi
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
-      - name: Require all 39 cases and unchanged generated products
+      - name: Require every case and reproducible outputs
         run: |
           python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
           git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
