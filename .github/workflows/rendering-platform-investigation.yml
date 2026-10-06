@@ -1,0 +1,82 @@
+name: Rendering platform investigation
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [tools/rendering-platform-probe.py, .github/workflows/rendering-platform-investigation.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rendering-platform-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  software:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        playwright: ['1.57.0', '1.63.0']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: python -m pip install playwright==${{ matrix.playwright }} Pillow
+      - run: python -m playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - name: Raster diagnostic (not an acceptance pass)
+        run: xvfb-run -a python tools/rendering-platform-probe.py --software
+      - name: Unmodified required-backend suite
+        env:
+          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist
+        run: |
+          export CHROMIUM_PATH=$(python -c 'from playwright.sync_api import sync_playwright;p=sync_playwright().start();print(p.chromium.executable_path);p.stop()')
+          xvfb-run -a python tools/browser-rendering-tests.py --require-webgl2 --software-gpu
+      - name: Capture exact integration refs
+        if: always() && matrix.playwright == '1.63.0'
+        run: |
+          git fetch origin main
+          git bundle create /tmp/rendering-platform-source.bundle HEAD refs/remotes/origin/main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-platform-${{ matrix.playwright }}
+          path: |
+            reports/platform-probe
+            reports/rendering
+            /tmp/rendering-platform-source.bundle
+          retention-days: 7
+  native-adapter:
+    # Standard hosted image only. No software-adapter flags and no presumed
+    # hardware support; raw adapter and OS GPU inventory are the evidence.
+    # https://github.blog/changelog/2026-02-26-macos-26-is-now-generally-available-for-github-hosted-runners/
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: python -m pip install playwright==1.63.0 Pillow
+      - run: python -m playwright install chromium
+      - run: |
+          mkdir -p reports/platform-probe
+          system_profiler SPDisplaysDataType -json > reports/platform-probe/os-gpus.json
+      - run: python tools/rendering-platform-probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-native-adapter
+          path: reports/platform-probe
+          retention-days: 7
