@@ -5,9 +5,12 @@ on:
     paths: [.github/workflows/rendering-final-integration.yml]
 permissions:
   contents: write
+concurrency:
+  group: rendering-final-integration
+  cancel-in-progress: true
 jobs:
   source:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +25,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test "$(git ls-remote origin refs/heads/feat/webgpu-ui-rendering | cut -f1)" = '${{ github.sha }}'
           git merge --no-commit --no-ff 5ad8ea7815877347230dda6e5254ada4181aa61c || true
           python3 - <<'PY'
           import subprocess
