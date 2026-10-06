@@ -1,0 +1,57 @@
+name: Reconcile final renderer with sign-in integration
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-release-sync.yml]
+permissions:
+  contents: write
+concurrency:
+  group: rendering-release-sync
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Preserve pinned main and rebuild the combined source
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test "$(git ls-remote origin refs/heads/feat/webgpu-ui-rendering | cut -f1)" = '${{ github.sha }}'
+          git merge --no-commit --no-ff 2ee166a43145432538de88bb36c575c08e70ec84 || true
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          assert Path('.git/MERGE_HEAD').exists(), 'Expected pinned integration'
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
+          assert set(conflicts) <= {'dist/VB6-Studio-Web.html','dist/studio.js'}, conflicts
+          for path in conflicts:
+              subprocess.run(['git','checkout','--ours','--',path],check=True)
+              subprocess.run(['git','add','--',path],check=True)
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          PY
+          mkdir -p /tmp/rendering-release
+          npm run build > /tmp/rendering-release/build.log 2>&1
+          npm test > /tmp/rendering-release/tests.log 2>&1
+          npm run test:agents > /tmp/rendering-release/agents.log 2>&1
+          npm run test:chatgpt > /tmp/rendering-release/auth.log 2>&1
+          git add dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+          git diff --cached --exit-code -- .github/workflows
+          git commit -m 'merge(rendering): preserve sign-in integration and deterministic retry validation'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git rev-parse HEAD > /tmp/rendering-release/head.txt
+          git bundle create /tmp/rendering-release/repository.bundle HEAD refs/remotes/origin/main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-release-source
+          path: /tmp/rendering-release
+          retention-days: 7
