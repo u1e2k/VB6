@@ -1,0 +1,36 @@
+name: Rendering final integration
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-final-integration.yml]
+permissions:
+  contents: read
+concurrency:
+  group: rendering-final-integration
+  cancel-in-progress: false
+jobs:
+  snapshot:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture exact refs and merge conflicts without publishing changes
+        shell: bash
+        run: |
+          mkdir -p /tmp/rendering-final-integration
+          git bundle create /tmp/rendering-final-integration/repository.bundle HEAD refs/remotes/origin/main
+          git log -5 --format='%H %s' refs/remotes/origin/main > /tmp/rendering-final-integration/main.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 3df8dcc6227fbf734c5c7710b0e29ec06c43b210 > /tmp/rendering-final-integration/merge.log 2>&1 || true
+          git status --porcelain > /tmp/rendering-final-integration/status.txt
+          git diff --name-only --diff-filter=U > /tmp/rendering-final-integration/conflicts.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-final-integration-source
+          path: /tmp/rendering-final-integration
+          retention-days: 7
