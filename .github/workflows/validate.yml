@@ -1,7 +1,7 @@
 name: Validate
 on:
   push:
-    branches: [main, feat/webgpu-ui-rendering]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -11,7 +11,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    if: github.ref != 'refs/heads/feat/webgpu-ui-rendering'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -51,7 +50,6 @@ jobs:
       - name: Verify reproducible generated bundles
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
   browser-windows:
-    if: github.ref != 'refs/heads/feat/webgpu-ui-rendering'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -77,6 +75,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:themes:browser
+      - name: Application themes, control state and complete matching icon packs
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:application-themes:browser
       - name: Download every sample from the IDE and reopen exact HTML bytes
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -88,11 +90,11 @@ jobs:
           path: |
             reports/browser-windows
             reports/ide-themes
+            reports/application-themes/${{ matrix.browser }}
             reports/win32-exports
           if-no-files-found: ignore
           retention-days: 7
   win32-system-contracts:
-    if: github.ref != 'refs/heads/feat/webgpu-ui-rendering'
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -112,7 +114,6 @@ jobs:
           path: reports/win32-system
           retention-days: 7
   rendering-qualification:
-    if: github.ref != 'refs/heads/feat/webgpu-ui-rendering'
     # Temporary pre-merge check; preserve main's two-workflow policy afterwards.
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -160,25 +161,3 @@ jobs:
           name: rendering-themes-${{ matrix.backend }}-${{ matrix.display }}
           path: reports/rendering
           retention-days: 14
-  integrate-rendering:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/feat/webgpu-ui-rendering'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Publish only the pinned and locally verified integration tree
-        run: python tools/integrate-rendering-themes.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: rendering-theme-integrated-source
-          path: /tmp/rendering-theme-integration
-          retention-days: 7
