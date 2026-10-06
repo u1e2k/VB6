@@ -29,6 +29,16 @@ jobs:
           import hashlib,lzma,subprocess
           from pathlib import Path
           conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U']).decode().splitlines()
+          if 'README.md' in conflicts:
+              ours=subprocess.check_output(['git','show',':2:README.md']).decode()
+              theirs=subprocess.check_output(['git','show',':3:README.md']).decode()
+              base=subprocess.check_output(['git','show','f4ee8d47bed69ae26b65d20637b8f5f8da13d815:README.md']).decode()
+              marker='### Advanced browser Win32 GDI'
+              assert theirs.split(marker)[0].rstrip()==base.rstrip()
+              assert theirs.count(marker)==1 and marker not in ours
+              Path('README.md').write_text(ours.rstrip()+'\n\n'+marker+theirs.split(marker)[1])
+              subprocess.run(['git','add','README.md'],check=True)
+              conflicts.remove('README.md')
           assert all(p.startswith('dist/') or p=='src/exporter/runtime-payload.js' for p in conflicts), conflicts
           for p in conflicts:
               subprocess.run(['git','checkout','--ours','--',p],check=True)
