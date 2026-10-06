@@ -31,3 +31,15 @@ index f628aea..8fea586 100644
 +    return {'bounds': difference.getbbox(), 'changedPixels': changed, 'pixels': count, 'fraction': changed / count,
              'maxChannelError': max(i for i, n in enumerate(maximum) if n),
              'meanChannelError': sum((i % 256) * n for i, n in enumerate(channels)) / (count * 3)}
+diff --git a/src/editor/editor.js b/src/editor/editor.js
+--- a/src/editor/editor.js
++++ b/src/editor/editor.js
+@@ -268,7 +268,7 @@ export class SourceEditor extends Signal {
+   }
+   closeInfo(){this.info?.remove();this.info=null;clearTimeout(this.infoTimer);}
+   definition(){const c=this.cursor(),text=this.input.value.slice(this.input.selectionStart,this.input.selectionEnd)||wordAt(this.text,c.offset).text;return this.intelligence.definition(this.project,{...this.module,code:this.text},c.line,this.text,c.offset,text);}
+-  cancelCompositionAssistance(){clearTimeout(this.compositionTimer);this.compositionTimer=0;this.compositionResume=null;this.compositionMode=null;}
++  cancelCompositionAssistance(){clearTimeout(this.compositionTimer);this.compositionTimer=null;this.compositionResume=null;this.compositionMode=null;}
+   resumeCompositionAssistance(){
+     const pending=this.compositionResume;if(!pending)return;
+     this.cancelCompositionAssistance();
