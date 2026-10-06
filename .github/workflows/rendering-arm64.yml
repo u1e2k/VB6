@@ -2,7 +2,8 @@ name: UI rendering ARM64
 on:
   pull_request:
   push:
-    branches: [main, feat/webgpu-ui-rendering]
+    # PR branches are covered above; duplicate push runs shared the concurrency key.
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
