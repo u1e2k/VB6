@@ -12,7 +12,10 @@ concurrency:
 jobs:
   agents:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Each engine runs 62 real-IDE scenarios in all three origins sequentially.
+    # The former 15-minute job cap cut off passing third-origin tests. Keep the
+    # per-operation deadlines, all scenarios and a bounded whole-job deadline.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +44,24 @@ jobs:
           PY
       - name: Classic IDE coding agents over HTTP and standalone file origins
         run: python tools/coding-agents-browser-tests.py --browser ${{ matrix.browser }}
+      - name: Require every scenario and origin to complete
+        env:
+          TEST_BROWSER: ${{ matrix.browser }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          engine=os.environ['TEST_BROWSER']
+          report=json.loads(Path(f'reports/coding-agents/{engine}/results.json').read_text())
+          cases=report['tests']
+          assert report['browser']==engine and report['opaqueFallback'] is False
+          assert report['paidProviderRequests']==0
+          assert len(cases)==186 and len({case['name'] for case in cases})==186
+          assert all(case['passed'] is True for case in cases)
+          assert Counter(case['name'].split(' / ',1)[0] for case in cases)=={'http':62,'standalone-http':62,'file':62}
+          print(f'{engine}: 186 passed scenarios; all three origins complete; no paid provider requests')
+          PY
       - name: Verify reproducible generated IDE bundles
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
       - uses: actions/upload-artifact@v4
