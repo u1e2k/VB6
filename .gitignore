@@ -48,3 +48,6 @@ reports/layout/
 # Optional standalone compute package output
 /artifacts/vb6-compute/
 reports/compute/
+
+# Source-derived OCX lab, verified by the same exact artifact manifest.
+/dist/OCX-Source-Control-Lab.html
