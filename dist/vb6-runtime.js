@@ -89,7 +89,17 @@ class PaintScene {
     if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     this.stats.nativeIslands++;
     this.stats.reasons[reason] = (this.stats.reasons[reason] || 0) + 1;
-    const outward = r => { const x = Math.floor(r[0] * this.dpr) / this.dpr, y = Math.floor(r[1] * this.dpr) / this.dpr; return [x, y, Math.ceil((r[0] + r[2]) * this.dpr) / this.dpr - x, Math.ceil((r[1] + r[3]) * this.dpr) / this.dpr - y]; };
+    // CSS-to-device division followed by addition can turn an integral boundary
+    // into N + one floating-point ULP. Do not clear an extra physical pixel for
+    // that arithmetic residue. Non-integral coordinates still round outwards.
+    const device = value => {
+      const scaled=value*this.dpr, nearest=Math.round(scaled);
+      return Math.abs(scaled-nearest)<=4*Number.EPSILON*Math.max(1,Math.abs(scaled)) ? nearest : scaled;
+    };
+    const outward = r => {
+      const x=Math.floor(device(r[0]))/this.dpr, y=Math.floor(device(r[1]))/this.dpr;
+      return [x,y,Math.ceil(device(r[0]+r[2]))/this.dpr-x,Math.ceil(device(r[1]+r[3]))/this.dpr-y];
+    };
     this.add(outward(rect), [0, 0, 0, 0], {clip: outward(clip), hole: true, snap: false});
   }
 }
@@ -690,7 +700,7 @@ function preserveBackgroundEdges(scene, rectangles, clip) {
     const key=rect.join(',');if(seen.has(key))return;seen.add(key);
     scene.native(rect,clip,'fractional CSS background edge');
   };
-  for(const [x,y,w,h] of rectangles){
+  for(const [x,y,w,h] of rectangles || []){
     // Fractional CSS boxes may shift an otherwise integral device edge when
     // the browser computes its image positioning area from rounded box metrics.
     const fractionalBox=[x,y,w,h].some(value=>Math.abs(value-Math.round(value))>1e-6);
@@ -1278,7 +1288,32 @@ function canReuseTextStyles(record, parent) {
 }
 
 
-return {canReuseTextStyles};
+/** Ignore redundant pointer-over notifications, not actual boundary changes.
+ * Layout/paint can dispatch boundary events even with a stationary pointer.
+ * Reinvalidating all styles for repeated notifications of the same hit target
+ * defeated text-style retention in headed Chromium. Keep one bounded record
+ * per pointer; an out/cancel/leave or capture change always resets the record.
+ * This does not cancel, redispatch or modify any application input event.
+ * Source: https://www.w3.org/TR/pointerevents3/#boundary-events-caused-by-layout-changes
+ */
+function redundantPointerOver(event, targets) {
+  if (!event || !targets || !Number.isInteger(event.pointerId)) return false;
+  const id = event.pointerId;
+  if (['pointerout', 'pointerleave', 'pointercancel', 'lostpointercapture', 'gotpointercapture'].includes(event.type) ||
+      (event.type === 'pointerup' && event.pointerType === 'touch')) {
+    targets.delete(id); return false;
+  }
+  if (event.type !== 'pointerover') return false;
+  const target = event.composedPath?.()[0] || event.target;
+  if (!target) return false;
+  if (targets.get(id) === target) return true;
+  // Faulty/synthetic input must not retain an unbounded list of detached nodes.
+  if (!targets.has(id) && targets.size >= 32) targets.clear();
+  targets.set(id, target);
+  return false;
+}
+
+return {canReuseTextStyles,redundantPointerOver};
 })();
 
 /* ..\rendering\renderer.js */
@@ -1291,7 +1326,7 @@ const {TextAtlas}=__modules[7];
 const {DOMScene}=__modules[11];
 const {RetainedScene}=__modules[12];
 const {subscribeStyleActivity}=__modules[9];
-const {canReuseTextStyles}=__modules[13];
+const {canReuseTextStyles, redundantPointerOver}=__modules[13];
 
 
 
@@ -1317,7 +1352,7 @@ class UIRenderer {
     this.document = document; this.view = document.defaultView; this.factory = factory; this.generation = 0; this.disposed = false;
     this.atlas = new TextAtlas(document); this.adapter = new DOMScene(document, this.atlas); this.sceneFactory = sceneFactory || (p => this.adapter.build(p));
     this.policy = normalizeRendering(policy); this.backend = 'html'; this.attempts = []; this.metrics = {frames: 0, invalidations: 0, builds: [], submissions: [], last: null}; this.listeners = [];
-    this.retained = new RetainedScene(); this.observedElements = new Set();
+    this.retained = new RetainedScene(); this.observedElements = new Set(); this.pointerTargets = new Map();
     this.resizeTargetsTask = null; this.pendingResizeTargets = null;
     this.frame = null; this.metrics.textStyleReuses = 0;
     this.metrics.unchangedFrames = 0; this.metrics.sceneBuilds = 0;
@@ -1327,6 +1362,9 @@ class UIRenderer {
   observe() {
     const invalidate = event => {
       if (!this.driver) return; // HTML-only mode does not build/measure a GPU scene.
+      if (redundantPointerOver(event, this.pointerTargets)) {
+        this.metrics.redundantPointerOvers = (this.metrics.redundantPointerOvers || 0) + 1; return;
+      }
       // Resource completion and form validity/checked/active/popover pseudo
       // classes can change styles without an attribute mutation. Scroll and
       // selection alone reuse style snapshots; every other wake-up resamples.
@@ -1352,7 +1390,7 @@ class UIRenderer {
     });
     // Connected only while a canvas backend is active; native HTML incurs no
     // mutation scanning. Include <head> so dynamic stylesheet edits invalidate.
-    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'keydown', 'keyup', 'toggle', 'beforetoggle', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
+    for (const event of ['load', 'error', 'input', 'change', 'focusin', 'focusout', 'pointerover', 'pointerout', 'pointerdown', 'pointerup', 'pointercancel', 'pointerleave', 'gotpointercapture', 'lostpointercapture', 'keydown', 'keyup', 'toggle', 'beforetoggle', 'selectionchange', 'vb-theme-change']) this.listen(this.document, event, invalidate, true);
     // ResizeObserver catches layout changes which have no DOM mutation (for
     // example intrinsic image sizing or a container resized by a stylesheet).
     // Source: https://www.w3.org/TR/resize-observer/
@@ -1363,6 +1401,7 @@ class UIRenderer {
     for (const event of ['animationstart','animationiteration','animationend','animationcancel','transitionrun','transitionstart','transitionend','transitioncancel']) this.listen(this.document, event, invalidate, true);
     this.listen(this.document, 'scroll', invalidate, true);
     this.listen(this.view, 'resize', invalidate);
+    this.listen(this.view, 'blur', () => { this.pointerTargets.clear(); invalidate(); });
     this.listen(this.view.visualViewport, 'resize', invalidate);
     this.listen(this.view.visualViewport, 'scroll', invalidate);
     this.listen(this.document, 'visibilitychange', () => { if (this.document.hidden) this.cancelFrame(); else invalidate(); });
@@ -1399,7 +1438,15 @@ class UIRenderer {
     this.policy = next;
     this.document.dispatchEvent(new this.view.CustomEvent('vb-rendering-policy', {detail: {...next, fallbacks: [...next.fallbacks]}}));
     if (!force && old.backend === next.backend && JSON.stringify(old.fallbacks) === JSON.stringify(next.fallbacks) && this.driver) {
-      this.atlas.reset(); this.invalidate(); return this.getStats();
+      // An unchanged Options apply must not evict atlas textures or queue work.
+      // A changed paint policy must be submitted before this promise resolves,
+      // just like a backend change; callers must not observe old snapped/text
+      // output after awaiting setOptions(). The device itself is retained.
+      if (old.text === next.text && old.pixelSnap === next.pixelSnap) return this.getStats();
+      if (old.text !== next.text) this.atlas.reset();
+      try { this.renderNow(); this.publish(); }
+      catch (error) { this.fallback(error.message || String(error)); await this.ready; }
+      return this.getStats();
     }
     const generation = ++this.generation; this.cancelFrame(); this.releaseDriver(); this.attempts = [];
     const candidates = this.forcedColors.matches ? ['html'] : renderingCandidates(next);
@@ -1429,7 +1476,7 @@ class UIRenderer {
         // The first frame can fail after observe() connected. HTML fallback
         // must not retain an observer (or a queued frame) from the failed driver.
         this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.disconnectResizeTargets();
-        this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
+        this.observedElements.clear(); this.pointerTargets?.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
         this.driver = null; this.canvas = null; this.backend = 'html';
         this.attempts.push({backend: name, reason: error.message || String(error)});
       }
@@ -1514,9 +1561,9 @@ class UIRenderer {
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
     return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
-      frames: this.metrics.frames, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
+      frames: this.metrics.frames, redundantPointerOvers: this.metrics.redundantPointerOvers || 0, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
-  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.disconnectResizeTargets(); this.observedElements.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
+  releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.disconnectResizeTargets(); this.observedElements.clear(); this.pointerTargets?.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
   dispose() {
     if (this.disposed) return; this.disposed = true; this.generation++; this.cancelFrame(); this.observer.disconnect(); this.dprCleanup?.();
     for (const remove of this.listeners.splice(0)) remove(); this.releaseDriver(); this.atlas.dispose();

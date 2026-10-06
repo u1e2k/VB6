@@ -27,6 +27,7 @@
     replacing it with fixed padding shifted WebKit content. Border-box background
     strips keep the original border metrics without adding nodes or JS reads. */
  --vb-bevel-raised-image: linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-highlight),var(--vb-highlight));
+ --vb-bevel-sunken-image: linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-dark),var(--vb-dark));
  --vb-bevel-sunken-thin: inset -1px -1px var(--vb-light), inset 1px 1px var(--vb-shadow);
 }
 /* Removing a layout border requires compensating padding. These explicit
@@ -71,6 +72,19 @@
  .vb-scroll-arrow { border:0!important;padding:1px!important;box-shadow:var(--vb-bevel-raised)!important; }
  .vb-scroll-arrow:active:not(:disabled) { box-shadow:var(--vb-bevel-pressed)!important; }
  .vb-scroll-thumb { border:0;padding:1px;box-shadow:var(--vb-bevel-raised); }
+
+ /* Square checkbox chrome uses the same attributed staircase technique.
+    Retain real border widths and the native input/checked pseudo-element origin;
+    transparent borders plus filled layers avoid fractional diagonal-border
+    raster drift without changing click/Space, focus, radio circles or glyphs.
+    Forced colors deliberately keeps the original visible real borders. */
+ .vb-check input[type=checkbox] {
+   border-color:transparent;box-shadow:none;
+   background-image:var(--vb-bevel-sunken-image);
+   background-origin:border-box;background-clip:border-box;background-repeat:no-repeat;
+   background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
+   background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
+ }
 
  /* Text fields and list boxes keep the same inset (old 2px border + padding).
     Custom combo fields and checkbox/radio controls have separate geometry. */

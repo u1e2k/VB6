@@ -64,7 +64,7 @@ export function preserveBackgroundEdges(scene, rectangles, clip) {
     const key=rect.join(',');if(seen.has(key))return;seen.add(key);
     scene.native(rect,clip,'fractional CSS background edge');
   };
-  for(const [x,y,w,h] of rectangles){
+  for(const [x,y,w,h] of rectangles || []){
     // Fractional CSS boxes may shift an otherwise integral device edge when
     // the browser computes its image positioning area from rounded box metrics.
     const fractionalBox=[x,y,w,h].some(value=>Math.abs(value-Math.round(value))>1e-6);

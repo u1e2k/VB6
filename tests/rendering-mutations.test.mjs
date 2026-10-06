@@ -50,3 +50,39 @@ test('authored native border islands isolate raster invalidation without extra c
   assert.match(css,/\.mdi-client,\.layout-monitor\s*\{\s*isolation:isolate;\s*\}/);
   assert.match(css,/https:\/\/www\.w3\.org\/TR\/compositing-1\/#isolation/);
 });
+
+import {redundantPointerOver} from '../src/rendering/mutations.js';
+const pointer = (type, target, pointerId = 1, extra = {}) => ({type, target, pointerId, ...extra});
+test('stationary repeated pointerover reuses styles without swallowing the first boundary', () => {
+  const targets=new Map(),a={},b={};
+  assert.equal(redundantPointerOver(pointer('pointerover',a),targets),false);
+  assert.equal(redundantPointerOver(pointer('pointerover',a),targets),true);
+  assert.equal(redundantPointerOver(pointer('pointerover',b),targets),false);
+  assert.equal(redundantPointerOver(pointer('pointerover',a,2),targets),false);
+  assert.equal(redundantPointerOver(pointer('pointerover',a,2),targets),true);
+});
+test('out, leave, cancel and capture changes allow a fresh same-target hover', () => {
+  for(const type of ['pointerout','pointerleave','pointercancel','gotpointercapture','lostpointercapture']) {
+    const targets=new Map(),a={};redundantPointerOver(pointer('pointerover',a),targets);
+    assert.equal(redundantPointerOver(pointer(type,a),targets),false);
+    assert.equal(targets.size,0);
+    assert.equal(redundantPointerOver(pointer('pointerover',a),targets),false);
+  }
+});
+test('shadow retargeting distinguishes open-shadow hit targets', () => {
+  const targets=new Map(),host={},a={},b={};
+  const event=child=>pointer('pointerover',host,1,{composedPath:()=>[child,host]});
+  assert.equal(redundantPointerOver(event(a),targets),false);
+  assert.equal(redundantPointerOver(event(a),targets),true);
+  assert.equal(redundantPointerOver(event(b),targets),false);
+});
+test('touch end releases nodes, synthetic pointer storms stay bounded, unrelated input is not suppressed', () => {
+  const targets=new Map(),a={};
+  for(let i=0;i<100;i++)redundantPointerOver(pointer('pointerover',{},i),targets);
+  assert.ok(targets.size<=32);
+  redundantPointerOver(pointer('pointerover',a),targets);
+  for(const type of ['pointerdown','pointerup','input','change','keydown'])assert.equal(redundantPointerOver(pointer(type,a),targets),false);
+  assert.equal(redundantPointerOver(pointer('pointerup',a,1,{pointerType:'touch'}),targets),false);
+  assert.equal(targets.has(1),false);
+  for(const event of [null,{},pointer('pointerover',null),pointer('pointerover',a,NaN)])assert.equal(redundantPointerOver(event,targets),false);
+});

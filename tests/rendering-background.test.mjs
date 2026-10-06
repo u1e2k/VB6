@@ -54,3 +54,35 @@ test('integer background edges need no native coverage and fractional edges stay
  preserveBackgroundEdges(scene,[[3,7,74,51]],[10,10,40,20]);
  assert.equal(scene.commands.length,0);
 });
+
+test('fractional CSS image edges preserve native coverage inside, not just outside, borders',()=>{
+  const scene=new PaintScene(100,100,{dpr:1.5}),layers=solidBackgroundLayers(style);
+  const rectangles=paintBackgroundLayers(scene,[3,3,74,70],scene.clip,layers);
+  preserveBackgroundEdges(scene,rectangles,scene.clip);
+  const holes=scene.commands.filter(c=>c.hole);
+  assert.ok(holes.length>0);
+  // The inner edge of a 2px horizontal strip at y=5 crosses device row 7.
+  assert.ok(holes.some(c=>c.rect[1]<=7/1.5 && c.rect[1]+c.rect[3]>7/1.5));
+  // The upstream renderer also preserves independently rounded CSS image origins.
+  // Keep its one-device-pixel halo on either side of the crossed pixel.
+  assert.ok(holes.every(c=>c.rect[2]<=3/1.5+1e-6 || c.rect[3]<=3/1.5+1e-6));
+});
+test('integral CSS image edges do not create unnecessary native islands',()=>{
+  const scene=new PaintScene(100,100,{dpr:2}),layers=solidBackgroundLayers(style);
+  const rectangles=paintBackgroundLayers(scene,[3,3,74,70],scene.clip,layers);
+  preserveBackgroundEdges(scene,rectangles,scene.clip);
+  assert.equal(scene.commands.filter(c=>c.hole).length,0);
+  assert.equal(scene.commands.length,2);
+});
+
+test('native one-device-pixel holes do not expand from floating-point arithmetic residue',()=>{
+  for(const dpr of [1.25,1.5,1.75,2.25,3]) {
+    const s=new PaintScene(500,500,{dpr});
+    s.native([115/dpr,109/dpr,1/dpr,1/dpr],s.clip);
+    const r=s.commands[0].rect;
+    assert.ok(Math.abs(r[2]*dpr-1)<1e-12);assert.ok(Math.abs(r[3]*dpr-1)<1e-12);
+    const t=new PaintScene(500,500,{dpr});
+    t.native([115/dpr,109/dpr,1/dpr+1e-7,1/dpr+1e-7],t.clip);
+    assert.ok(t.commands[0].rect[2]*dpr>1.9);assert.ok(t.commands[0].rect[3]*dpr>1.9);
+  }
+});

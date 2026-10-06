@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Rendering integration and real-backend readback tests.
 
---require-webgpu / --require-webgl2 serve localhost and reject backend fallbacks.
-Without that flag, set_content supports restricted environments; unavailable GPU
-backends are explicitly skipped. Reports distinguish functional correctness,
+--require-webgpu / --require-webgl2 reject backend fallbacks and normally serve
+localhost. --offline uses set_content without removing backend requirements.
+Without required backends, unavailable APIs are explicitly skipped. Reports distinguish functional correctness,
 pixel parity with our HTML path, CPU timing and physical-hardware qualification.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ ARGS = argparse.ArgumentParser()
 ARGS.add_argument('--require-webgpu', action='store_true')
 ARGS.add_argument('--require-webgl2', action='store_true')
 ARGS.add_argument('--headed', action='store_true')
+ARGS.add_argument('--offline', action='store_true', help='Load fixtures with set_content instead of HTTP; required backend checks remain enabled')
 ARGS.add_argument('--software-gpu', action='store_true', help='Explicit CI software adapter, never physical-GPU qualification')
 args = ARGS.parse_args()
 REQUIRED = [name for name, enabled in [('webgpu', args.require_webgpu), ('webgl2', args.require_webgl2)] if enabled]
@@ -27,7 +28,7 @@ BUNDLE = (ROOT / 'dist/vb6-rendering.js').read_text()
 IDE = (ROOT / 'dist/VB6-Studio-Web.html').read_text()
 CONTROL_FIXTURE = subprocess.check_output(['node','--input-type=module','-e',"import {bundle} from './tools/bundle.mjs';process.stdout.write(bundle('./tests/fixtures/rendering-controls.mjs','RenderControls'));"],cwd=ROOT,text=True)
 URL = None
-if REQUIRED:
+if REQUIRED and not args.offline:
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args): pass
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=ROOT))
@@ -76,10 +77,16 @@ with sync_playwright() as playwright:
     # Source: https://developer.chrome.com/blog/supercharge-web-ai-testing
     launch_flags = ['--no-sandbox']
     if args.software_gpu:
-        launch_flags += ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--use-vulkan=swiftshader']
+        # Full native raster/compositor completion is a screenshot precondition:
+        # partial-raster tile reuse can change fractional HTML edge coverage even
+        # with the overlay removed. Do not mask those pixels or widen tolerances.
+        # These oracle switches apply ONLY to the explicit software test profile,
+        # never the shipped application or the default hardware measurement path.
+        # Source: https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md#rendering--gpu
+        launch_flags += ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--use-vulkan=swiftshader', '--disable-partial-raster', '--run-all-compositor-stages-before-draw']
     launch_flags += shlex.split(os.environ.get('RENDERING_BROWSER_FLAGS', ''))
     browser = playwright.chromium.launch(executable_path=executable, headless=not args.headed, args=launch_flags)
-    METRICS.update(requiredBackends=REQUIRED, browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False, headed=args.headed, softwareGpuRequested=args.software_gpu)
+    METRICS.update(requiredBackends=REQUIRED, browser=browser.version, platform=platform.platform(), flags=launch_flags, physicalHardwareQualified=False, headed=args.headed, softwareGpuRequested=args.software_gpu, fixtureTransport="http" if URL else "set_content")
 
     def backend_execution():
         page = new_page(browser)
@@ -736,6 +743,108 @@ with sync_playwright() as playwright:
         check(result['emptyColor']=='rgb(40, 50, 60)' and result['direction']=='rtl', 'Selector-sensitive text was not invalidated: '+str(result))
         check(not page.errors,str(page.errors));page.close();return result
     case('text changes reuse computed styles while preserving replacement nodes, empty selectors and direction',text_style_reuse)
+
+    def stationary_hover_retention():
+        page = new_page(browser)
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        page.evaluate("""async backend=>{
+          document.body.innerHTML='<style>#hover-box{position:absolute;left:30px;top:30px;width:80px;height:30px;background:rgb(20,30,40)}#hover-box:hover{background:rgb(50,60,70)}</style><div id="hover-box">Label</div>';
+          window.r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
+          for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
+        }""",backend)
+        result=page.evaluate("""async()=>{
+          const box=document.querySelector('#hover-box');let delivered=0;
+          box.addEventListener('pointerover',()=>delivered++);
+          const over=()=>box.dispatchEvent(new PointerEvent('pointerover',{pointerId:99,bubbles:true,composed:true}));
+          over();for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
+          const style=r.adapter.style(box),before=r.metrics.frames,skips=r.metrics.redundantPointerOvers||0;
+          for(let i=0;i<100;i++)over();
+          for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
+          return {backend:r.backend,delivered,retained:r.adapter.style(box)===style,frames:r.metrics.frames-before,skips:(r.metrics.redundantPointerOvers||0)-skips};
+        }""")
+        check(result['backend']==backend,str(result))
+        check(result['delivered']==101 and result['skips']==100,str(result))
+        check(result['retained'] and result['frames']==0,'Duplicate boundary notifications discarded cached styles: '+str(result))
+        # Real hit-test changes must still update hover colors. No input event is
+        # stopped or prevented; only duplicate renderer invalidation is omitted.
+        page.mouse.move(900,700)
+        page.wait_for_function("r.adapter.style(document.querySelector('#hover-box')).backgroundColor==='rgb(20, 30, 40)'")
+        page.mouse.move(50,40)
+        page.wait_for_function("r.adapter.style(document.querySelector('#hover-box')).backgroundColor==='rgb(50, 60, 70)'")
+        page.mouse.move(900,700)
+        page.wait_for_function("r.adapter.style(document.querySelector('#hover-box')).backgroundColor==='rgb(20, 30, 40)'")
+        page.evaluate('r.setOptions({backend:"html"})')
+        check(page.evaluate('r.pointerTargets.size')==0,'HTML fallback retains hover nodes')
+        check(not page.errors,str(page.errors));page.close();return {**result,'realHoverUpdates':True,'cleanup':True}
+    case('stationary pointer events retain paint styles without suppressing real hover or application input',stationary_hover_retention)
+
+    def same_backend_options():
+        page=new_page(browser)
+        backend=REQUIRED[0] if REQUIRED else 'canvas2d'
+        result=page.evaluate("""async backend=>{
+          const r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']},{sceneFactory:p=>{
+            const s=new VB6Rendering.PaintScene(16,16,{dpr:1,pixelSnap:p.pixelSnap});
+            s.add([.6,.6,5,5],[1,0,0,1]);return s;
+          }});
+          await r.ready;for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
+          const driver=r.driver,draw=driver.render.bind(driver),reset=r.atlas.reset.bind(r.atlas);
+          let renders=0,resets=0;driver.render=(...args)=>{renders++;return draw(...args)};
+          r.atlas.reset=()=>{resets++;return reset()};
+          try{
+            await r.setOptions({...r.policy});const unchanged={renders,resets};
+            await r.setOptions({...r.policy,pixelSnap:false});const unsnapped={renders,resets,x:r.retained.scene.commands[0].rect[0]};
+            await r.setOptions({...r.policy,pixelSnap:true});const snapped={renders,resets,x:r.retained.scene.commands[0].rect[0]};
+            await r.setOptions({...r.policy,text:'gpu'});const text={resets,policy:r.policy.text};
+            return {backend:r.backend,sameDriver:r.driver===driver,unchanged,unsnapped,snapped,text};
+          }finally{r.dispose()}
+        }""",backend)
+        check(result['backend']==backend and result['sameDriver'],str(result))
+        check(result['unchanged']=={'renders':0,'resets':0},'Unchanged Options caused resource churn: '+str(result))
+        check(result['unsnapped']=={'renders':1,'resets':0,'x':.6},'Options resolved before new paint: '+str(result))
+        check(result['snapped']=={'renders':2,'resets':0,'x':1},'Pixel snapping did not apply immediately: '+str(result))
+        check(result['text']=={'resets':1,'policy':'gpu'},'Text change did not invalidate the atlas exactly once: '+str(result))
+        check(not page.errors,str(page.errors));page.close();return result
+    case('same-backend Options complete paint before resolution and retain unchanged atlas resources',same_backend_options)
+
+    def background_and_checkbox_edges():
+        results=[]
+        backend=REQUIRED[0] if REQUIRED else 'canvas2d'
+        for dpr in [1,1.25,1.5,1.75,2]:
+            page=new_page(browser,dpr)
+            page.add_style_tag(content=(ROOT/'dist/vb6-controls.css').read_text())
+            page.evaluate("""()=>{
+              document.body.innerHTML='<div id="stairs" style="position:absolute;left:3px;top:9px;width:74px;height:91px;box-sizing:border-box;border:1px solid transparent;background-color:rgb(192,192,192);background-image:var(--vb-bevel-raised-image);background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;background-origin:border-box;background-clip:border-box;background-repeat:no-repeat"></div><label class="vb-control vb-check" style="left:110px;top:9px;width:100px;height:91px"><input id="check" type="checkbox" aria-label="Retained native checkbox"><span>Choice</span></label>';
+              window.r=new VB6Rendering.UIRenderer(document,{backend:'html'});
+            }""")
+            page.evaluate('r.ready')
+            box=page.locator('#check').bounding_box()
+            comparisons=[]
+            for state in ['unchecked','checked','indeterminate']:
+                page.evaluate('r.setOptions({backend:"html"})')
+                if state=='checked':
+                    page.locator('#check').focus();page.locator('#check').press('Space')
+                    check(page.locator('#check').is_checked(),'Native checkbox Space interaction changed')
+                if state=='indeterminate': page.evaluate('document.querySelector("#check").indeterminate=true')
+                page.evaluate('async()=>{await document.fonts.ready;for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)}')
+                baseline=page.screenshot()
+                page.evaluate('backend=>r.setOptions({backend,fallbacks:["html"]})',backend)
+                page.evaluate('async()=>{for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)}')
+                check(page.evaluate('r.backend')==backend,'Fractional edge test silently fell back')
+                image=page.screenshot();comparison=pixels(baseline,image)
+                label=f'layer-checkbox-{dpr}-{state}'
+                (OUT/(label+'-html.png')).write_bytes(baseline);(OUT/(label+'-'+backend+'.png')).write_bytes(image)
+                check(comparison['changedPixels']==0,'Fractional layer/checkbox pixels differ: '+str(comparison))
+                check(page.locator('#check').bounding_box()==box,'Checkbox input geometry changed')
+                check(page.evaluate('(r.retained.scene.stats.gpuBackgroundLayers||0)>=8'),'All background paint was silently replaced by HTML')
+                comparisons.append(dict(state=state,**comparison))
+            page.emulate_media(forced_colors='active')
+            page.wait_for_function('r.backend==="html"')
+            forced=page.locator('#check').evaluate('(n)=>{const s=getComputedStyle(n);return {width:s.borderTopWidth,color:s.borderTopColor,image:s.backgroundImage}}')
+            check(float(forced['width'].removesuffix('px'))>0 and forced['image']=='none','High contrast lost native checkbox borders: '+str(forced))
+            results.append(dict(dpr=dpr,backend=backend,states=comparisons,nativeKeyboard=True,forcedColors=forced))
+            page.evaluate('r.dispose();undefined');check(not page.errors,str(page.errors));page.close()
+        return results
+    case('fractional background-layer and checkbox edges preserve exact pixels, native keys and high contrast',background_and_checkbox_edges)
 
     def translucent_paint():
         page = new_page(browser, dpr=1.5)

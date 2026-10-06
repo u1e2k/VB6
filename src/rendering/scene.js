@@ -35,7 +35,17 @@ export class PaintScene {
     if (this.sealed) throw new TypeError('Cannot change a sealed paint scene.');
     this.stats.nativeIslands++;
     this.stats.reasons[reason] = (this.stats.reasons[reason] || 0) + 1;
-    const outward = r => { const x = Math.floor(r[0] * this.dpr) / this.dpr, y = Math.floor(r[1] * this.dpr) / this.dpr; return [x, y, Math.ceil((r[0] + r[2]) * this.dpr) / this.dpr - x, Math.ceil((r[1] + r[3]) * this.dpr) / this.dpr - y]; };
+    // CSS-to-device division followed by addition can turn an integral boundary
+    // into N + one floating-point ULP. Do not clear an extra physical pixel for
+    // that arithmetic residue. Non-integral coordinates still round outwards.
+    const device = value => {
+      const scaled=value*this.dpr, nearest=Math.round(scaled);
+      return Math.abs(scaled-nearest)<=4*Number.EPSILON*Math.max(1,Math.abs(scaled)) ? nearest : scaled;
+    };
+    const outward = r => {
+      const x=Math.floor(device(r[0]))/this.dpr, y=Math.floor(device(r[1]))/this.dpr;
+      return [x,y,Math.ceil(device(r[0]+r[2]))/this.dpr-x,Math.ceil(device(r[1]+r[3]))/this.dpr-y];
+    };
     this.add(outward(rect), [0, 0, 0, 0], {clip: outward(clip), hole: true, snap: false});
   }
 }
