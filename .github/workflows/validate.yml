@@ -1,7 +1,7 @@
 name: Validate
 on:
   push:
-    branches: [main]
+    branches: [main, feat/webgpu-ui-rendering]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -15,6 +15,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture renderer and newly merged theme source refs
+        run: |
+          git fetch origin main
+          git bundle create /tmp/rendering-theme-refs.bundle HEAD refs/remotes/origin/main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendering-theme-integration-source
+          path: /tmp/rendering-theme-refs.bundle
+          retention-days: 3
       - uses: actions/setup-node@v4
         with:
           node-version: 22
