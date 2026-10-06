@@ -273,4 +273,33 @@ def reference_literal_signature(p):
     check('"As Point"' in p.locator('.source-info').inner_text())
 
 base.CASES += [default_type_arguments,unchanged_literal_defaults,same_line_with_scope,same_line_select_scope,inline_conditional_redim,reference_literal_signature]
+def composition_escape_dismisses_pending_work(p):
+    setup(p,'Private Sub Form_Load()\n    Text1.',controls=[{'name':'Text1','type':'TextBox'}])
+    p.evaluate("""()=>{const input=vb6Studio.editor.input;
+      input.dispatchEvent(new CompositionEvent('compositionstart'));
+      input.dispatchEvent(new CompositionEvent('compositionend'));
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    }""")
+    p.wait_for_timeout(50);check(p.locator('.completion-list').count()==0, 'Source composition reopened a dismissed list')
+    p.evaluate('vb6Studio.command("immediate")');field=p.locator('.immediate-input');field.fill('? Text1.');field.focus()
+    p.evaluate("""()=>{const input=document.querySelector('.immediate-input');
+      input.dispatchEvent(new CompositionEvent('compositionstart'));
+      input.dispatchEvent(new CompositionEvent('compositionend'));
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    }""")
+    p.wait_for_timeout(50);check(p.locator('.completion-list').count()==0, 'Expression composition reopened a dismissed list')
+    check(field.input_value()=='? Text1.');check(p.evaluate('vb6Studio.immediateOutput.length')==0)
+
+def autosave_does_not_execute_reference_callbacks(p):
+    setup(p,'Dim client As Safe.Client\nPrivate Sub Form_Load()\nEnd Sub')
+    result=p.evaluate("""()=>{globalThis.metadataCalls=0;
+      const key='vb6-studio-web.workspace.v1';let stored;
+      try{stored=localStorage.getItem(key);}catch{}
+      vb6Studio.project.typeLibraries=[{name:'Bad',types:[],toJSON(){metadataCalls++;return {};}}];
+      vb6Studio.persist();let preserved=true;try{preserved=localStorage.getItem(key)===stored;}catch{}
+      return {calls:metadataCalls,preserved,available:vb6Studio.storageAvailable};
+    }""")
+    check(result=={'calls':0,'preserved':True,'available':False}, result)
+
+base.CASES += [composition_escape_dismisses_pending_work,autosave_does_not_execute_reference_callbacks]
 if __name__=='__main__':sys.exit(base.main())

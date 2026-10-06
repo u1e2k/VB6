@@ -265,6 +265,51 @@ with sync_playwright() as playwright:
             check(not page.errors,str(page.errors));page.close();return comparisons
         case(f'HTML-vs-renderer visual evidence at DPR {dpr}',ide_visual)
 
+    def stable_html_reference(page, name):
+        # The reference must be native HTML, never a renderer result. Font-ready
+        # and two rAF callbacks alone do not await asynchronous native raster /
+        # initial MDI layout. Require three identical native captures before
+        # fixing the baseline, then NEVER replace it during renderer switches.
+        # This is the same stability prerequisite as Playwright screenshots:
+        # https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-have-screenshot-1
+        import hashlib
+        previous = None; consecutive = 0; samples = []
+        for attempt in range(30):
+            check(page.evaluate('vb6Studio.rendering.backend') == 'html', 'Reference captured a canvas renderer')
+            page.evaluate('async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
+            current = page.screenshot()
+            difference = pixels(previous, current) if previous is not None else None
+            samples.append({'attempt': attempt, 'sha256': hashlib.sha256(current).hexdigest(), 'difference': difference})
+            consecutive = consecutive + 1 if difference and difference['changedPixels'] == 0 else 1
+            if consecutive == 3:
+                (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':'html','samples':samples,'stableCaptures':consecutive},indent=2))
+                (OUT/(name+'-html.png')).write_bytes(current)
+                return current
+            if attempt == 0: (OUT/(name+'-startup.png')).write_bytes(current)
+            previous = current
+        (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':'html','samples':samples,'stableCaptures':consecutive},indent=2))
+        raise AssertionError('Native HTML never reached a stable reference; no baseline accepted')
+
+    def studio_page_lifecycle():
+        page = new_page(browser, ide=True)
+        page.evaluate('vb6Studio.setRenderingPolicy({backend:"canvas2d",fallbacks:["html"]})')
+        data=page.evaluate("""async()=>{
+          const renderer=vb6Studio.rendering;
+          for(let i=0;i<2;i++){
+            dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+            if(renderer.disposed)throw Error('Studio released the persisted renderer');
+            dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+            await vb6Studio.setRenderingPolicy({backend:'canvas2d',fallbacks:['html']});
+            renderer.renderNow();
+            if(renderer.backend!=='canvas2d'||renderer.disposed)throw Error('Studio renderer did not survive restoration');
+          }
+          dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false}));
+          return {restores:2,disposed:renderer.disposed,layers:document.querySelectorAll('[data-vb-render-layer]').length};
+        }""")
+        check(data=={'restores':2,'disposed':True,'layers':0},str(data))
+        check(not page.errors,str(page.errors));page.close();return data
+    case('Studio retained renderer survives persisted page lifecycle and releases on final pagehide',studio_page_lifecycle)
+
     def mnemonic_stability():
         # Native automatic underline coverage used to drift even when the GPU
         # canvas was transparent. A single screenshot could pass by accident.
@@ -275,7 +320,7 @@ with sync_playwright() as playwright:
         measure = """()=>[...document.querySelectorAll('.menubar u,.classic-menu u,.vb-label u,.vb-command u,.vb-check u,.vb-option u,.vb-frame-legend u,.vb-form-title u')].map(n=>{const r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height,n.textContent]})"""
         geometry = page.evaluate(measure)
         check(len(geometry)>10, 'Actual IDE mnemonic fixture is missing')
-        reference = page.screenshot();(OUT/'mnemonics-html.png').write_bytes(reference)
+        reference = stable_html_reference(page, 'mnemonics')
         backends = list(dict.fromkeys(['canvas2d'] + REQUIRED))
         comparisons = []
         for backend in backends:

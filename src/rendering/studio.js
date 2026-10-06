@@ -26,8 +26,15 @@ export function installStudioRendering(ide) {
       record.cleanups.push(() => { session.release(); children.delete(record); });
     }
   }
-  document.defaultView.addEventListener('pagehide', () => {
+  // A persisted page is suspended, not disposed. Keep our retained reference so
+  // the renderer's pageshow handler can restore its device after BFCache return.
+  // Do not use once:true: a persisted pagehide must not consume final cleanup.
+  // Source: https://html.spec.whatwg.org/multipage/browsing-the-web.html#the-page-transition-events
+  const release = event => {
+    if (event.persisted) return;
+    document.defaultView.removeEventListener('pagehide', release);
     for (const session of children.values()) session.release(); children.clear(); main.release();
-  }, {once: true});
+  };
+  document.defaultView.addEventListener('pagehide', release);
   return main.renderer;
 }
