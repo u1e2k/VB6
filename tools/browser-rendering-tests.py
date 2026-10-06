@@ -90,7 +90,13 @@ with sync_playwright() as playwright:
 
     def backend_execution():
         page = new_page(browser)
-        outcome = page.evaluate('''async()=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;try{p=await VB6Rendering.createPainter(backend,c);const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,adapter:p.adapterInfo||null,outputVerified:p.stats.outputVerified??null};}catch(e){result[backend]={available:false,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''')
+        # The initial capability case starts the software driver and JIT on a
+        # cold hosted runner. Give that explicit test profile a bounded budget;
+        # production renderer startup and all later cases retain their defaults.
+        # WebGPU requestAdapter/requestDevice are asynchronous, not frame-budget operations:
+        # https://gpuweb.github.io/gpuweb/#dom-gpu-requestadapter
+        timeout = 15000 if args.software_gpu else 3000
+        outcome = page.evaluate('''async timeout=>{const result={};for(const backend of ['webgpu','webgl2','canvas2d']){const c=document.createElement('canvas');document.body.append(c);let p;const start=performance.now();try{p=await VB6Rendering.createPainter(backend,c,{timeout});const s=new VB6Rendering.PaintScene(20,20);s.add([0,0,20,20],[1,0,0,1]);p.render(s);if(p.device)await p.device.queue.onSubmittedWorkDone();result[backend]={available:true,initializationMs:performance.now()-start,timeoutMs:timeout,adapter:p.adapterInfo||null,outputVerified:p.stats.outputVerified??null};}catch(e){result[backend]={available:false,initializationMs:performance.now()-start,timeoutMs:timeout,reason:e.message};}finally{p?.dispose();c.remove();}}return result}''',timeout)
         METRICS['backends'] = outcome
         check(outcome['canvas2d']['available'], 'Canvas2D missing')
         for backend in REQUIRED:
@@ -247,17 +253,54 @@ with sync_playwright() as playwright:
         check(result=={'same':True,'alive':True,'disposed':True,'canvases':0}, str(result));page.close();return result
     case('shared-document reference counts and idempotent cleanup', reference_counts)
 
+    def stable_render_capture(page, name, backend):
+        # Stabilize each backend independently, without looking at the expected
+        # pixels. The HTML baseline remains fixed throughout comparison. Font-ready
+        # and two rAF callbacks alone do not await asynchronous native raster /
+        # initial MDI layout. Require three identical captures before
+        # comparing; never retry a mismatch against the baseline until it passes.
+        # This is the same stability prerequisite as Playwright screenshots:
+        # https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-have-screenshot-1
+        import hashlib
+        previous = None; consecutive = 0; samples = []
+        for attempt in range(30):
+            check(page.evaluate('vb6Studio.rendering.backend') == backend, 'Capture used an unexpected renderer')
+            page.evaluate('async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
+            current = page.screenshot()
+            difference = pixels(previous, current) if previous is not None else None
+            samples.append({'attempt': attempt, 'sha256': hashlib.sha256(current).hexdigest(), 'difference': difference})
+            consecutive = consecutive + 1 if difference and difference['changedPixels'] == 0 else 1
+            if consecutive == 3:
+                (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':backend,'samples':samples,'stableCaptures':consecutive},indent=2))
+                (OUT/(name+'-'+backend+'.png')).write_bytes(current)
+                return current
+            if attempt == 0: (OUT/(name+'-startup.png')).write_bytes(current)
+            previous = current
+        (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':backend,'samples':samples,'stableCaptures':consecutive},indent=2))
+        raise AssertionError('Renderer never reached stable pixels; no capture accepted')
+
+    def stable_html_reference(page, name):
+        return stable_render_capture(page, name, 'html')
+
     for dpr in [1, 1.25, 1.5, 2]:
         def ide_visual(dpr=dpr):
             page=new_page(browser,dpr,ide=True)
             page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})');page.wait_for_timeout(250)
-            baseline=page.screenshot();(OUT/f'ide-html-{dpr}.png').write_bytes(baseline)
+            baseline=stable_html_reference(page,f'ide-reference-{dpr}');(OUT/f'ide-html-{dpr}.png').write_bytes(baseline)
             for backend in ['canvas2d','webgl2','webgpu']:
                 if not METRICS.get('backends',{}).get(backend,{}).get('available'):continue
                 page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"],text:"native"})',backend)
                 check(page.evaluate('vb6Studio.rendering.backend')==backend, 'Visual case did not use '+backend)
-                page.wait_for_timeout(150);image=page.screenshot();(OUT/f'ide-{backend}-{dpr}.png').write_bytes(image)
+                image=stable_render_capture(page,f'ide-settled-{backend}-{dpr}',backend);(OUT/f'ide-{backend}-{dpr}.png').write_bytes(image)
                 comparison=pixels(baseline,image);comparison.update(backend=backend,dpr=dpr);VISUAL.append(comparison)
+                if comparison['changedPixels']:
+                    page.evaluate('vb6Studio.rendering.canvas.style.visibility="hidden"')
+                    page.wait_for_timeout(150)
+                    native=page.screenshot();(OUT/f'ide-native-after-{backend}-{dpr}.png').write_bytes(native)
+                    (OUT/f'ide-failure-{backend}-{dpr}.json').write_text(json.dumps({
+                        'composed':comparison,'nativeAfter':pixels(baseline,native),
+                        'stats':page.evaluate('vb6Studio.rendering.getStats()')},indent=2))
+                    page.evaluate('vb6Studio.rendering.canvas.style.visibility="visible"')
                 # Exact reference fixture equality; never tolerate a blank GPU overlay.
                 check(comparison['changedPixels']==0,'IDE pixels differ: '+str(comparison))
             comparisons = [v for v in VISUAL if v['dpr']==dpr]
@@ -265,31 +308,6 @@ with sync_playwright() as playwright:
             for backend in REQUIRED: check(any(v['backend']==backend for v in comparisons), backend+' visual comparison did not execute')
             check(not page.errors,str(page.errors));page.close();return comparisons
         case(f'HTML-vs-renderer visual evidence at DPR {dpr}',ide_visual)
-
-    def stable_html_reference(page, name):
-        # The reference must be native HTML, never a renderer result. Font-ready
-        # and two rAF callbacks alone do not await asynchronous native raster /
-        # initial MDI layout. Require three identical native captures before
-        # fixing the baseline, then NEVER replace it during renderer switches.
-        # This is the same stability prerequisite as Playwright screenshots:
-        # https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-have-screenshot-1
-        import hashlib
-        previous = None; consecutive = 0; samples = []
-        for attempt in range(30):
-            check(page.evaluate('vb6Studio.rendering.backend') == 'html', 'Reference captured a canvas renderer')
-            page.evaluate('async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
-            current = page.screenshot()
-            difference = pixels(previous, current) if previous is not None else None
-            samples.append({'attempt': attempt, 'sha256': hashlib.sha256(current).hexdigest(), 'difference': difference})
-            consecutive = consecutive + 1 if difference and difference['changedPixels'] == 0 else 1
-            if consecutive == 3:
-                (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':'html','samples':samples,'stableCaptures':consecutive},indent=2))
-                (OUT/(name+'-html.png')).write_bytes(current)
-                return current
-            if attempt == 0: (OUT/(name+'-startup.png')).write_bytes(current)
-            previous = current
-        (OUT/(name+'-reference.json')).write_text(json.dumps({'backend':'html','samples':samples,'stableCaptures':consecutive},indent=2))
-        raise AssertionError('Native HTML never reached a stable reference; no baseline accepted')
 
     def studio_page_lifecycle():
         page = new_page(browser, ide=True)
