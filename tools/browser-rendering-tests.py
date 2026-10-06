@@ -266,7 +266,13 @@ with sync_playwright() as playwright:
         for attempt in range(30):
             check(page.evaluate('vb6Studio.rendering.backend') == backend, 'Capture used an unexpected renderer')
             page.evaluate('async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
-            current = page.screenshot()
+            # Read-only fixture: do not mutate every input's inline caret-color
+            # on each capture. Playwright's default hide/restore cycle caused
+            # native scrollbar raster drift after dark-theme switches, even in
+            # HTML-only mode. Keep all pixels, including any actual caret;
+            # an unstable or wrong image still fails the unchanged strict gate.
+            # https://playwright.dev/python/docs/api/class-page#page-screenshot-option-caret
+            current = page.screenshot(caret='initial')
             difference = pixels(previous, current) if previous is not None else None
             samples.append({'attempt': attempt, 'sha256': hashlib.sha256(current).hexdigest(), 'difference': difference})
             consecutive = consecutive + 1 if difference and difference['changedPixels'] == 0 else 1
