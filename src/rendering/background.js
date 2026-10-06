@@ -32,11 +32,43 @@ export function solidBackgroundLayers(style) {
   });
 }
 export function paintBackgroundLayers(scene, rect, clip, layers) {
-  const [x,y,width,height]=rect;
+  const [x,y,width,height]=rect, painted=[];
   for(let i=layers.length-1;i>=0;i--) {
     const layer=layers[i], w=resolve(layer.size[0],width), h=resolve(layer.size[1],height);
     // Percent position applies to the remaining space, not the whole box.
     const left=x+resolve(layer.position[0],width-w), top=y+resolve(layer.position[1],height-h);
-    scene.add([left,top,w,h],layer.color,{clip});
+    const area=[left,top,w,h];
+    scene.add(area,layer.color,{clip});
+    if(layer.color[3]>0 && w>0 && h>0) painted.push(area);
+  }
+  return painted;
+}
+
+/** Preserve a thin device-pixel coverage strip at fractional edges of
+ * authored background images. Image bounds need not match the layout border:
+ * a two-CSS-pixel classic bevel can extend inside a one-pixel border. Rounding
+ * only the outer box then loses the inner image's partial pixel at e.g. DPR 1.25.
+ * CSS Backgrounds: https://www.w3.org/TR/css-backgrounds-3/#background-size
+ * Interiors are still GPU quads. Clear these strips after the complete box paint
+ * but before its children, so later siblings/children keep their stacking order.
+ */
+export function preserveBackgroundEdges(scene, rectangles, clip) {
+  const dpr=scene.dpr, seen=new Set();
+  const edge=(coordinate,start,extent,vertical,fractionalBox)=>{
+    const pixel=coordinate*dpr;
+    if((!fractionalBox && Math.abs(pixel-Math.round(pixel))<1e-6) || extent<=0) return;
+    // CSS image origins and image extents may round independently. Include
+    // a one-device-pixel halo around the coverage pixel, never the whole box.
+    const low=(Math.floor(pixel)-1)/dpr;
+    const rect=vertical?[low,start,3/dpr,extent]:[start,low,extent,3/dpr];
+    const key=rect.join(',');if(seen.has(key))return;seen.add(key);
+    scene.native(rect,clip,'fractional CSS background edge');
+  };
+  for(const [x,y,w,h] of rectangles){
+    // Fractional CSS boxes may shift an otherwise integral device edge when
+    // the browser computes its image positioning area from rounded box metrics.
+    const fractionalBox=[x,y,w,h].some(value=>Math.abs(value-Math.round(value))>1e-6);
+    edge(x,y,h,true,fractionalBox);edge(x+w,y,h,true,fractionalBox);
+    edge(y,x,w,false,fractionalBox);edge(y+h,x,w,false,fractionalBox);
   }
 }

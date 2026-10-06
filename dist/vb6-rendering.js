@@ -658,16 +658,48 @@ function solidBackgroundLayers(style) {
   });
 }
 function paintBackgroundLayers(scene, rect, clip, layers) {
-  const [x,y,width,height]=rect;
+  const [x,y,width,height]=rect, painted=[];
   for(let i=layers.length-1;i>=0;i--) {
     const layer=layers[i], w=resolve(layer.size[0],width), h=resolve(layer.size[1],height);
     // Percent position applies to the remaining space, not the whole box.
     const left=x+resolve(layer.position[0],width-w), top=y+resolve(layer.position[1],height-h);
-    scene.add([left,top,w,h],layer.color,{clip});
+    const area=[left,top,w,h];
+    scene.add(area,layer.color,{clip});
+    if(layer.color[3]>0 && w>0 && h>0) painted.push(area);
+  }
+  return painted;
+}
+
+/** Preserve a thin device-pixel coverage strip at fractional edges of
+ * authored background images. Image bounds need not match the layout border:
+ * a two-CSS-pixel classic bevel can extend inside a one-pixel border. Rounding
+ * only the outer box then loses the inner image's partial pixel at e.g. DPR 1.25.
+ * CSS Backgrounds: https://www.w3.org/TR/css-backgrounds-3/#background-size
+ * Interiors are still GPU quads. Clear these strips after the complete box paint
+ * but before its children, so later siblings/children keep their stacking order.
+ */
+function preserveBackgroundEdges(scene, rectangles, clip) {
+  const dpr=scene.dpr, seen=new Set();
+  const edge=(coordinate,start,extent,vertical,fractionalBox)=>{
+    const pixel=coordinate*dpr;
+    if((!fractionalBox && Math.abs(pixel-Math.round(pixel))<1e-6) || extent<=0) return;
+    // CSS image origins and image extents may round independently. Include
+    // a one-device-pixel halo around the coverage pixel, never the whole box.
+    const low=(Math.floor(pixel)-1)/dpr;
+    const rect=vertical?[low,start,3/dpr,extent]:[start,low,extent,3/dpr];
+    const key=rect.join(',');if(seen.has(key))return;seen.add(key);
+    scene.native(rect,clip,'fractional CSS background edge');
+  };
+  for(const [x,y,w,h] of rectangles){
+    // Fractional CSS boxes may shift an otherwise integral device edge when
+    // the browser computes its image positioning area from rounded box metrics.
+    const fractionalBox=[x,y,w,h].some(value=>Math.abs(value-Math.round(value))>1e-6);
+    edge(x,y,h,true,fractionalBox);edge(x+w,y,h,true,fractionalBox);
+    edge(y,x,w,false,fractionalBox);edge(y+h,x,w,false,fractionalBox);
   }
 }
 
-return {solidBackgroundLayers,paintBackgroundLayers};
+return {solidBackgroundLayers,paintBackgroundLayers,preserveBackgroundEdges};
 })();
 
 /* style-activity.js */
@@ -915,7 +947,7 @@ return {hasPartialAlpha,canvasBackground};
 __modules[11]=(()=>{
 const {PaintScene, parseColor, splitCSS}=__modules[1];
 const {intersect}=__modules[0];
-const {solidBackgroundLayers, paintBackgroundLayers}=__modules[8];
+const {solidBackgroundLayers, paintBackgroundLayers, preserveBackgroundEdges}=__modules[8];
 const {requiresNativeShadowPaint}=__modules[9];
 const {hasPartialAlpha, canvasBackground}=__modules[10];
 
@@ -1056,7 +1088,7 @@ class DOMScene {
     }
     const box = this.box(node);
     const scaleX = box.width ? rect[2] / box.width : 1, scaleY = box.height ? rect[3] / box.height : 1;
-    let borders, shadows, background, gradient, layers;
+    let borders, shadows, background, gradient, layers, backgroundRects;
     try {
       if (!style.paint) {
         const sourceBorders = ['Top', 'Right', 'Bottom', 'Left'].map(side => ({width: number(style['border' + side + 'Width']), style: style['border' + side + 'Style'], color: parseColor(style['border' + side + 'Color'])}));
@@ -1075,7 +1107,7 @@ class DOMScene {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
       this.scene.add(rect, background, {clip});
       if (gradient) this.scene.add(rect, gradient.start, {clip, color2: gradient.end, vertical: gradient.vertical});
-      if (layers) { paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
+      if (layers) { backgroundRects = paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
       const [t, r, b, l] = borders.map(item => item.width), [x, y, w, h] = rect;
       // CSS solid border corners are split diagonally. Use native corner squares
       // for multicolor bevels; long edges remain native GPU primitives.
@@ -1106,6 +1138,7 @@ class DOMScene {
           [x + w - r - sx - pad, y - sy - pad, r + 2 * (sx + pad), h + 2 * (sy + pad)]
         ]) this.scene.native(edge, clip, 'fractional CSS edge');
       }
+      if (backgroundRects) preserveBackgroundEdges(this.scene, backgroundRects, intersect(rect,clip));
     }
     let childClip = clip;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {

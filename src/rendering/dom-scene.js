@@ -1,6 +1,6 @@
 import {PaintScene, parseColor, splitCSS} from './scene.js';
 import {intersect} from './policy.js';
-import {solidBackgroundLayers, paintBackgroundLayers} from './background.js';
+import {solidBackgroundLayers, paintBackgroundLayers, preserveBackgroundEdges} from './background.js';
 import {requiresNativeShadowPaint} from './style-activity.js';
 import {hasPartialAlpha, canvasBackground} from './paint-compat.js';
 const SKIP = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
@@ -136,7 +136,7 @@ export class DOMScene {
     }
     const box = this.box(node);
     const scaleX = box.width ? rect[2] / box.width : 1, scaleY = box.height ? rect[3] / box.height : 1;
-    let borders, shadows, background, gradient, layers;
+    let borders, shadows, background, gradient, layers, backgroundRects;
     try {
       if (!style.paint) {
         const sourceBorders = ['Top', 'Right', 'Bottom', 'Left'].map(side => ({width: number(style['border' + side + 'Width']), style: style['border' + side + 'Style'], color: parseColor(style['border' + side + 'Color'])}));
@@ -155,7 +155,7 @@ export class DOMScene {
       for (const s of [...shadows].reverse()) if (!s.inset) this.scene.add([rect[0] + s.x * scaleX, rect[1] + s.y * scaleY, rect[2], rect[3]], s.color, {clip});
       this.scene.add(rect, background, {clip});
       if (gradient) this.scene.add(rect, gradient.start, {clip, color2: gradient.end, vertical: gradient.vertical});
-      if (layers) { paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
+      if (layers) { backgroundRects = paintBackgroundLayers(this.scene, rect, intersect(rect,clip), layers); this.scene.stats.gpuBackgroundLayers = (this.scene.stats.gpuBackgroundLayers || 0) + layers.length; }
       const [t, r, b, l] = borders.map(item => item.width), [x, y, w, h] = rect;
       // CSS solid border corners are split diagonally. Use native corner squares
       // for multicolor bevels; long edges remain native GPU primitives.
@@ -186,6 +186,7 @@ export class DOMScene {
           [x + w - r - sx - pad, y - sy - pad, r + 2 * (sx + pad), h + 2 * (sy + pad)]
         ]) this.scene.native(edge, clip, 'fractional CSS edge');
       }
+      if (backgroundRects) preserveBackgroundEdges(this.scene, backgroundRects, intersect(rect,clip));
     }
     let childClip = clip;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {

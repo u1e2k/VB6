@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {solidBackgroundLayers,paintBackgroundLayers} from '../src/rendering/background.js';
+import {solidBackgroundLayers,paintBackgroundLayers,preserveBackgroundEdges} from '../src/rendering/background.js';
 import {PaintScene} from '../src/rendering/scene.js';
 import {UIRenderer} from '../src/rendering/renderer.js';
 const style={backgroundImage:'linear-gradient(rgb(0, 0, 0), rgb(0, 0, 0)), linear-gradient(rgb(255, 255, 255), rgb(255, 255, 255))',backgroundSize:'1px 100%,100% 2px',backgroundPosition:'100% 0%,0% 0%',backgroundRepeat:'no-repeat',backgroundOrigin:'border-box',backgroundClip:'border-box'};
@@ -29,4 +29,28 @@ test('failed first paint disconnects mutation observation before HTML fallback',
  assert.deepEqual([observed,disconnected,disposed,removed],[1,1,1,1]);
  assert.deepEqual(r.attempts,[{backend:'webgpu',reason:'first draw failed'}]);
  assert.equal(resized,1);assert.equal(cleared,1);assert.equal(r.observedElements.size,0);
+});
+
+test('background layers return their unsnapped authored rectangles',()=>{
+ const scene=new PaintScene(200,100,{dpr:1.25}),layers=solidBackgroundLayers(style);
+ const rects=paintBackgroundLayers(scene,[3,7,74,51],scene.clip,layers);
+ assert.deepEqual(rects,[[3,7,74,2],[76,7,1,51]]);
+ assert.notDeepEqual(scene.commands[0].rect,rects[0]);
+});
+test('fractional inner bevel edges preserve bounded coverage, not the whole control',()=>{
+ const scene=new PaintScene(200,100,{dpr:1.25});
+ preserveBackgroundEdges(scene,[[75,8,2,40],[75,8,2,40]],scene.clip);
+ assert.equal(scene.commands.length,2); // shared edges are deduplicated
+ assert.deepEqual(scene.commands.map(c=>c.rect.map(v=>Math.round(v*1.25))),[[92,10,3,50],[95,10,3,50]]);
+ assert.ok(scene.commands.every(c=>c.hole && Math.abs(c.rect[2]*1.25-3)<1e-9));
+});
+test('integer background edges need no native coverage and fractional edges stay clipped',()=>{
+ for(const dpr of [1,2,3,4]){
+   const scene=new PaintScene(200,100,{dpr});
+   preserveBackgroundEdges(scene,[[3,7,74,51]],scene.clip);
+   assert.equal(scene.commands.length,0);
+ }
+ const scene=new PaintScene(200,100,{dpr:1.5});
+ preserveBackgroundEdges(scene,[[3,7,74,51]],[10,10,40,20]);
+ assert.equal(scene.commands.length,0);
 });

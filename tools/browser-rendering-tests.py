@@ -304,6 +304,45 @@ with sync_playwright() as playwright:
         check(not page.errors,str(page.errors));page.close();return data
     case('Studio retained renderer survives persisted page lifecycle and releases on final pagehide',studio_page_lifecycle)
 
+    def layered_background_edges():
+        backend = REQUIRED[0] if REQUIRED else 'canvas2d'
+        results=[]
+        for dpr in [1,1.25,1.5,1.75,2,2.5,3,4]:
+            page = new_page(browser,dpr)
+            page.evaluate("""()=>{
+              document.head.insertAdjacentHTML('beforeend',`<style>
+                .edge-fixture{position:absolute;box-sizing:border-box;left:3px;top:7px;width:74px;height:91px;border:1px solid transparent;background-color:rgb(192,192,192);overflow:hidden;
+                  background-image:linear-gradient(black,black),linear-gradient(black,black),linear-gradient(white,white),linear-gradient(white,white),linear-gradient(gray,gray),linear-gradient(gray,gray),linear-gradient(rgb(223,223,223),rgb(223,223,223)),linear-gradient(rgb(223,223,223),rgb(223,223,223));
+                  background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
+                  background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
+                  background-origin:border-box;background-clip:border-box;background-repeat:no-repeat}
+                .edge-fixture:nth-child(2){left:83.25px;top:7.5px;width:74.5px;height:91.25px}
+                .edge-fixture:nth-child(3){left:163px;top:7px}
+                .edge-fixture:nth-child(3) div{position:absolute;left:0;top:23px;width:90px;height:30px;background:rgb(0,255,0)}
+              </style>`);
+              document.body.innerHTML='<div class="edge-fixture"></div><div class="edge-fixture"></div><div class="edge-fixture"><div></div></div>';
+              window.edgeRenderer=new VB6Rendering.UIRenderer(document,{backend:'html'});
+            }""")
+            page.wait_for_timeout(80);before=page.screenshot()
+            page.evaluate('backend=>edgeRenderer.setOptions({backend,fallbacks:["html"]})',backend)
+            check(page.evaluate('edgeRenderer.backend')==backend,'Background edge fixture fell back')
+            page.wait_for_timeout(80);after=page.screenshot();comparison=pixels(before,after)
+            (OUT/f'background-edges-{dpr}-html.png').write_bytes(before)
+            (OUT/f'background-edges-{dpr}-{backend}.png').write_bytes(after)
+            check(comparison['changedPixels']==0,'Internal background edge mismatch: '+str(dict(dpr=dpr,**comparison)))
+            # The interior must still be painted, not replaced by a native
+            # whole-element hole to obtain the matching screenshot.
+            paints=page.evaluate("""()=>{
+              let color=null;for(const c of edgeRenderer.adapter.scene.commands){
+                if(30>=c.rect[0]&&50>=c.rect[1]&&30<c.rect[0]+c.rect[2]&&50<c.rect[1]+c.rect[3]&&30>=c.clip[0]&&50>=c.clip[1]&&30<c.clip[0]+c.clip[2]&&50<c.clip[1]+c.clip[3])color=c.hole?null:c.color;
+              }return color;
+            }""")
+            check(paints and paints[3]==1 and abs(paints[0]-192/255)<1e-9,'Background interior stopped using selected painter')
+            page.evaluate('edgeRenderer.dispose();undefined');check(not page.errors,str(page.errors));page.close()
+            results.append(dict(dpr=dpr,backend=backend,**comparison))
+        return {'comparisons':results,'opaqueInteriorsRetained':True}
+    case('layered background inner edges preserve exact pixels and opaque interiors across eight DPRs',layered_background_edges)
+
     def mnemonic_stability():
         # Native automatic underline coverage used to drift even when the GPU
         # canvas was transparent. A single screenshot could pass by accident.

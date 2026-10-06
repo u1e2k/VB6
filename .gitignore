@@ -27,3 +27,6 @@ reports/coding-agents/
 reports/classic-html/
 # Generated debugger browser evidence; retained as CI artifacts.
 reports/debugger-runtime/
+# Debugger compatibility browser evidence
+reports/debugger-boundaries/
+reports/native-debugger/

@@ -1,21 +1,22 @@
 import {createNativeWindowTransport} from './window-transport.mjs';
+import {createNativeRuntimeDocumentLoader} from './runtime-document.mjs';
+import {loadRuntimeDocument} from '../src/ide/runtime-document.js';
 
-/** Select the preview transport before navigation begins. Creating srcdoc and
- * removing it after run() returns schedules a competing about:blank navigation
- * and briefly subjects the inline document to the controller's strict CSP.
+/** F5 and design Immediate share the host-approved document loader. Preserve
+ * the earlier embedding hook as an adapter, not a second navigation policy.
+ * Native URL validation, frame/session identity, CSP and sandboxing remain
+ * enforced before navigation; never create a transient srcdoc document.
+ * https://www.electronjs.org/docs/latest/tutorial/security
  * https://html.spec.whatwg.org/multipage/iframe-embed-object.html#the-iframe-element
- * The frame keeps its existing sandbox; no native bridge enters the preview.
  */
 export function installNativePreview(studio, bridge) {
-  studio.loadRuntimeDocument = async (frame, html) => {
-    const current = () => studio.runtimeFrame === frame && frame.isConnected;
-    try {
-      const url = await bridge.runtimeDocument(html);
-      if (current()) frame.src = url;
-    } catch (error) {
-      // A delayed rejection from an ended run must not stop its replacement.
-      if (current()) { studio.stop(); studio.status('Native preview failed: ' + error.message); }
-    }
+  studio.runtimeDocumentLoader = createNativeRuntimeDocumentLoader(bridge);
+  studio.loadRuntimeDocument = (frame, html) => {
+    const token = studio.bridgeToken;
+    return loadRuntimeDocument(studio, frame, html, {
+      isCurrent: () => studio.runtimeFrame === frame && studio.bridgeToken === token,
+      onError: error => { studio.stop(); studio.status('Native preview failed: ' + error.message); }
+    });
   };
 }
 const studio = globalThis.vb6Studio;
