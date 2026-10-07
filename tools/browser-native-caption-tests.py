@@ -66,7 +66,7 @@ class NativeCaptions(unittest.TestCase):
   except Exception:
    print('Native popup diagnostics:',self.page.evaluate('''()=>({
     actionError:window.captionActionError,
-    records:[...(window.nativeBridge?.records||[])].map(([id,r])=>({id,created:!!r.win,closed:r.win?.closed})),
+    records:[...(window.nativeBridge?.records||[])].map(([id,r])=>({id,created:!!r.win,closed:r.win?.closed,sameWindow:r.win===window,name:r.win?.name,url:r.win?.document.URL,ready:r.win?.document.readyState,formConnected:r.win?.document.querySelector('.vb-form')?.isConnected})),
     commands:window.nativeBridge?.commands,body:document.body.innerText.slice(-1200)
    })'''),flush=True)
    raise
@@ -79,7 +79,7 @@ class NativeCaptions(unittest.TestCase):
    f.controls.forEach((c,i)=>Object.assign(c.properties,{Left:150,Top:150+i*600,Width:4000,Height:420}));
    p.modules[0].code='Private Attempts As Integer\\nPrivate Sub Form_QueryUnload(Cancel As Integer, UnloadMode As Integer)\\nAttempts = Attempts + 1\\nIf Attempts = 1 Then Cancel = 1\\nEnd Sub';
    const records=new Map(),commands=[];let listener,sequence=0;
-   const open=window.originalOpen||(window.originalOpen=window.open.bind(window));window.open=(url,id,features)=>{const r=records.get(id);const w=open(url,id,features+',width='+r.options.width+',height='+r.options.height);r.win=w;return w;};
+   const open=window.originalOpen||(window.originalOpen=window.open.bind(window));window.open=(url,id,features)=>{const r=records.get(id);const w=open(url,id,features+',width='+r.options.width+',height='+r.options.height);if(w===window)throw new Error('Native popup reused its controller window');r.win=w;r.url=url;return w;};
    const bridge={version:1,...(legacy?{}:{capabilities:{applicationCaptions:true}}),
     prepareWindow:options=>{const id='caption-'+(++sequence);records.set(id,{options});return id;},
     windowCommand:async(id,name,value)=>{commands.push([id,name,value]);if(name==='destroy'){records.get(id)?.win?.close();records.delete(id);}},
@@ -101,6 +101,7 @@ class NativeCaptions(unittest.TestCase):
   popup.wait_for_load_state('load')
   popup.wait_for_timeout(100)
   self.assertNotEqual(popup,self.page)
+  self.assertEqual(self.page.evaluate('[...nativeBridge.records.values()][0].url'),'')
   # document.open copies the entry document URL (HTML document-open step 12);
   # it does not navigate or fetch that URL again. Verify both parts of that contract.
   expected_url=self.page.url.split('#')[0]

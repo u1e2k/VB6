@@ -21,14 +21,16 @@ export function installNativeHost(host, bridge = globalThis.vb6Native) {
   const command = (id, name, value) => bridge.windowCommand(id, name, value).catch(report);
   function open(options) {
     const id = bridge.prepareWindow(options);
-    const win = browser.open('about:blank', id, 'popup');
+    // An empty URL keeps the initial same-origin document, as in the IDE's
+    // detached window host. Electron normalizes it to about:blank before the
+    // main-process reservation check; no new navigation is requested.
+    const win = browser.open('', id, 'popup');
     if (!win) { command(id,'cancel-reservation'); throw new Error('Native window creation was denied'); }
     const doc = win.document;
-    // Complete the blank document before adopting live nodes. Firefox can still
-    // commit the explicit about:blank navigation after open() returns, discarding
-    // an uninitialised document. Only constant markup is written; titles, themes
-    // and app content are installed with DOM APIs below. The inherited origin/CSP
-    // and root-owned native bridge remain unchanged.
+    // Establish standards mode before adopting live nodes. Only constant markup
+    // is written; titles, themes and app content use DOM APIs below. Inherited
+    // origin/CSP and the root-owned native bridge remain unchanged.
+    // https://www.electronjs.org/docs/latest/api/window-open
     doc.open();
     doc.write('<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>');
     doc.close();
