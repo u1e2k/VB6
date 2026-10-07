@@ -43,6 +43,7 @@ These guides describe the implemented system, not complete native VB6 parity.
 ## Windows compilation and native services
 
 - [Windows build targets](WINDOWS-BUILDS.md), [target validation](NATIVE-VALIDATION.md),
+  [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),
