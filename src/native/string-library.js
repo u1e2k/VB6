@@ -1,3 +1,4 @@
+import {emitNativeCountedEqual} from './string-kernels.js';
 /** Counted UTF-16/BSTR library. Strings are never scanned for NUL terminators.
  * New results transfer ownership to a per-statement BSTR owner in the caller.
  * Comparison uses installed Windows NLS for text mode, exact code units for binary.
@@ -88,15 +89,17 @@ export function emitNativeStringLibrary(c){
     x.label(binary).push(arg(12)).push(arg(8)).call('native:string:compare').leave(12);
   }
   {
-    const startReady=x.unique(),emptyNeedle=x.unique(),loop=x.unique(),scan=x.unique(),next=x.unique(),text=x.unique(),found=x.unique(),notFound=x.unique(),done=x.unique();
+    const startReady=x.unique(),emptyNeedle=x.unique(),loop=x.unique(),next=x.unique(),text=x.unique(),found=x.unique(),notFound=x.unique(),done=x.unique();
     x.label(S+'instrrev').enter(8).value(arg(20)).compare(0).branch('l','error:5').compare(1).branch('g','error:5');
     x.value(arg(16)).compare(-1).branch('l','error:5').test().branch('e','error:5');
-    x.api(DLL,'SysStringLen',[arg(8)]).mov(local(-4),'eax').test().branch('e',notFound);
+    x.api(DLL,'SysStringLen',[arg(8)]).compare(MAX_NATIVE_STRING).branch('a','error:7').mov(local(-4),'eax').test().branch('e',notFound);
     x.value(arg(16)).compare(-1).branch('ne',startReady).mov('eax',local(-4)).label(startReady).cmp('eax',local(-4)).branch('a',notFound).mov('esi','eax');
-    x.api(DLL,'SysStringLen',[arg(12)]).mov(local(-8),'eax').test().branch('e',emptyNeedle).sub('esi','eax');
+    x.api(DLL,'SysStringLen',[arg(12)]).compare(MAX_NATIVE_STRING).branch('a','error:7').mov(local(-8),'eax').test().branch('e',emptyNeedle).sub('esi','eax');
     x.label(loop).testOperand('esi','esi').branch('s',notFound).value(arg(8)).lea('ebx',mem32({base:'eax',index:'esi',scale:2})).value(arg(20)).test().branch('ne',text);
-    x.value(arg(12)).mov('edi','eax').mov('ecx',0);
-    x.label(scan).cmp('ecx',local(-8)).branch('e',found).mov('ax',mem16({base:'ebx',index:'ecx',scale:2})).cmp('ax',mem16({base:'edi',index:'ecx',scale:2})).branch('ne',next).inc('ecx').jump(scan);
+    // Preserve the reverse candidate index while the bounded REP kernel advances
+    // both pointers. Text comparison retains its installed-Windows NLS path.
+    x.pushOperand('esi').mov('esi','ebx').value(arg(12)).mov('edi','eax').mov('ecx',local(-8));
+    emitNativeCountedEqual(x);x.popOperand('esi').test().branch('ne',found).jump(next);
     x.label(text).push(arg(-8)).push(arg(12)).push(arg(-8)).pushOperand('ebx').push(1).push(0x400).invoke('kernel32.dll','CompareStringW').test().branch('e','error:5').compare(2).branch('e',found);
     x.label(next).dec('esi').jump(loop).label(found).lea('eax',mem32({base:'esi',displacement:1})).jump(done).label(emptyNeedle).mov('eax','esi').jump(done).label(notFound).value(0).label(done).leave(16);
   }
