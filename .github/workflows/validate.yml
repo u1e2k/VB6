@@ -29,7 +29,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm run build
-      - run: npm test
+      - name: Complete Node suite with preserved failure output
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reports/node
+          npm test 2>&1 | tee reports/node/tests.log
       - name: Independently extracted layout package and labelled solver benchmarks
         run: |
           npm run pack:layout
@@ -218,3 +223,37 @@ jobs:
           name: rendering-themes-${{ matrix.backend }}-${{ matrix.display }}
           path: reports/rendering
           retention-days: 14
+  prior-failure-diagnostics:
+    if: github.head_ref == 'feat/webgpu-ui-rendering'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+      checks: read
+    steps:
+      - name: Recover bounded assertion diagnostics from the failed candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pr21-failure
+          gh api repos/wieslawsoltes/VB6/check-runs/112656456967/annotations > /tmp/pr21-failure/annotations.json
+          gh api repos/wieslawsoltes/VB6/actions/jobs/112656456967/logs > /tmp/pr21-failure/tests.log
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          p=Path('/tmp/pr21-failure')
+          lines=(p/'tests.log').read_text().splitlines()
+          selected=set()
+          for i,line in enumerate(lines):
+              if 'not ok ' in line or 'AssertionError' in line or 'ERR_ASSERTION' in line:
+                  selected.update(range(max(0,i-4),min(len(lines),i+50)))
+          (p/'failures.txt').write_text('\n'.join(lines[i] for i in sorted(selected)))
+          print((p/'annotations.json').read_text())
+          print((p/'failures.txt').read_text()[:16000])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr21-prior-failure
+          path: /tmp/pr21-failure
+          retention-days: 7
