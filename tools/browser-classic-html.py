@@ -75,6 +75,17 @@ with sync_playwright() as pw:
             (OUT/f'pressed-{dpr}.png').write_bytes(shot);check(changed==0,f'{changed} pressed pixels differ')
             p.locator('#raised').evaluate('(b)=>b.disabled=true');shot=p.locator('#raised').screenshot()
             check(pixels(shot,expected)==0,'Disabled bevel became pressed')
+            # Test the actual runtime CommandButton too, not only the shared
+            # helper class: its equivalent filled edges must match this oracle.
+            p=page(dpr,html='<div data-vb-theme="classic"><button class="vb-command" aria-label="command" style="position:absolute;left:16px;top:16px;width:40px;height:24px;min-width:0;background-color:var(--vb-face)"></button></div>')
+            command=p.locator('.vb-command')
+            check(pixels(command.screenshot(),expected)==0,'CommandButton normal staircase differs')
+            # Isolate the bevel from the separate native focus indicator.
+            command.evaluate("n=>n.addEventListener('mousedown',e=>e.preventDefault())")
+            command.hover();p.mouse.down()
+            check(pixels(command.screenshot(),golden(40,24,dpr,COLORS['classic'],True))==0,'CommandButton pressed staircase differs')
+            p.mouse.up();command.evaluate('(n)=>n.disabled=true')
+            check(pixels(command.screenshot(),expected)==0,'CommandButton disabled staircase differs')
             # The container variant preserves real border metrics and uses an
             # equivalent border-box staircase. Compare to the same independent
             # pixel oracle, including corner ownership, not another CSS sample.
@@ -148,6 +159,23 @@ with sync_playwright() as pw:
         p.get_by_role('button',name='Cancel',exact=True).click()
         p.screenshot(path=OUT/'ide.png');check(not p.errors,str(p.errors));return {'startup':True,'optionsCancel':True}
     case('standalone IDE startup and classic Options interaction',ide_smoke)
+    def command_theme_layers():
+        p=page(dpr=1.25,html='<div data-vb-theme="fluent"><button id="modern" class="vb-command">Modern</button><div data-vb-theme="classic"><button id="classic" class="vb-command" style="background-color:rgb(120,140,160)">Classic</button><div data-vb-theme="macos26-dark"><button id="nested" class="vb-command">Nested</button></div></div></div>')
+        state="n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect();return {image:s.backgroundImage,shadow:s.boxShadow,color:s.backgroundColor,box:[r.x,r.y,r.width,r.height]}}"
+        c=p.locator('#classic');normal=c.evaluate(state)
+        check(normal['shadow']=='none' and 'linear-gradient' in normal['image'],'Classic command did not use filled edges')
+        check(normal['color']=='rgb(120, 140, 160)','Authored face color changed')
+        for selector in ['#modern','#nested']:
+            value=p.locator(selector).evaluate(state)
+            check(value['image']=='none' and value['shadow']!='none','Classic layers leaked into optional material chrome')
+        c.hover();p.mouse.down();pressed=c.evaluate(state);p.mouse.up()
+        check(pressed['box']==normal['box'] and pressed['image']!=normal['image'],'Pressed edges or outer geometry are incorrect')
+        c.evaluate('n=>n.disabled=true');disabled=c.evaluate(state)
+        check(disabled['image']==normal['image'] and disabled['shadow']=='none','Disabled edges lost normal geometry/paint')
+        p.emulate_media(forced_colors='active')
+        check(c.evaluate('n=>getComputedStyle(n).backgroundImage')=='none','Forced colors retained author edge images')
+        return {'classicShadow':'none','modernAndNestedMaterialsPreserved':True,'pressedAndDisabled':True,'authoredColor':normal['color']}
+    case('command edge layers preserve nested themes, state and authored colors',command_theme_layers)
     browser.close()
 summary={'passed':0,'failed':0,'skipped':0}
 for result in RESULTS:

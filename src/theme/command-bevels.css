@@ -1,0 +1,41 @@
+/* Deterministic classic command-button edges.
+ * The inset-shadow staircase recommended by Jordan Scales / 98.css is retained
+ * as eight equivalent filled strips. Chromium 143 repeatedly alternated the
+ * bottom shadow row of unchanged classic buttons at fractional DPI, including
+ * in HTML-only mode. Filled layers preserve the bounds, padding, native glyphs,
+ * focus, pressed displacement and authored face color without per-frame JS.
+ * Source: https://news.ycombinator.com/item?id=49963404
+ * Layer order: https://www.w3.org/TR/css-backgrounds-3/#layering
+ * The complete 98.css MIT notice is retained in bevels.css and LICENSES/98.css.txt.
+ *
+ * Reset at EVERY application theme boundary; an embedded classic form must not
+ * inherit its modern parent's material treatment (or vice versa).
+ */
+:root,[data-vb-theme] {
+ --command-edge-image:var(--vb-bevel-raised-image);
+ --command-down-image:linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-light),var(--vb-light)),linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-dark),var(--vb-dark)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-highlight),var(--vb-highlight)),linear-gradient(var(--vb-shadow),var(--vb-shadow)),linear-gradient(var(--vb-shadow),var(--vb-shadow));
+}
+[data-vb-theme^="fluent"],[data-vb-theme^="macos26"],[data-vb-theme^="x11"] {
+ --command-edge-image:none;
+ --command-down-image:none;
+}
+@media(forced-colors:none) {
+ .vb-command {
+   background-image:var(--command-edge-image);
+   background-origin:border-box;background-clip:border-box;background-repeat:no-repeat;
+   background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
+   background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
+   box-shadow:var(--app-control-shadow,none);
+ }
+ .vb-command:hover:not(.disabled):not(:disabled):not([aria-disabled=true]) {
+   box-shadow:var(--app-hover-shadow,none);
+ }
+ .vb-command:active:not(.disabled):not(:disabled):not([aria-disabled=true]) {
+   background-image:var(--command-down-image);
+   box-shadow:var(--app-pressed-shadow,none);
+ }
+ .vb-command:is(.disabled,:disabled,[aria-disabled=true]) {
+   background-image:var(--command-edge-image);
+   box-shadow:var(--app-disabled-shadow,none);
+ }
+}
