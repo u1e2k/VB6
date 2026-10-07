@@ -71,7 +71,9 @@ Exact scaled Currency storage, arithmetic, conversions, scalar ABI and typed arr
 
 ## Native controls and windowing
 
-Supported form designers are `Form` and `MDIForm`. Supported intrinsic controls are CommandButton, Label, TextBox, Frame, CheckBox, OptionButton, ListBox, ComboBox and Timer. These are actual Windows control classes, not HTML controls. Frames are native parent HWNDs; nested control notifications are forwarded to the owning form. IDs remain stable even when model declaration order places a child before its parent.
+The control extension and its exact compatibility boundaries are documented in [Freestanding Win32 control lowering](WIN32-CONTROLS.md). It adds native common-control, file-control, input/font and owner-drawing paths beyond the original nine-control baseline below. This is not universal control/property parity; image resources, full collection objects and native data/COM control hosting remain unfinished.
+
+Supported form designers are `Form` and `MDIForm`. The original intrinsic-control baseline is CommandButton, Label, TextBox, Frame, CheckBox, OptionButton, ListBox, ComboBox and Timer; the linked control contract describes the additional mappings and their supported members. These are actual Windows control classes, not HTML controls. Frames are native parent HWNDs; nested control notifications are forwarded to the owning form. IDs remain stable even when model declaration order places a child before its parent.
 
 Static designer control arrays retain independent HWNDs, IDs, state and their ByRef Integer Index event arguments. `control(index)` validates the element, with missing indices raising error 340. Count/LBound/UBound/Index and supported control properties/methods are mapped. Duplicate indices, mixed scalar/array names and heterogeneous element types are compilation errors. Dynamic control Load/Unload is not implemented.
 
