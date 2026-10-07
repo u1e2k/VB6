@@ -1,0 +1,21 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {emittedGrid} from './support/native-grid-abi.mjs';
+for(const optimization of [0,1,2])test(`emitted grid painting uses exact native records and balanced GDI state O${optimization}`,t=>{
+ const {vm,m,invoke,args,state}=emittedGrid(t,'G.ScrollBars=3\nG.TextMatrix(1,1)="日本" & vbNullChar & "text"',optimization),draws=[],fills=[],saves=[];vm.invoke('proc:Form1:Form_Load');
+ vm.hook('user32.dll','GetWindowLongW',2,([h,k])=>{assert.equal(h,101);return (k|0)===-21?state:0x300000;});
+ vm.hook('user32.dll','GetSysColor',1,([index])=>index*257);
+ vm.hook('oleaut32.dll','OleTranslateColor',3,([c,p,out])=>{assert.equal(p,0);m.write(out,c&0xffffff);return 0;});
+ vm.hook('gdi32.dll','SaveDC',1,([dc])=>{assert.equal(dc,123);saves.push(1);return 1;});
+ vm.hook('gdi32.dll','RestoreDC',2,([dc,index])=>{assert.equal(dc,123);assert.equal(index,1);assert.equal(saves.pop(),1);return 1;});
+ for(const [api,n]of [['SetDCBrushColor',2],['SetTextColor',2],['SetBkMode',2],['SelectObject',2]])vm.hook('gdi32.dll',api,n,()=>1);
+ vm.hook('gdi32.dll','GetStockObject',1,([index])=>index+1000);
+ vm.hook('user32.dll','FillRect',3,([dc,r,b])=>{assert.equal(dc,123);assert.equal(b,1018);fills.push(Array.from({length:4},(_,i)=>m.read(r+4*i)|0));return 1;});
+ vm.hook('user32.dll','FrameRect',3,()=>1);
+ vm.hook('user32.dll','DrawTextW',5,([dc,str,len,r,flags])=>{assert.equal(dc,123);draws.push({text:m.bstr(str),len,rect:Array.from({length:4},(_,i)=>m.read(r+4*i)|0),flags});return 1;});
+ let infoCalls=0;vm.hook('user32.dll','GetScrollInfo',3,([h,axis,ptr])=>{assert.equal(m.read(ptr),28);assert.equal(m.read(ptr+4),7);infoCalls++;return 0;});
+ vm.hook('user32.dll','SetScrollInfo',4,([h,axis,ptr,repaint])=>{assert.equal(m.read(ptr),28);assert.equal(m.read(ptr+4),15);assert.ok(m.read(ptr+16)>=1);assert.equal(repaint,1);return 0;});
+ vm.hook('user32.dll','ShowScrollBar',3,()=>1);
+ invoke('Paint',[...args,123,2400,630]);
+ assert.equal(saves.length,0);assert.ok(infoCalls>0);assert.equal(draws.length,4);assert.deepEqual(fills[0],[0,0,80,21]);
+ const cell=draws.find(d=>d.text==='日本\0text');assert.ok(cell);assert.equal(cell.len,7);assert.deepEqual(cell.rect,[83,21,157,42]);
+ assert.ok((cell.flags&0x800)!==0);invoke('Dispose',[0]);
+});
