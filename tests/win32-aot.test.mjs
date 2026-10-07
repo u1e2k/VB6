@@ -99,7 +99,8 @@ test('qualified calls respect private procedure and Declare scope',()=>{
 });
 test('native declarations cannot shadow procedure or storage names',()=>{
   for(const declaration of ['Private Sub CallMe()\nEnd Sub','Private CallMe As Long']){
-    assert.throws(()=>buildCode('Private Declare Sub CallMe Lib "x" ()\n'+declaration),/conflicts/);
+    assert.throws(()=>buildCode('Private Declare Sub CallMe Lib "x" ()\n'+declaration),error=>
+      error.name==='NativeCompileError'&&error.diagnostics.some(d=>d.source==='Form1'&&d.line>0&&/^Ambiguous (?:name detected|member name): CallMe$/.test(d.message)));
   }
 });
 test('form initializers and default-instance method calls have distinct guarded initialization',()=>{

@@ -2,12 +2,12 @@
   "version": 2,
   "files": {
     "dist/studio.js": {
-      "bytes": 7062501,
-      "sha256": "cbabb92feb81d01c3d7e98c2707974bdd8e996a6d404afa35fe6c488bf8f11d0"
+      "bytes": 7066091,
+      "sha256": "5cd9e37c2a1b6838da11bbbed08b94e16d7f2c6976cf4e3563cd778be545f15d"
     },
     "dist/VB6-Studio-Web.html": {
-      "bytes": 7394014,
-      "sha256": "ca56e54e08da0dcd043e5a169135aed2e9a6fd5e6c9ff2a1d0ac0c126c7fe552"
+      "bytes": 7397604,
+      "sha256": "2e626018e7fe1c700e16160a444e624c7b8684ed2689ef574be6d4a505398b68"
     },
     "dist/win32-browser.js": {
       "bytes": 212919,
@@ -16,6 +16,10 @@
     "packages/win32-browser/dist/win32-browser.js": {
       "bytes": 212919,
       "sha256": "4c3d915ed036a55c176d52afc483631bb1447a3bf44f5c5415aa06ab62cdc0dd"
+    },
+    "dist/vb6-rendering.js": {
+      "bytes": 106425,
+      "sha256": "f78154bf5ee069be5b8f46f767ab48dbf62c7a8bf6fd90b1401e2b9897d9270a"
     },
     "dist/auto-layout.js": {
       "bytes": 36922,
@@ -26,8 +30,8 @@
       "sha256": "32bb2c6755e6163393536bd7948961a93dfb314fcd4c6d4988272b2ca9ad07fc"
     },
     "dist/vb6-native.js": {
-      "bytes": 715853,
-      "sha256": "a2f889f21409daeeb3765c3db5a1be0c25cb316716840e7ce47183ccbcc74c60"
+      "bytes": 715879,
+      "sha256": "2103f5d3fd36e95d207e90b44bc8fbc24e7cabfa6eb4381537426a179da7976a"
     },
     "src/editor/diagnostics-payload.js": {
       "bytes": 210552,

@@ -8,8 +8,9 @@ import {NativeRecordLayouts,nativeRecordMethods} from './records.js';
 import {THEMES} from '../theme/theme.js';
 import {nativeLayoutMethods} from './layout.js';
 import {normalizeProject} from '../project/model.js';
-import {compileProject, parseParameters} from '../language/compiler.js';
-import {tokenize} from '../language/lexer.js';
+import {compileProject} from '../language/compiler.js';
+import {NativeCompileError,extractNativeDeclarations,lowerNativeDeclarations} from './declarations.js';
+export {NativeCompileError,extractNativeDeclarations};
 import {PE32Image, BinarySection} from './pe32.js';
 import {X86} from './x86.js';
 import {nativeBindingMethods} from './bindings.js';
@@ -31,49 +32,6 @@ const mem = memory => ({memory});
 const INT_TYPES = new Set(['long', 'integer', 'byte', 'boolean']);
 const BOOL_CONDITIONS = {'=':0x94, '<>':0x95, '<':0x9c, '<=':0x9e, '>':0x9f, '>=':0x9d};
 const CONSTANTS = {...NATIVE_DATE_CONSTANTS,...NATIVE_STRING_CONSTANTS,vbtrue:-1,vbfalse:0,vbnormal:0,vbminimized:1,vbmaximized:2,vbmodal:1,vbmodeless:0,vbokonly:0,vbokcancel:1,vbyesno:4,vbyesnocancel:3,vbinformation:64,vbexclamation:48,vbcritical:16,vbquestion:32,vbok:1,vbcancel:2,vbyes:6,vbno:7,vbcrlf:'\r\n',vbnewline:'\r\n',vbtab:'\t',vbnullchar:'\0',vbnullstring:''};
-export class NativeCompileError extends Error {
-  constructor(message, source = '', line = 0) { super(`${source ? source + ':' + line + ': ' : ''}${message}`); this.name = 'NativeCompileError'; this.diagnostics = [{severity:'error',source,line,message}]; }
-}
-
-/** Native declarations are stripped only for this backend; the browser VM remains sandboxed. */
-export function extractNativeDeclarations(module) {
-  const declarations = new Map();
-  const lines = module.code.split(/\r?\n/);
-  for (let index = 0; index < lines.length; index++) {
-    if (!/^\s*(?:Public\s+|Private\s+)?Declare\b/i.test(lines[index])) continue;
-    const start = index, pieces = [];
-    // Token offsets distinguish a continuation from underscores inside names,
-    // aliases, strings or comments. Blank every consumed physical line so the
-    // language frontend and exported source map keep authored line numbers.
-    try {
-      while (true) {
-        const raw = lines[index], tokens = tokenize(raw), last = tokens.at(-2);
-        const continued = last?.type === 'id' && last.value === '_' &&
-          last.start > 0 && /\s/.test(raw[last.start - 1]);
-        pieces.push(raw.slice(0,continued ? last.start : tokens.at(-1).start));
-        if (!continued) break;
-        if (++index >= lines.length) throw new Error('Unfinished native Declare continuation');
-      }
-    } catch (error) { throw new NativeCompileError(error.message,module.name,start + 1); }
-    const line = pieces.join(' ');
-    const m = line.match(/^\s*(?:(Public|Private)\s+)?Declare\s+(Function|Sub)\s+(\w+)\s+Lib\s+"([\w.-]+)"(?:\s+Alias\s+"([\w?@$#]+)")?\s*\((.*)\)\s*(?:As\s+(\w+))?\s*(?:'.*)?$/i);
-    if (!m) throw new NativeCompileError('Unsupported native Declare syntax; use a scalar stdcall declaration', module.name, start + 1);
-    const dll = /\.dll$/i.test(m[4]) ? m[4] : m[4] + '.dll', name = key(m[3]);
-    let params;
-    try { params = parseParameters(m[6], {}, {allowAny:true}); }
-    catch (error) { throw new NativeCompileError(error.message,module.name,start + 1); }
-    if(params.reduce((sum,p)=>sum+nativeParameterBytes(p),0)>65532)
-      throw new NativeCompileError('Native Declare argument area exceeds the x86 stdcall return limit',module.name,start + 1);
-    if (declarations.has(name)) throw new NativeCompileError('Duplicate native declaration: ' + m[3], module.name, start + 1);
-    if (params.some(p => !INT_TYPES.has(key(p.type)) && !REAL_TYPES.has(key(p.type)) && !['currency','string','any'].includes(key(p.type)) && (!p.byRef || !/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$/.test(p.type) || ['object','variant','decimal'].includes(key(p.type))) || key(p.type)==='any'&&!p.byRef || p.bounds !== null || p.optional || p.paramArray) || (key(m[2]) === 'function' && !INT_TYPES.has(key(m[7])) && !REAL_TYPES.has(key(m[7])) && !['currency','string'].includes(key(m[7])))) {
-      throw new NativeCompileError('Native Declare supports scalar Byte/Integer/Long/Boolean/Single/Double/Currency/Date/String parameters and returns; ByRef POD records and As Any are supported; arrays and managed records require separate ABI support', module.name, start + 1);
-    }
-    declarations.set(name, {name:m[3],kind:key(m[2]),scope:key(m[1] || 'public'),params,returnType:m[7] || 'Long',dll,symbol:/^#\d+$/.test(m[5] || '') ? Number(m[5].slice(1)) : m[5] || m[3],line:start + 1});
-    for(let physical=start;physical<=index;physical++)lines[physical]='';
-  }
-  return {declarations, code:lines.join('\n')};
-}
-
 class NativeCompiler {
   get context() { return this.nativeContext; }
   set context(value) { this.nativeContext=value; this.typeCache=new WeakMap(); }
@@ -89,9 +47,9 @@ class NativeCompiler {
     if (project.resources?.entries?.length) this.fail('Native resource lowering is not yet implemented; use the classic or desktop target');
     const targetType = project.nativeProject?.entries?.find(e => key(e.key) === 'type')?.value;
     if (targetType && key(targetType) !== 'exe') this.fail('Freestanding AOT currently requires a Standard EXE project');
-    for (const module of this.project.modules) { const result = extractNativeDeclarations(module); module.code = result.code; this.externals.set(key(module.name), result.declarations); }
     this.program = compileProject(this.project);
     if (!this.program.valid) { const error = new NativeCompileError('Project contains compile errors'); error.diagnostics = this.program.diagnostics; error.message = error.diagnostics.map(d => `${d.source}:${d.line}: ${d.message}`).join('\n'); throw error; }
+    for (const module of this.program.modules.values()) this.externals.set(key(module.name),lowerNativeDeclarations(module));
     this.recordLayouts=new NativeRecordLayouts(this.program,message=>this.fail(message));
     for(const module of this.program.modules.values())for(const declaration of this.externals.get(key(module.name)).values())for(const p of declaration.params)if(!INT_TYPES.has(key(p.type))&&!REAL_TYPES.has(key(p.type))&&!['currency','string','any'].includes(key(p.type))){p.nativeRecord=this.recordLayouts.resolve(p.type,module);if(!p.nativeRecord||!p.byRef)this.fail('Native Declare record parameters require a known ByRef POD record: '+p.type,module);}
     this.image = new PE32Image(); this.text = this.image.section('.text', 0x60000020); this.ro = this.image.section('.rdata', 0x40000040); this.data = this.image.section('.data', 0xc0000040);
@@ -120,6 +78,7 @@ class NativeCompiler {
       const variable = {...decl,owner:result,label:'global:' + module.name + ':' + decl.name}; this.allocateStorage(variable); result.globals.set(key(decl.name),variable);
     }
     for (const proc of module.procedures.values()) {
+      if (proc.external) continue;
       this.preparingProcedure=proc;
       if (!['sub','function'].includes(proc.kind)) this.fail('Native AOT does not lower property procedures', module);
       if (proc.kind === 'function' && !INT_TYPES.has(key(proc.returnType)) && key(proc.returnType)!=='string' && !REAL_TYPES.has(key(proc.returnType)) && key(proc.returnType)!=='currency') this.fail('Native functions must return a supported scalar: ' + proc.name, module);
