@@ -49,6 +49,7 @@ export async function runClassicArchive(rootURL) {
     if (!child?.pid || child.exitCode !== null) return;
     const killer = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'], {shell: false, windowsHide: true, stdio: 'ignore'});
     killer.on('error', () => child.kill());
+    killer.on('close', code => {if (code && child.exitCode === null) child.kill();});
   };
   let interrupted = false;
   const interrupt = () => {interrupted = true; kill();};

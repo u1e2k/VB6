@@ -4,7 +4,7 @@ import {createClassicBridge} from './classic-bridge.mjs';
 
 const args = process.argv.slice(2), options = {origins: []};
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--help') {console.log('node tools/serve-classic.mjs --origin http://127.0.0.1:8080 [--compiler C:\...\VB6.EXE] [--port 8768] [--timeout 120000] [--allow-file-origin]\nRequires a licensed Windows VB6 installation. Every build requires local terminal approval.'); process.exit(0);}
+  if (args[i] === '--help') {console.log('node tools/serve-classic.mjs --origin http://127.0.0.1:8080 [--compiler C:\\...\\VB6.EXE] [--port 8768] [--timeout 120000] [--allow-file-origin]\nRequires a licensed Windows VB6 installation. Every build requires local terminal approval.'); process.exit(0);}
   else if (args[i] === '--allow-file-origin') options.origins.push('null');
   else if (['--origin', '--compiler', '--port', '--timeout'].includes(args[i]) && args[i + 1] && !args[i + 1].startsWith('--')) {
     const key = args[i].slice(2), value = args[++i];
