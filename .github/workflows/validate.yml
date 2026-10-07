@@ -1,7 +1,7 @@
 name: Validate
 on:
   push:
-    branches: [main]
+    branches: [main, feat/webgpu-ui-rendering]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -10,6 +10,69 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 jobs:
+  reconcile-rendering:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feat/webgpu-ui-rendering'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish the reviewed integration without overwriting concurrent source
+        shell: bash
+        run: |
+          mkdir -p /tmp/pr21-reconcile
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit --no-ff 366539b30e68d5cdf03db66d727c3befcb01620e || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,subprocess
+          assert Path('.git/MERGE_HEAD').exists()
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
+          assert set(conflicts)=={'.gitignore','dist/studio.css','src/mcp/studio-entry.js','tools/build.mjs','tools/ide-artifacts.json'},conflicts
+          for path in ['.gitignore','tools/build.mjs']:
+              Path(path).write_bytes(subprocess.check_output(['git','show','366539b30e68d5cdf03db66d727c3befcb01620e:'+path]))
+          p=Path('tools/build.mjs');s=p.read_text();needle="fs.writeFileSync('dist/vb6-native.js'"
+          assert s.count(needle)==1
+          p.write_text(s.replace(needle,"fs.writeFileSync('dist/vb6-rendering.js',bundle(path.resolve('src/rendering/entry.js'),'VB6Rendering'));\n"+needle))
+          Path('src/mcp/studio-entry.js').write_text("import {installStudioRendering} from '../rendering/studio.js';\nimport {VB6Studio, StudioAPI} from '../ide/main.js';\nimport {installApplicationExport} from '../ide/application-export.js';\nimport {installMcp} from './studio.js';\nimport {installAutoLayout} from '../ide/auto-layout.js';\nimport {installCodingAgents} from '../agents/studio.js';\nif (globalThis.vb6Studio) {\n  installApplicationExport(globalThis.vb6Studio, StudioAPI);\n  installMcp(globalThis.vb6Studio, StudioAPI);\n  installCodingAgents(globalThis.vb6Studio, StudioAPI);\n  installAutoLayout(globalThis.vb6Studio);\n  installStudioRendering(globalThis.vb6Studio);\n}\nexport {installStudioRendering, installAutoLayout, VB6Studio, StudioAPI, installMcp};\n")
+          expected=json.loads(Path('.rendering-expected.json').read_text())
+          Path('tools/ide-artifacts.json').write_text(json.dumps(expected,indent=2)+'\n')
+          # Preserve all eight theme tests, checking current main's legacy X11 migration.
+          p=Path('tools/browser-rendering-tests.py');s=p.read_text()
+          old="page.evaluate('document.documentElement.dataset.ideTheme') == theme"
+          assert s.count(old)==1
+          p.write_text(s.replace(old,old+".replace('x11-cde', 'x11')"))
+          for path,sha in {'src/ide/mdi.js':'6daa301a06e59edad33af81395789313c1f9d9ec','src/mcp/studio-entry.js':'6996a9a271d7d556dd35eaee8002ecf6caf21d9b','tools/build.mjs':'56effeec7c57b1d2f7dee36a51518e5ed5b27c28','tools/ide-artifacts.json':'270fb4c654b7501d26661aaa25cfa4d6de3a9f50','tools/browser-rendering-tests.py':'cf55967563bdfa22658e10cb4ea4d13bc32285f3','package.json':'eafde2d125e6c0356890120a16062ff13219bd93'}.items():
+              assert subprocess.check_output(['git','hash-object',path],text=True).strip()==sha,path
+          subprocess.run(['git','rm','dist/studio.css'],check=True)
+          subprocess.run(['git','add','.gitignore','src/mcp/studio-entry.js','tools/build.mjs','tools/ide-artifacts.json'],check=True)
+          subprocess.run(['git','diff','--cached','--exit-code','--','.github/workflows'],check=True)
+          PY
+          npm run build > /tmp/pr21-reconcile/build.log 2>&1
+          npm test > /tmp/pr21-reconcile/tests.log 2>&1
+          test "$(git hash-object dist/vb6-controls.css)" = d9865f37bbe233fcffaccb1413ec5f5b9add3ad2
+          git rm .rendering-expected.json
+          git add src tests tools dist examples
+          git diff --cached --exit-code -- .github/workflows
+          git diff --check
+          git commit -m 'merge(rendering): preserve complete auto-layout, exporter and refined theme integration'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git archive --format=zip HEAD -o /tmp/pr21-reconcile/source.zip
+          git rev-parse HEAD > /tmp/pr21-reconcile/head.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr21-reconciled-source
+          path: /tmp/pr21-reconcile
+          retention-days: 7
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -30,6 +93,23 @@ jobs:
           python-version: '3.12'
       - run: npm run build
       - run: npm test
+      - name: Independently extracted layout package and labelled solver benchmarks
+        run: |
+          npm run pack:layout
+          npm run bench:layout
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: auto-layout-package-and-benchmarks
+          path: |
+            release/vb6-auto-layout-*.tgz
+            reports/layout/benchmark.json
+            reports/auto-layout/benchmark.json
+          retention-days: 7
+      - name: Report retention and packaging regressions
+        run: |
+          python tools/test-report-retention.py
+          python tools/test-package-notices.py
       - run: python -m pip install playwright==1.57.0
       - run: python -m playwright install --with-deps chromium
       - name: Resolve browser executable
@@ -49,6 +129,13 @@ jobs:
           python tools/browser-boundaries-06.py
       - name: Verify reproducible generated bundles
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-validation-reports
+          path: reports
+          if-no-files-found: ignore
+          retention-days: 7
   browser-windows:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -75,6 +162,22 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:themes:browser
+      - name: Resolve Chromium for the existing layout harness
+        if: matrix.browser == 'chromium'
+        run: |
+          python - <<'PYTHON' >> "$GITHUB_ENV"
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              print('CHROMIUM_PATH=' + p.chromium.executable_path)
+          PYTHON
+      - name: Opt-in layout panel, canvas transactions and advanced runtime exports
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: |
+          set -o pipefail
+          mkdir -p "reports/auto-layout/${VB6_BROWSER}"
+          npm run test:layout:browser 2>&1 | tee "reports/auto-layout/${VB6_BROWSER}/anchoring-tests.log"
+          npm run test:layout:designer 2>&1 | tee "reports/auto-layout/${VB6_BROWSER}/designer-tests.log"
       - name: Application themes, control state and complete matching icon packs
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -83,6 +186,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:sample-exports
+      - name: Modular deployment exports, startup failures, persistence and CSP
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:exporter:browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -92,16 +199,26 @@ jobs:
             reports/ide-themes
             reports/application-themes/${{ matrix.browser }}
             reports/win32-exports
+            reports/layout
+            reports/auto-layout
+            reports/exporter
           if-no-files-found: ignore
           retention-days: 7
   win32-system-contracts:
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Validate existing native layout exports against Windows Forms and HWND bounds
+        shell: pwsh
+        run: |
+          node tools/win32-layout-fixtures.mjs
+          powershell -NoProfile -File tools/test-winforms-anchors.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tools/test-win32-layout.ps1
       - name: Record installed Windows calendar and formatting contracts
         shell: pwsh
         run: ./tools/win32-system-oracle.ps1
@@ -111,10 +228,11 @@ jobs:
         if: always()
         with:
           name: win32-system-contracts
-          path: reports/win32-system
+          path: |
+            reports/win32-system
+            reports/layout/native
           retention-days: 7
   rendering-qualification:
-    # Temporary pre-merge check; preserve main's two-workflow policy afterwards.
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     strategy:
