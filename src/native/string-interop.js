@@ -27,7 +27,8 @@ export const nativeStringInteropMethods = {
     this.x.emit(0x50,0x52).api(KERNEL,'GetLastError').store('native:error:lastdllerror').emit(0x5a,0x58);
   },
   nativeConvertString(owner, helper) {
-    this.nativeStringInterop = true;
+    if(helper==='to-utf8'||helper==='from-utf8')this.nativeStringUTF8Interop=true;
+    else this.nativeStringInterop = true;
     const x = this.x;
     x.push(); this.rawStorageAddress(owner);
     x.emit(0x59).push().emit(0x51).call(I + helper);
@@ -73,34 +74,38 @@ export const nativeStringInteropMethods = {
   }
 };
 
-/** Both helpers receive (source BSTR, destination owner-slot pointer). Newly
+/** Conversion helpers receive (source BSTR, destination owner-slot pointer). Newly
  * allocated memory is adopted immediately, before a conversion can raise an
  * error. The caller's ordinary statement/error cleanup owns every byte-BSTR. */
 export function emitNativeStringInteropHelpers(c) {
-  if (!c.nativeStringInterop) return;
+  if (!c.nativeStringInterop&&!c.nativeStringUTF8Interop) return;
   const x = c.x;
-  for (const ansi of [true,false]) {
-    const empty = x.unique(), allocate = x.unique(), done = x.unique(), nil = x.unique();
-    x.label(I + (ansi ? 'to-ansi' : 'to-unicode')).enter(8);
-    x.value(arg(12)).emit(0x89,0xc6,0xff,0x36).invoke(OLE,'SysFreeString').emit(0xc7,0x06,0,0,0,0);
-    x.value(arg(8)).test().branch('e',nil);
-    x.api(OLE,ansi ? 'SysStringLen' : 'SysStringByteLen',[arg(8)])
-      .compare(ansi ? MAX_NATIVE_STRING : MAX_NATIVE_ANSI_BYTES).branch('a','error:7');
-    save(x,-4); x.test().branch('e',empty);
-    if (ansi) x.api(KERNEL,'WideCharToMultiByte',[0,0,arg(8),arg(-4),0,0,0,0]);
-    else x.api(KERNEL,'MultiByteToWideChar',[0,0,arg(8),arg(-4),0,0]);
-    x.test().branch('e','error:5').compare(ansi ? MAX_NATIVE_ANSI_BYTES : MAX_NATIVE_STRING)
-      .branch('a','error:7').jump(allocate);
-    x.label(empty).value(0).label(allocate); save(x,-8);
-    x.api(OLE,ansi ? 'SysAllocStringByteLen' : 'SysAllocStringLen',[0,arg(-8)])
-      .test().branch('e','error:7').emit(0x89,0xc3);
-    x.value(arg(12)).emit(0x89,0x18); // Adopt BEFORE conversion can fail.
-    x.value(arg(-4)).test().branch('e',done);
-    if (ansi) x.push(0).push(0);
-    x.push(arg(-8)).emit(0x53).push(arg(-4)).push(arg(8)).push(0).push(0)
-      .invoke(KERNEL,ansi ? 'WideCharToMultiByte' : 'MultiByteToWideChar');
-    x.test().branch('e','error:5');
-    x.label(done).emit(0x89,0xd8).leave(8);
-    x.label(nil).value(0).leave(8);
+  for (const utf8 of [false,true]) {
+    if(utf8?!c.nativeStringUTF8Interop:!c.nativeStringInterop)continue;
+    const codepage=utf8?65001:0;
+    for (const ansi of [true,false]) {
+      const empty = x.unique(), allocate = x.unique(), done = x.unique(), nil = x.unique();
+      x.label(I + (utf8?(ansi?'to-utf8':'from-utf8'):(ansi?'to-ansi':'to-unicode'))).enter(8);
+      x.value(arg(12)).emit(0x89,0xc6,0xff,0x36).invoke(OLE,'SysFreeString').emit(0xc7,0x06,0,0,0,0);
+      x.value(arg(8)).test().branch('e',nil);
+      x.api(OLE,ansi ? 'SysStringLen' : 'SysStringByteLen',[arg(8)])
+        .compare(ansi ? MAX_NATIVE_STRING : MAX_NATIVE_ANSI_BYTES).branch('a','error:7');
+      save(x,-4); x.test().branch('e',empty);
+      if (ansi) x.api(KERNEL,'WideCharToMultiByte',[codepage,utf8?128:0,arg(8),arg(-4),0,0,0,0]);
+      else x.api(KERNEL,'MultiByteToWideChar',[codepage,utf8?8:0,arg(8),arg(-4),0,0]);
+      x.test().branch('e','error:5').compare(ansi ? MAX_NATIVE_ANSI_BYTES : MAX_NATIVE_STRING)
+        .branch('a','error:7').jump(allocate);
+      x.label(empty).value(0).label(allocate); save(x,-8);
+      x.api(OLE,ansi ? 'SysAllocStringByteLen' : 'SysAllocStringLen',[0,arg(-8)])
+        .test().branch('e','error:7').emit(0x89,0xc3);
+      x.value(arg(12)).emit(0x89,0x18); // Adopt BEFORE conversion can fail.
+      x.value(arg(-4)).test().branch('e',done);
+      if (ansi) x.push(0).push(0);
+      x.push(arg(-8)).emit(0x53).push(arg(-4)).push(arg(8)).push(utf8?(ansi?128:8):0).push(codepage)
+        .invoke(KERNEL,ansi ? 'WideCharToMultiByte' : 'MultiByteToWideChar');
+      x.test().branch('e','error:5');
+      x.label(done).emit(0x89,0xd8).leave(8);
+      x.label(nil).value(0).leave(8);
+    }
   }
 }

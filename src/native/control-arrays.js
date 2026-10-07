@@ -6,7 +6,7 @@ export const nativeControlArrayMethods={
     const p={...control.module.form.properties,...control.model.properties},x=this.x;
     const size=Number(p.FontSize||8.25),name=String(p.FontName||'MS Sans Serif');
     if(!Number.isFinite(size)||size<1||size>512)this.fail('Native font size must be 1..512 points');
-    const font={name,size,weight:p.FontBold?700:400,italic:p.FontItalic?1:0,underline:p.FontUnderline?1:0,strike:p.FontStrikethrough?1:0};
+    const font={name,size,weight:p.FontBold?700:400,italic:p.FontItalic?1:0,underline:p.FontUnderline?1:0,strike:p.FontStrikethrough||p.FontStrikethru?1:0};
     const cache=this.nativeFonts ||= new Map(),id=JSON.stringify(font);
     if(!cache.has(id))cache.set(id,this.slot('font:'+cache.size));
     const slot=cache.get(id),ready=x.unique(),created=x.unique();
@@ -62,10 +62,10 @@ export const nativeControlArrayMethods={
     if(property==='index'&&object.model?.properties.Index!==undefined){if(object.indexed||object.boundIndex){this.ensure(object);const v=object.indexSlot;this.x.value(v.label?{memory:v.label}:{argument:v.offset});}else this.x.value(object.model.properties.Index);return true;}
     return false;
   },
-  controlHandler(module,control,event){
+  controlHandler(module,control,event,args=[]){
     const name=control.model.name+'_'+event;
-    if(control.model.properties.Index===undefined)return this.handler(module,name);
+    if(control.model.properties.Index===undefined)return this.handler(module,name,args);
     this.x.value(control.model.properties.Index).emit(0x89,0x45,0xf0);
-    this.handler(module,name,[{ref:-16}]);
+    this.handler(module,name,[{ref:-16},...args]);
   }
 };

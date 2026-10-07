@@ -38,6 +38,7 @@ export function nativeControlStyle(type,p) {
   if(type==='DTPicker')style|=p.Format===1?4:p.Format===2?9:0;
   if(type==='MonthView')style|=p.ShowWeekNumbers?4:0;
   if(NATIVE_DRAW_CONTROLS.has(type)) {style=style&~0x10000|0x10d;if(type==='PictureBox'){style|=0x02000000;if(p.BorderStyle!==0)ex=0x200;}}
+  if(NATIVE_CONTROL_CATALOG[type].container)ex|=0x10000; // WS_EX_CONTROLPARENT: nested dialog-key navigation.
   return {style:style>>>0,ex};
 }
 export function nativeCommandEvents(type) {
@@ -53,6 +54,7 @@ export function nativeControlEvents(type) {
   const events=[...NATIVE_INPUT_EVENTS,...nativeCommandEvents(type).map(([,name])=>name.toLowerCase())];
   if(NATIVE_SCROLL_CONTROLS.has(type)||type==='Slider')events.push('change','scroll');
   if(type==='UpDown')events.push('change');
+  if(type==='RichTextBox')events.push('selchange');
   if(NATIVE_DATE_CONTROLS.has(type))events.push('change');
   if(NATIVE_TAB_CONTROLS.has(type))events.push('click');
   if(['TreeView','ListView','StatusBar'].includes(type))events.push('click','dblclick');

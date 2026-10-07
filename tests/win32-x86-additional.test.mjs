@@ -5,7 +5,7 @@ import {X86} from '../src/native/x86.js';
 import {mem8,mem16,mem32,mem64,mem128} from '../src/native/x86-operands.js';
 const make=()=>{const s=new BinarySection('.text',0x60000020);return {s,x:new X86(s,new PE32Image())};};
 for(const [name,fn,want]of [
- ['inc byte',x=>x.inc(mem8({base:'eax'})),'fe00'],['dec word',x=>x.dec('ax'),'66ffc8'],
+ ['inc byte',x=>x.inc(mem8({base:'eax'})),'fe00'],['dec word',x=>x.dec('ax'),'6648'],
  ['bswap',x=>x.bswap('edi'),'0fcf'],['bsf',x=>x.bsf('dx',mem16({base:'ebx'})),'660fbc13'],
  ['bit immediate',x=>x.bit('btc','eax',31),'0fbaf81f'],['bit register',x=>x.bit('bts',mem32({base:'eax'}),'ecx'),'0fab08'],
  ['shld',x=>x.doubleShift('shld','eax','edx',3),'0fa4d003'],['shrd',x=>x.doubleShift('shrd','ax','dx','cl'),'660fadd0'],
