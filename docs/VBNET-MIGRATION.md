@@ -106,6 +106,7 @@ root group's unresolved status.
 | `contracts.js`, `names.js` | Versioned options/hooks, source diagnostics, naming, type names, escaping and source-mapped writing. |
 | `context.js`, `registry.js` | Module/procedure binding, declaration lookup, type information, intrinsic/control metadata and shared constants. |
 | `expressions.js`, `declarations.js`, `statements.js` | AST-aware expression lowering, typed declarations, structured statements and explicit compatibility calls. |
+| `array-statements.js`, `control-flow.js`, `call-semantics.js` | Ordered array-bound lowering, Variant selection predicates, Currency loop headers and reference-argument diagnostics. |
 | `module-emitter.js`, `forms.js` | Modules, classes, contracts, properties, lifecycle procedures, WinForms designers and event bridges. |
 | `project.js`, `archive.js` | Target selection, runtime sources, project files, original retention, reports, guard generation and deterministic packaging. |
 | `cli.mjs`, `src/ide/vbnet-export.js` | Bounded filesystem adapter and browser UI adapter. Neither is required by the pure converter API. |
@@ -120,10 +121,10 @@ procedure scope. Original physical lines map to generated locations.
 | Area | Implemented path | Boundary requiring review/adapters |
 |---|---|---|
 | Declarations | Modules/classes, constants, enums, UDT structures, fixed strings, Static locals, optional/ByRef/ParamArray parameters, events and Get/Let/Set grouping. | Simultaneous Property Let and Set, ByRef indexed-property mutation, parameterless/default methods and optional Currency metadata. |
-| Numeric types | VB6 Integer → `Short`; Long → `Integer`; explicit conversion functions; scaled 64-bit Currency with four-place rounding. | Exact mixed-type/Variant promotion and every overflow boundary are not certified. Currency For loops require additional lowering. |
-| Arrays and records | Column-major typed arbitrary-lower-bound arrays, checked indexing, final-dimension ReDim Preserve, fixed/dynamic Erase, element factories and nested value copies. | Whole fixed-array assignment, scalar-Variant ReDim, returned-record/array-element ByRef With semantics and binary array layout. |
+| Numeric types | VB6 Integer → `Short`; Long → `Integer`; explicit conversion functions; scaled 64-bit Currency with four-place rounding. | Native Currency For loops use explicitly converted start/end/step values. Exact mixed-type/Variant promotion and every overflow boundary are not certified. |
+| Arrays and records | Column-major typed arbitrary-lower-bound arrays, Variant-contained typed arrays, ordered bounds, final-dimension ReDim Preserve, typed/dynamic Erase, element factories, CLR array imports and nested value copies. | Whole fixed-array assignment, live array-element ByRef aliases, complex Variant Erase locations, multi-target resumable statements, returned-record With semantics and binary array layout. |
 | Object model | Classes, method/property emission, source-class Implements contracts, WithEvents and event raising; lazy local and member As New; native With for record lvalues. | ByRef replacement of lazy locals, complete late-bound default-member coercion, COM reference identity/lifetime and all Variant object states. |
-| Control flow | If/ElseIf, inline If, For/For Each, Do/Loop, While/Wend, Select Case, labels, GoTo, computed branches, explicit GoSub continuation stacks. | Variant Select comparison and combined GoSub/error-resumption continuation behavior require review. |
+| Control flow | If/ElseIf, inline If, For/For Each, Do/Loop, While/Wend, Select Case, labels, GoTo, computed branches, explicit GoSub continuation stacks. | Variant Select uses one captured selector, ordered null-aware comparisons and eager range endpoints. Combined GoSub/error-resumption and expanded-statement resumption behavior still require review. |
 | Errors | Native VB.NET On Error, Resume, Error/Err, preserved labeled handlers. | This deliberately avoids claiming that a mechanical Try/Catch rewrite preserves resumable VB6 errors. All exception-to-Err mappings are not certified. |
 | Intrinsics and files | Shared intrinsic constants, many Microsoft.VisualBasic APIs, array/string adapters, scalar file operations, source-retained unsupported statements. | Exact Null/Empty/Nothing/Variant subtype behavior across every intrinsic and binary UDT/Currency/Variant/fixed-string record codecs. |
 | Forms | WinForms partial class/designer split, default instances, containers, text/font/color/layout, menus, standard control fields, sparse control arrays, event bridges and initialization/close ordering. | Dynamic control Load/Unload; complete OCX/control object models, complex data binding, graphics/printing, resources, multi-form shutdown, designer pixel parity and all event orderings. |
@@ -134,6 +135,69 @@ not a complete reimplementation of the VB6 Variant discriminated representation.
 `Class_Terminate` is exposed through `IDisposable` with a blocking ownership
 migration diagnostic, not silently equated to GC finalization. Unsupported graphics
 or components are not replaced with behaviorless success stubs.
+
+## Array and control-flow semantics
+
+A scalar Variant can now hold a typed, arbitrary-rank array:
+
+```vb
+Dim values As Variant
+ReDim values(-1 To 2, 3 To 4) As Long
+values(-1, 3) = 21
+ReDim Preserve values(-1 To 2, 3 To 6)
+```
+
+The emitter passes bounds as ordered pairs through `VbArrayBounds.FromPairs`:
+lower 1, upper 1, lower 2, upper 2. Every bound is evaluated and converted once
+in that order; separate lower/upper array initializers would reorder side effects.
+`VbArrays.ResizeVariant` validates dimensions and element tags before committing
+storage changes. Preserve retains the element type and all earlier dimensions.
+An explicit new `As` type is allowed without Preserve on a scalar Variant; it
+remains an error on a declared typed array. Fixed arrays cannot be redimensioned.
+
+`Erase` of a Variant array returns an unallocated array with its element type
+intact, **not scalar Empty**. `IsArray` remains true, `VarType` retains the array
+flag and element tag, and accessing bounds before reallocation raises an error.
+Object and Variant element arrays are distinguished even though both use managed
+`Object` storage. Scalar values cannot be assigned to Object-only array storage.
+
+Assignment, `Array(...)` construction and ByVal Variant procedure entry copy
+owned array values, recursively including nested arrays. Referenced class objects
+retain identity. CLR array import walks coordinates in VB column-major order and
+preserves arbitrary lower bounds rather than using CLR enumeration order.
+Interop arrays containing cyclic nested array graphs are not covered by this
+value-copy model. SAFEARRAY locks and native descriptors are not reproduced.
+
+Indexed reads/writes capture the receiver and subscripts once. Passing a migrated
+array element as a live ByRef argument is **blocked**, including named arguments:
+VB.NET property copy-back is not equivalent when aliases observe intermediate
+writes or the callee throws. A whole Variant variable passed ByRef still uses a
+real managed reference. Named/omitted late index arguments and multi-target
+ReDim/Erase under resumable error handling also require explicit adapters rather
+than a misleading build-ready result.
+
+Currency loop headers remain native VB.NET `For` statements with `VbCurrency`
+bounds and step. The compiler controls bound caching, direction, `Next`, counter
+mutation and `Exit For`; no hand-written While approximation is introduced.
+Variant Select Case captures its selector once, uses null-aware comparisons,
+retains comma-clause order and stops testing after the first match. Ranges use
+eager `And` between their two endpoint comparisons; `AndAlso` would skip required
+side effects. `Option Compare Text` is passed to the comparison runtime.
+
+Permanent fixtures distinguish generated-program execution from direct runtime
+contracts. They assert failed-Preserve value retention, Err numbers, array tags,
+ByVal isolation/whole-Variant ByRef writes, nested ownership, CLR coordinate order,
+Currency bound-call counts, positive/negative/zero steps and Select Case traces.
+The existing WinForms and package/browser conformance checks remain in place.
+These cases do not certify every VB6 coercion, default-member, ABI or error-resume
+combination.
+
+Primary semantic references: Microsoft [MS-VBAL ReDim](https://learn.microsoft.com/en-us/openspecs/microsoft_general_purpose_programming_languages/ms-vbal/22b5d372-0a54-4617-9462-4934b5edc88c),
+[MS-VBAL Erase](https://learn.microsoft.com/en-us/openspecs/microsoft_general_purpose_programming_languages/ms-vbal/f7958382-95a7-47fa-91bd-42262ab9ad32),
+[MS-VBAL Select Case](https://learn.microsoft.com/en-us/openspecs/microsoft_general_purpose_programming_languages/ms-vbal/94a2f0fe-bdbe-4f5d-b3f4-bbf339b0ac65), and
+[VB.NET For Next](https://learn.microsoft.com/en-us/dotnet/visual-basic/language-reference/statements/for-next-statement).
+The language specification and .NET tests are not a claim of differential testing
+against a licensed Microsoft VB6 compiler.
 
 ## Reusable packages
 
