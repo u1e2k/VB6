@@ -164,7 +164,7 @@ Value coerce(Value value,const std::string& name,size_t fixed){
   if(value.type==Type::Null)fail(94);
   if(type==Type::String){Text s=value.string();if(fixed){s.resize(fixed,u' ');}return Value::string(std::move(s));}
   if(type==Type::Object){if(value.type!=Type::Object)fail(13);return value;}
-  if(type==Type::Record){if(value.type==Type::Record&&lower(value.asRecord()->name)==lower(name))return value.copy();if(value.type==Type::Object){auto o=std::get<ObjectPtr>(value.payload);if(!o||o->supports(name))return value;}fail(13);}
+  if(type==Type::Record){if(value.type==Type::Record&&lower(value.asRecord()->name)==lower(name))return value.copy();if(value.type==Type::Object){auto o=std::get<ObjectPtr>(value.payload);if(!o)return value;value.payload=o->queryInterface(name);return value;}fail(13);}
   if(type==Type::Date)return parseDate(value);
   if(type==Type::Currency)return Value::integer(currencyRaw(asDecimal(value)),Type::Currency);
   if(type==Type::Decimal)return Value::decimal(asDecimal(value));
@@ -176,7 +176,7 @@ Value coerce(Value value,const std::string& name,size_t fixed){
 Value unary(const std::string& op,Value v){if(v.type==Type::Null)return v;if(op=="+")return v;if(op=="not"){Type t=v.type;if(t==Type::Boolean)return Value::integer(~v.integral(),t,v.variant);if(t!=Type::Byte&&t!=Type::Integer)t=Type::Long;auto n=coerce(v,t==Type::Long?"long":"integer").integral();int64_t out=~n;if(t==Type::Byte)t=Type::Integer;return Value::integer(out,t,v.variant);}if(op!="-")fail(5);if(v.type==Type::Currency){auto n=std::get<int64_t>(v.payload);if(n==INT64_MIN)fail(6);return Value::integer(-n,Type::Currency,v.variant);}if(v.type==Type::Decimal){auto d=std::get<Decimal>(v.payload);if(d.coefficient)d.negative=!d.negative;return Value::decimal(d);}Type t=v.type;if(t==Type::Boolean||t==Type::Empty||t==Type::Byte)t=Type::Integer;if(t==Type::String)t=Type::Double;return result(-v.number(),t,v.variant);}
 Value binary(const std::string& op,Value a,Value b,bool textCompare){
   const bool variant=a.variant||b.variant;
-  if(op=="is"){if(a.type!=Type::Object||b.type!=Type::Object)fail(13);return Value::boolean(std::get<ObjectPtr>(a.payload)==std::get<ObjectPtr>(b.payload));}
+  if(op=="is"){if(a.type!=Type::Object||b.type!=Type::Object)fail(13);return Value::boolean(sameObject(std::get<ObjectPtr>(a.payload),std::get<ObjectPtr>(b.payload)));}
   if(op=="&"){if(a.type==Type::Null&&b.type==Type::Null)return Value::null();return Value::string((a.type==Type::Null?Text():a.string())+(b.type==Type::Null?Text():b.string()),variant);}
   if(a.type==Type::Null||b.type==Type::Null){if(op=="and"&&((a.type!=Type::Null&&!a.truth())||(b.type!=Type::Null&&!b.truth())))return Value::integer(0,Type::Long,true);if(op=="or"&&((a.type!=Type::Null&&a.integral()==-1)||(b.type!=Type::Null&&b.integral()==-1)))return Value::integer(-1,Type::Long,true);return Value::null();}
   if(op=="like")return Value::boolean(like(a.string(),b.string(),textCompare));

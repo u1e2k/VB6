@@ -81,7 +81,7 @@ Ref Instance::reference(Runtime&rt,const std::string&raw,Args args){
   return Object::reference(rt,name,args);
 }
 bool Instance::supports(const std::string&raw)const{
-  auto name=lower(raw);return Object::supports(raw)||std::any_of(module->interfaces.begin(),module->interfaces.end(),[&](auto&s){return lower(s)==name;});
+  auto name=lower(raw);return Object::supports(raw)||module->interfaceBindings.count(name)!=0;
 }
 
 } // namespace vb6

@@ -130,7 +130,14 @@ struct Object : std::enable_shared_from_this<Object> {
   virtual Ref reference(Runtime&,const std::string&,Args={});
   virtual std::vector<Value> enumerate(Runtime&);
   virtual bool supports(const std::string& name) const;
+  virtual ObjectPtr queryInterface(const std::string& name);
+  virtual const Object* identity() const noexcept { return this; }
 };
+// The shared frontend binds interface member keys and parameter names. This is
+// a source-level dispatch contract, not a COM vtable or native type-library ABI.
+struct InterfaceMember { std::string procedure; std::vector<std::string> parameterNames; };
+struct InterfaceContract { std::string defaultMember; std::map<std::string,InterfaceMember> members; };
+bool sameObject(const ObjectPtr&,const ObjectPtr&) noexcept;
 struct Parameter {
   std::string name,type; bool byRef=true,optional=false,paramArray=false,array=false;
   std::function<Value(Frame&)> initial;
@@ -156,6 +163,7 @@ struct Module {
   std::string name,kind="module",defaultMember;
   bool textCompare=false,optionExplicit=false; int optionBase=0;
   std::vector<std::string> interfaces;
+  std::map<std::string,InterfaceContract> interfaceBindings;
   std::map<std::string,std::string> defaultTypes;
   std::set<std::string> publicFields;
   std::map<std::string,Procedure> procedures;
@@ -176,6 +184,8 @@ struct Instance : Object {
   Value invoke(Runtime&,const std::string&,Args) override;
   Ref reference(Runtime&,const std::string&,Args={}) override;
   bool supports(const std::string&) const override;
+  ObjectPtr queryInterface(const std::string&) override;
+  std::map<std::string,std::weak_ptr<Object>> interfaceViews;
 };
 struct ErrorState { int32_t number=0,lastDllError=0,helpContext=0; Text description,source,helpFile; int32_t erl=0; void clear(); };
 struct ForState { Ref variable; Value end,step; };

@@ -44,7 +44,7 @@ void Runtime::bindEvents(std::shared_ptr<Instance> sink,const std::string&field,
   subscriptions.erase(std::remove_if(subscriptions.begin(),subscriptions.end(),[&](auto&s){return s.source.expired()||s.sink.expired()||(s.sink.lock()==sink&&s.field==field);}),subscriptions.end());
   if(value.type==Type::Object){auto object=std::get<ObjectPtr>(value.payload);if(object)subscriptions.push_back({object,sink,field});}
 }
-void Runtime::raiseEvent(const std::shared_ptr<Instance>&source,const std::string&name,Args args){auto copy=subscriptions;for(auto&s:copy)if(s.source.lock()==source)if(auto sink=s.sink.lock())dispatch(sink,s.field+"_"+name,args);}
+void Runtime::raiseEvent(const std::shared_ptr<Instance>&source,const std::string&name,Args args){auto copy=subscriptions;for(auto&s:copy)if(sameObject(s.source.lock(),source))if(auto sink=s.sink.lock())dispatch(sink,s.field+"_"+name,args);}
 void Runtime::run(){
   try{
     for(auto&entry:modules)if(entry.second.kind=="module")instance(entry.first);

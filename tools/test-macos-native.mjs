@@ -29,7 +29,10 @@ try {
   const runtime=(await fs.readdir(native)).filter(n=>n.endsWith('.cpp')).sort().map(n=>path.join(native,n));
   const portable=path.join(work,'portable');
   await run(compiler,[...flags,source,...runtime,path.join(sdk,'tests/portable-host.cpp'),'-o',portable]);
-  assert.match(await run(portable,[]),/NATIVE_CONFORMANCE_OK/);report.checks.push('sanitized-generated-program');
+  const portableOutput=await run(portable,[]);assert.match(portableOutput,/NATIVE_CONFORMANCE_OK/);assert.match(portableOutput,/NATIVE_INTERFACES_OK/);report.checks.push('sanitized-generated-program','native-interface-dispatch');
+  const lifetime=path.join(work,'interface-lifetime');
+  await run(compiler,[...flags,'-DVB6_NATIVE_NO_MAIN',source,...runtime,path.join(sdk,'tests/portable-host.cpp'),path.join(sdk,'tests/interface-lifetime.cpp'),'-o',lifetime]);
+  assert.match(await run(lifetime,[]),/NATIVE_INTERFACE_LIFETIME_OK/);report.checks.push('sanitized-interface-view-lifetime');
   const kit=createMacOSBuildKit(project),kitDir=path.join(work,'kit');
   await writeBuildKit(kitDir,kit.files);report.checks.push('standalone-build-kit');
   report.sourceSha256=createHash('sha256').update(compiled.files['main.cpp']).digest('hex');

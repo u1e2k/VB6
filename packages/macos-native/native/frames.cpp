@@ -39,7 +39,13 @@ Frame::Frame(Runtime&rt,std::shared_ptr<Instance> object,Procedure*proc,Args arg
         auto sourceType=lower(arg.reference.type),target=lower(p.type);
         if(!p.array&&target!="variant"&&target!=sourceType&&!(arg.value.type==Type::Object&&(!std::get<ObjectPtr>(arg.value.payload)||std::get<ObjectPtr>(arg.value.payload)->supports(target))))fail(13,"ByRef argument type mismatch: "+p.name);
         if(p.array&&lower(arg.value.asArray()->elementType)!=target)fail(13,"ByRef array element type mismatch");
-        if(target=="variant"&&arg.value.type!=Type::Array&&arg.value.type!=Type::Record&&arg.value.type!=Type::Object){auto original=arg.reference;locals[name]={[original]{auto v=original.get();v.variant=true;return v;},original.write,"variant",false,true};}else locals[name]=arg.reference;
+        if(!p.array&&arg.value.type==Type::Object&&target!="variant"&&target!="object"){
+          // A ByRef interface formal aliases the caller's cell but reads through
+          // the formal contract. Writes retain the caller's storage type check.
+          auto original=arg.reference;(void)coerce(original.get(),target);
+          locals[name]={[original,target]{return coerce(original.get(),target);},
+            [original,target](Value value,bool set){original.set(coerce(std::move(value),target),set);},target,false,true};
+        }else if(target=="variant"&&arg.value.type!=Type::Array&&arg.value.type!=Type::Record&&arg.value.type!=Type::Object){auto original=arg.reference;locals[name]={[original]{auto v=original.get();v.variant=true;return v;},original.write,"variant",false,true};}else locals[name]=arg.reference;
       }else{
         Value value=arg.value;
         if(value.type!=Type::Missing&&!p.array)value=coerce((lower(p.type)=="variant"||typeCode(p.type)==Type::Object||typeCode(p.type)==Type::Record)?value:scalar(rt,value),p.type);

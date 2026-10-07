@@ -12,4 +12,11 @@ Ref Object::reference(Runtime& rt,const std::string& name,Args args) {
 }
 std::vector<Value> Object::enumerate(Runtime&) { fail(451); }
 bool Object::supports(const std::string& name)const{return lower(name)=="object"||lower(className())==lower(name);}
+ObjectPtr Object::queryInterface(const std::string& name) {
+  if(!supports(name))fail(13,"Object does not support interface: "+name);
+  return shared_from_this();
+}
+bool sameObject(const ObjectPtr&a,const ObjectPtr&b)noexcept {
+  return (a?a->identity():nullptr)==(b?b->identity():nullptr);
+}
 }
