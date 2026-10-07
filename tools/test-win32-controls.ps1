@@ -45,4 +45,38 @@ foreach ($plan in $plans) {
   $report | ConvertTo-Json -Depth 10 | Write-Host
 }
 $results | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $root 'execution.json')
-if (@($results | Where-Object {-not $_.ok}).Count) { throw 'Native control execution failed; see execution.json' }
+$failures=@($results | Where-Object {-not $_.ok})
+if ($failures.Count) {
+  # Recompile only failed fixtures with stdout checkpoints. Never replace the
+  # original executable/result or turn a failed assertion into a passing test.
+  $diagnostics=@()
+  foreach ($failure in $failures) {
+    $directory=Join-Path ([IO.Path]::GetTempPath()) ('vb6-control-trace-'+[Guid]::NewGuid().ToString('N'))
+    $process=[Diagnostics.Process]::new();$trace=$null
+    $item=[ordered]@{name=$failure.name;originalExitCode=$failure.exitCode;trace=''}
+    try {
+      [IO.Directory]::CreateDirectory($directory)|Out-Null
+      $exe=Join-Path $directory ($failure.name+'.exe')
+      node tools/trace-win32-controls.mjs $failure.name $exe
+      if ($LASTEXITCODE -ne 0) {throw 'Diagnostic compilation failed'}
+      $process.StartInfo.FileName=$exe
+      $process.StartInfo.WorkingDirectory=$directory
+      $process.StartInfo.UseShellExecute=$false
+      $process.StartInfo.RedirectStandardOutput=$true
+      $process.StartInfo.StandardOutputEncoding=[Text.Encoding]::Unicode
+      if (-not $process.Start()) {throw 'Could not start diagnostic executable'}
+      $trace=$process.StandardOutput.ReadToEndAsync()
+      if (-not $process.WaitForExit(20000)) {throw 'Diagnostic executable timed out'}
+      $item.trace=$trace.GetAwaiter().GetResult();$item.exitCode=$process.ExitCode
+    } catch {$item.error=$_.Exception.Message}
+    finally {
+      try {if ($process.Id -and -not $process.HasExited) {$process.Kill();$process.WaitForExit(5000)|Out-Null}} catch {}
+      if ($trace -and $trace.IsCompleted -and -not $trace.IsFaulted) {$item.trace=$trace.GetAwaiter().GetResult()}
+      $process.Dispose();Remove-Item $directory -Force -Recurse -ErrorAction SilentlyContinue
+    }
+    $diagnostics+=$item
+    $item|ConvertTo-Json -Depth 5|Write-Host
+  }
+  $diagnostics|ConvertTo-Json -Depth 5|Set-Content -Encoding utf8 (Join-Path $root 'diagnostics.json')
+  throw 'Native control execution failed; see execution.json and diagnostics.json'
+}
