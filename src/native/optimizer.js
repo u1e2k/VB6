@@ -1,3 +1,4 @@
+import {threadNativeBranches} from './branch-threading.js';
 import {nativeIntegerFits,nativeIntegerLiteral,nativeSignedIntegerLiteral,nativeIntegerUnaryType,nativeIntegerBinaryType} from './integers.js';
 /** Conservative native optimization. Only assembler-tagged branches are resized;
  * raw bytes are never disassembled heuristically. All addressable labels survive.
@@ -64,10 +65,11 @@ function remapper(edits) {
  */
 export function optimizeNativeSections(sections,level=1) {
   level=nativeOptimizationLevel(level);
-  const stats={level,passes:0,branchesShortened:0,fallthroughBranchesRemoved:0,bytesSaved:0};
+  const stats={level,passes:0,branchesShortened:0,branchesThreaded:0,fallthroughBranchesRemoved:0,bytesSaved:0};
   if(!level)return stats;
   for(const section of sections) {
     if(!(section.flags&0x20))continue;
+    if(level===2)stats.branchesThreaded+=threadNativeBranches(section,section.fixups.map(f=>branchPlan(section,f)).filter(Boolean));
     // Start from current coordinates on every pass. Length decreases monotonically.
     while(true) {
       const candidates=section.fixups.map(f=>branchPlan(section,f)).filter(Boolean).sort((a,b)=>a.start-b.start);

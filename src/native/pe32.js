@@ -1,3 +1,4 @@
+import {pruneNativeImports} from './import-reachability.js';
 import {pruneNativeProcedures} from './reachability.js';
 import {optimizeNativeSections,nativeOptimizationLevel} from './optimizer.js';
 /** Deterministic PE32 linker. Browser-safe: no Node, native compiler, or binary template. */
@@ -41,24 +42,27 @@ export class PE32Image {
     for (const byte of body) r.emit(byte);
     this.directories.set(2, { label: 'resource-root', size: r.length });
   }
-  finish(entry, { subsystem = 2, optimization = 0, pruneUnusedProcedures = false } = {}) {
+  finish(entry, { subsystem = 2, optimization = 0, pruneUnusedProcedures = false, pruneUnusedImports = pruneUnusedProcedures } = {}) {
     if (this.finished) throw new Error('PE image already linked');
     if (!this.imports.size || ![2, 3].includes(subsystem)) throw new Error('Invalid PE executable');
-    if(typeof pruneUnusedProcedures!=='boolean')throw new Error('pruneUnusedProcedures must be Boolean');
-    if(pruneUnusedProcedures&&nativeOptimizationLevel(optimization)!==2)throw new Error('Unused-procedure pruning requires optimization 2');
+    if(typeof pruneUnusedProcedures!=='boolean'||typeof pruneUnusedImports!=='boolean')throw new Error('Native pruning options must be Boolean');
+    if((pruneUnusedProcedures||pruneUnusedImports)&&nativeOptimizationLevel(optimization)!==2)throw new Error('Native pruning requires optimization 2');
     const reachability=pruneUnusedProcedures?pruneNativeProcedures(this.sections,[entry]):{};
-    const optimizationReport = {...optimizeNativeSections(this.sections, optimization),...reachability};
+    const importReachability=pruneUnusedImports?pruneNativeImports(this.imports,this.sections):{};
+    const optimizationReport = {...optimizeNativeSections(this.sections, optimization),...reachability,...importReachability};
     const idata = this.section('.idata', 0xc0000040), groups = new Map();
     for (const item of this.imports.values()) { if (!groups.has(item.dll)) groups.set(item.dll, []); groups.get(item.dll).push(item); }
     idata.label('imports');
     for (const [dll] of groups) idata.reference('ilt:' + dll, 'rva').u32(0).u32(0).reference('dll:' + dll, 'rva').reference('iat:' + dll, 'rva');
     idata.zero(20);
-    this.directories.set(1, { label: 'imports', size: (groups.size + 1) * 20 });
+    if(groups.size)this.directories.set(1, { label: 'imports', size: (groups.size + 1) * 20 });
+    else this.directories.delete(1);
     const thunk = item => typeof item.symbol === 'number' ? idata.u32(0x80000000 + item.symbol) : idata.reference('hint:' + item.label, 'rva');
     for (const [dll, items] of groups) { idata.align(4).label('ilt:' + dll); for (const item of items) thunk(item); idata.u32(0); }
     idata.align(4).label('iat-start'); const iatStart = idata.length;
     for (const [dll, items] of groups) { idata.label('iat:' + dll); for (const item of items) { idata.label(item.label); thunk(item); } idata.u32(0); }
-    this.directories.set(12, { label: 'iat-start', size: idata.length - iatStart });
+    if(groups.size)this.directories.set(12, { label: 'iat-start', size: idata.length - iatStart });
+    else this.directories.delete(12);
     for (const [dll, items] of groups) {
       idata.label('dll:' + dll).ascii(dll);
       for (const item of items) if (typeof item.symbol === 'string') idata.align(2).label('hint:' + item.label).u16(0).ascii(item.symbol);
