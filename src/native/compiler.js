@@ -1,4 +1,5 @@
 import {NATIVE_STRING_CONSTANTS,nativeStringLibraryMethods,emitNativeStringLibraryHelpers} from './string-library.js';
+import {nativeIntegerMethods} from './integers.js';
 import {nativeFlowMethods,nativeGoSubLimit} from './control-flow.js';
 import {nativeOptimizationLevel} from './optimizer.js';
 import {nativeOptimizationMethods} from './optimization.js';
@@ -74,8 +75,12 @@ export function extractNativeDeclarations(module) {
 }
 
 class NativeCompiler {
+  get context() { return this.nativeContext; }
+  set context(value) { this.nativeContext=value; this.typeCache=new WeakMap(); }
   constructor(project, options = {}) {
     try { this.optimization=nativeOptimizationLevel(options.optimization);this.maxGoSubDepth=nativeGoSubLimit(options.maxGoSubDepth); } catch(error) { this.fail(error.message); }
+    this.pruneUnusedProcedures=options.pruneUnusedProcedures===undefined?false:options.pruneUnusedProcedures;
+    if(typeof this.pruneUnusedProcedures!=='boolean'||this.pruneUnusedProcedures&&this.optimization!==2)this.fail('pruneUnusedProcedures requires a Boolean and optimization 2');
     this.optimizationStats={constantsFolded:0,immediateOperations:0,constantsPropagated:0,directBranches:0,constantBranches:0,jumpTables:0};
     this.maxArrayBytes=nativeArrayLimit(options.maxArrayBytes, message=>this.fail(message));
     this.project = normalizeProject(project); this.externals = new Map();
@@ -169,7 +174,7 @@ class NativeCompiler {
     }
   }
   variable(node, context = this.context) {
-    if(node.kind==='with')return this.currentNativeWith(context).variable;
+    if(node.kind==='with')return this.nativeWithBinding().record||null;
     const record=this.recordMember(node,context);if(record)return record;
     if (node.kind === 'group') return this.variable(node.expr,context);
     if (node.kind === 'call') {
@@ -186,7 +191,7 @@ class NativeCompiler {
     const binding=this.nativeConstant(node);if(binding)return binding.value;
     return node.kind==='id'&&!this.variable(node)?(CONSTANTS[key(node.name)]??this.layoutConstant(node.name)):undefined;
   }
-  address(variable) { if(!variable)this.fail('Expression is not addressable'); if(variable.nativeWithAddress)return this.loadNativeWithAddress(variable); if(variable.recordOf)return this.recordAddress(variable); if(variable.elementOf)return this.elementAddress(variable); this.rawStorageAddress(variable);return null; }
+  address(variable) { if(!variable)this.fail('Expression is not addressable'); if(variable.recordOf)return this.recordAddress(variable); if(variable.elementOf)return this.elementAddress(variable); this.rawStorageAddress(variable);return null; }
   load(variable) {
     if(variable.nativeRecord||variable.recordFieldArray)this.fail('Native record values require record assignment, ByRef, Len/LenB or VarPtr');
     if(variable.nativeArray&&!variable.elementOf)this.fail('Array requires indices: '+variable.name);
@@ -211,20 +216,26 @@ class NativeCompiler {
     }
     this.check(variable.type); this.x.push(); const pin=this.address(variable); this.x.emit(0x5a); const type = key(variable.type); this.x.emit(...(type === 'byte' ? [0x88,0x10] : ['integer','boolean'].includes(type) ? [0x66,0x89,0x10] : [0x89,0x10])); this.x.emit(0x89,0xd0);this.releaseArrayPin(pin); }
   object(node) {
+    if(node.kind==='with')return this.nativeWithBinding().object||null;
     const indexed=this.indexedControl(node);if(indexed)return indexed;
     if (node.kind === 'id') { if (key(node.name) === 'me') return this.context?.module.form ? this.context.module : null; return this.context?.module.controls.get(key(node.name)) || this.context?.module.controlArrays.get(key(node.name)) || (this.modules.get(key(node.name))?.form ? this.modules.get(key(node.name)) : null); }
     if (node.kind === 'member' && node.object.kind === 'id') return this.modules.get(key(node.object.name))?.controls.get(key(node.name)) || this.modules.get(key(node.object.name))?.controlArrays.get(key(node.name));
     return null;
   }
-  ensure(object) { const form = object.form ? object : object.module; this.x.call(form.create); if(object.indexed)this.resolveControlHandle(object); }
+  ensure(object) { this.withGuard(object.nativeWithActive);const form = object.form ? object : object.module; this.x.call(form.create); if(object.indexed)this.resolveControlHandle(object); }
   handle(object) { this.ensure(object); this.x.value(this.controlHandleRef(object)); }
   type(node) {
+    if(this.typeCache?.has(node))return this.typeCache.get(node);
+    const type=this.computeNativeType(node);this.typeCache?.set(node,type);return type;
+  }
+  computeNativeType(node) {
     const stringType=this.stringLibraryType(node);if(stringType)return stringType;
     const layoutType=this.layoutType(node);if(layoutType)return layoutType;
     const bound=this.nativeConstant(node);if(bound)return bound.type;
     const intervalType=this.dateIntervalType(node);if(intervalType)return intervalType;
     const dateType=this.dateType(node);if(dateType)return dateType;
     const currencyType=this.currencyType(node);if(currencyType)return currencyType;
+    const integerType=this.integerType(node);if(integerType)return integerType;
     const numericType=this.numericType(node);if(numericType)return numericType;
     if (node.kind === 'group') return this.type(node.expr);
     const errorProperty=this.errorProperty(node);if(errorProperty)return ['number','lastdllerror'].includes(errorProperty)?'long':'string';
@@ -252,7 +263,7 @@ class NativeCompiler {
     if(this.nativeNullString(node)){x.value(0);return;}
     if(this.dateOperation(node))return;
     if(this.currencyOperation(node))return;
-    if(this.optimizedIntegerExpression(node))return;
+    if(this.integerExpression(node))return;
     if(this.numericExpression(node))return;
     if (node.kind === 'group') return this.expression(node.expr);
     if (node.kind === 'unary' && node.op === '-' && node.expr?.kind === 'literal' && node.expr.value === 2147483648) { x.value(-2147483648); return; }
@@ -282,7 +293,7 @@ class NativeCompiler {
     if (op === '+') x.emit(0x01,0xc8).branch('o','error:6');
     else if (op === '-') x.emit(0x29,0xc8).branch('o','error:6');
     else if (op === '*') x.emit(0x0f,0xaf,0xc1).branch('o','error:6');
-    else if (op === '\\' || op === 'mod') { const safe = x.unique(); x.emit(0x85,0xc9).branch('e','error:11').compare(-2147483648).branch('ne',safe).emit(0x83,0xf9,0xff).branch('e','error:6').label(safe).emit(0x99,0xf7,0xf9); if (op === 'mod') x.emit(0x89,0xd0); }
+    else if (op === '\\' || op === 'mod') this.emitIntegerDivision(op);
     else if (op === 'and') x.emit(0x21,0xc8); else if (op === 'or') x.emit(0x09,0xc8); else if (op === 'xor') x.emit(0x31,0xc8);
     else if (op === 'eqv') x.emit(0x31,0xc8,0xf7,0xd0); else if (op === 'imp') x.emit(0xf7,0xd0,0x09,0xc8);
     else if (Object.hasOwn(BOOL_CONDITIONS,op)) { x.emit(0x39,0xc8); this.boolean(op); }
@@ -291,6 +302,7 @@ class NativeCompiler {
   boolean(op) { this.x.emit(0x0f,BOOL_CONDITIONS[op],0xc0,0x0f,0xb6,0xc0,0xf7,0xd8); }
   getProperty(object, property) {
     if (!object) this.fail('Unknown native object'); const x = this.x;
+    this.withGuard(object.nativeWithActive);
     if(this.controlArrayProperty(object,property))return;
     if(this.getLayoutProperty(object,property))return;
     if (property === 'hwnd') { if (object.model?.type === 'Timer') this.fail('Timer has no hWnd'); this.handle(object); return; }
@@ -356,7 +368,7 @@ class NativeCompiler {
     if (name === 'cstr') { if (args.length !== 1) this.fail('CStr expects one argument'); this.textExpression(args[0]); return; }
     if (name === 'len') { if (args.length !== 1 || this.type(args[0]) !== 'string') this.fail('Native Len requires text'); this.expression(args[0]); x.push().invoke('kernel32.dll','lstrlenW'); return; }
     if (name === 'strptr') { if (args.length !== 1 || this.type(args[0]) !== 'string') this.fail('StrPtr requires text'); this.expression(args[0]); return; }
-    if (name === 'abs' || name === 'sgn') { if (args.length !== 1) this.fail(name + ' expects one argument'); this.numeric(args[0]); const done = x.unique(); if (name === 'abs') x.test().branch('ns',done).emit(0xf7,0xd8).branch('o','error:6').label(done); else { x.emit(0x99,0x85,0xc0,0x0f,0x95,0xc0,0x0f,0xb6,0xc0,0x09,0xd0); } return; }
+    if (name === 'abs' || name === 'sgn') { if (args.length !== 1) this.fail(name + ' expects one argument'); this.numeric(args[0]); const done = x.unique(); if (name === 'abs') {x.test().branch('ns',done).emit(0xf7,0xd8).branch('o','error:6').label(done);this.check(this.type(node));} else { x.emit(0x99,0x85,0xc0,0x0f,0x95,0xc0,0x0f,0xb6,0xc0,0x09,0xd0); } return; }
     if (name === 'beep') { if (args.length) this.fail('Beep takes no arguments'); x.api('user32.dll','MessageBeep',[0]); return; }
     if (node.callee.kind === 'member') {
       const object = this.object(node.callee.object), method = key(node.callee.name);
@@ -390,6 +402,7 @@ class NativeCompiler {
     // Lower first so temporary text buffers are stack-local, including recursive calls.
     x.sequence=outer.sequence;context.stringTemps=[];context.arrayPins=[];this.prepareNativeFlow(context);
     for (let i = 0; i < code.length; i++) {
+      this.typeCache=new WeakMap();
       const ins = this.instruction = code[i]; x.label(context.label + ':' + i).call(context.label+':clear-strings');this.errorCheckpoint(context,i,ins);
       if(!context.module.nativeInternal)this.sourceMap.push({symbol:context.label + ':' + i,source:ins.source,line:ins.line,procedure:ins.procedure});
       if(this.errorInstruction(ins,context)||this.nativeFlowInstruction(ins,context,i))continue;
@@ -451,7 +464,7 @@ class NativeCompiler {
     x.emit(0x58);this.leaveErrorFrame();if(context.returnValue&&key(context.returnValue.type)==='currency')x.emit(0x8b,0x50,4,0x8b,0x00);if(context.returnValue&&REAL_TYPES.has(key(context.returnValue.type)))x.emit(0xdd,0x00);x.leave(context.argumentBytes);
     this.emitErrorDispatch(context);
     x.label(context.label+':clear-strings');for(const pin of context.arrayPins)this.releaseArrayPin(pin);for(const variable of context.stringTemps)this.clearStringStorage(variable);x.emit(0xc3);
-    this.instruction=null;this.x=outer;outer.sequence=x.sequence;outer.label(context.label).enter(context.size);
+    this.instruction=null;this.x=outer;outer.sequence=x.sequence;const unitStart=this.text.length;outer.label(context.label).enter(context.size);
     for(const variable of [...context.locals.values(),...context.stringTemps,...context.arrayPins])if(!variable.parameter&&!variable.label)this.zeroStorage(variable);
     this.enterErrorFrame(context);
     for(const variable of context.locals.values())if(variable.ownedParameter){
@@ -464,6 +477,7 @@ class NativeCompiler {
     const base=this.text.length;for(const [name,offset]of body.labels){if(this.text.labels.has(name))this.fail('Duplicate native label');this.text.labels.set(name,base+offset);}
     for(const fixup of body.fixups)this.text.fixups.push({...fixup,offset:base+fixup.offset});
     for(const byte of body.bytes)this.text.bytes.push(byte);
+    (this.text.codeUnits||=[]).push({name:context.label,start:unitStart,end:this.text.length,closed:true});
   }
   forTest(loop,variable,exit) {
     const x=this.x,negative=x.unique(),done=x.unique();
@@ -707,11 +721,11 @@ class NativeCompiler {
     for (const module of this.modules.values()) if (module.form) { const next = x.unique(); x.value(mem(module.handle)).test().branch('e',next).api('user32.dll','IsDialogMessageW',[mem(module.handle),'msg']).test().branch('ne',loop).label(next); }
     x.label(dispatch).api('user32.dll','TranslateMessage',['msg']).api('user32.dll','DispatchMessageW',['msg']).jump(loop).label(quit).api('kernel32.dll','ExitProcess',[0]);
     this.image.manifest('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"><trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security><requestedPrivileges><requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security></trustInfo><dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="x86" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency></assembly>');
-    const linked = this.image.finish('entry',{optimization:this.optimization});
-    return {bytes:linked.bytes,report:{optimization:{...linked.optimization,...this.optimizationStats},records:[...this.recordLayouts.layouts.values()].map(r=>({name:r.id,size:r.size,fileSize:r.fileSize,alignment:r.alignment,fields:[...r.fields.values()].map(f=>({name:f.name,type:f.type,offset:f.recordOffset,bytes:f.nativeBytes}))})),...(this.layoutModule?{layout:{enabled:true,kernel:'private VB-to-x86',logicalUnit:'twip',rounding:'nearest HWND pixel',nodes:this.layoutSeed.count,features:['anchor-16-masks','nested-containers','min-max','dock','horizontal','vertical','wrap','suspend-resume']}}:{}),target:'win32-aot',architecture:'x86',format:'PE32',extraction:false,arrayLimits:{maxBytes:this.maxArrayBytes,maxRank:60},controlFlow:{maxGoSubDepth:this.maxGoSubDepth,withRecords:true,computedBranches:true},runtime:'Win32 system DLLs; no embedded JavaScript engine or VB6 runtime',graphics:'native Windows controls / GDI, not WebGPU',size:linked.bytes.length,imports:linked.imports,sections:linked.sections,sourceMap:this.sourceMap.map(s => ({...s,rva:linked.symbols[s.symbol]})),callbacks:[...(this.nativeCallbacks?.values()||[])].map(({target,label})=>({module:target.module.name,procedure:target.proc.name,rva:linked.symbols[label],argumentBytes:target.argumentBytes,thread:'application',convention:'stdcall'})),limits:['Typed scalars, fixed/dynamic scalar arrays, POD records and error recovery; managed records, classes, Variants/Decimal and unsupported VB constructs fail compilation.','Native controls use Windows theme/font metrics, not pixel-identical VB6 styling.','WebGPU remains a separate Electron target.']}};
+    const linked = this.image.finish('entry',{optimization:this.optimization,pruneUnusedProcedures:this.pruneUnusedProcedures});
+    return {bytes:linked.bytes,report:{optimization:{...linked.optimization,...this.optimizationStats},records:[...this.recordLayouts.layouts.values()].map(r=>({name:r.id,size:r.size,fileSize:r.fileSize,alignment:r.alignment,fields:[...r.fields.values()].map(f=>({name:f.name,type:f.type,offset:f.recordOffset,bytes:f.nativeBytes}))})),...(this.layoutModule?{layout:{enabled:true,kernel:'private VB-to-x86',logicalUnit:'twip',rounding:'nearest HWND pixel',nodes:this.layoutSeed.count,features:['anchor-16-masks','nested-containers','min-max','dock','horizontal','vertical','wrap','suspend-resume']}}:{}),target:'win32-aot',architecture:'x86',format:'PE32',extraction:false,arrayLimits:{maxBytes:this.maxArrayBytes,maxRank:60},controlFlow:{maxGoSubDepth:this.maxGoSubDepth,withRecords:true,computedBranches:true},runtime:'Win32 system DLLs; no embedded JavaScript engine or VB6 runtime',graphics:'native Windows controls / GDI, not WebGPU',size:linked.bytes.length,imports:linked.imports,sections:linked.sections,sourceMap:this.sourceMap.map(s => ({...s,rva:linked.symbols[s.symbol]??null,...(linked.symbols[s.symbol]===undefined?{optimizedOut:true}:{})})),callbacks:[...(this.nativeCallbacks?.values()||[])].map(({target,label})=>({module:target.module.name,procedure:target.proc.name,rva:linked.symbols[label],argumentBytes:target.argumentBytes,thread:'application',convention:'stdcall'})),limits:['Typed scalars, fixed/dynamic scalar arrays, POD records and error recovery; managed records, classes, Variants/Decimal and unsupported VB constructs fail compilation.','Native controls use Windows theme/font metrics, not pixel-identical VB6 styling.','WebGPU remains a separate Electron target.']}};
   }
 }
-Object.assign(NativeCompiler.prototype,nativeStringLibraryMethods,nativeFlowMethods,nativeOptimizationMethods,nativeRecordMethods,nativeLayoutMethods,nativeStringInteropMethods,nativeCallbackMethods,nativeCallMethods,nativeBindingMethods,nativeStorageMethods,nativeErrorMethods,nativeArrayMethods,nativeNumericMethods,nativeControlArrayMethods,nativeCurrencyMethods,nativeDateMethods,nativeDateIntervalMethods);
+Object.assign(NativeCompiler.prototype,nativeStringLibraryMethods,nativeFlowMethods,nativeIntegerMethods,nativeOptimizationMethods,nativeRecordMethods,nativeLayoutMethods,nativeStringInteropMethods,nativeCallbackMethods,nativeCallMethods,nativeBindingMethods,nativeStorageMethods,nativeErrorMethods,nativeArrayMethods,nativeNumericMethods,nativeControlArrayMethods,nativeCurrencyMethods,nativeDateMethods,nativeDateIntervalMethods);
 export function compileWin32(project, options = {}) {
   if (options.graphics && options.graphics !== 'gdi') throw new NativeCompileError('The freestanding Win32 target uses native controls/GDI; use the desktop target for WebGPU');
   if (options.arch && options.arch !== 'x86') throw new NativeCompileError('The freestanding compiler currently emits x86 PE32');
