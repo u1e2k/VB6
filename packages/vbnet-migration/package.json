@@ -1,0 +1,12 @@
+{
+  "name": "@vb6/vbnet-migration",
+  "version": "0.1.0",
+  "description": "Extensible, source-preserving VB6 to VB.NET .NET 10 migration and ZIP export",
+  "type": "module",
+  "exports": {".": {"types": "./index.d.ts", "import": "./index.js"}},
+  "bin": {"vb6-to-vbnet": "./cli.mjs"},
+  "files": ["index.js", "index.d.ts", "cli.mjs", "src", "README.md", "LICENSE"],
+  "engines": {"node": ">=22"},
+  "license": "MIT",
+  "sideEffects": false
+}
