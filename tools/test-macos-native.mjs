@@ -72,7 +72,9 @@ try {
     const previousCwd=process.cwd();let apiOutput;
     try {process.chdir(apiCwd);apiOutput=await buildMacOSProject(project,{cache,jobs:3,zip:false});}
     finally {process.chdir(previousCwd);}
-    assert.equal(apiOutput.app,path.join(apiCwd,'out',kit.options.name+'.app'));
+    // macOS aliases /var to /private/var; the builder intentionally returns
+    // canonical paths. Still require the exact surviving output directory.
+    assert.equal(apiOutput.app,await fs.realpath(path.join(apiCwd,'out',kit.options.name+'.app')));
     assert.equal((await fs.stat(apiOutput.executable)).isFile(),true);
     assert.match(await run(apiOutput.executable,[]),/NATIVE_CONFORMANCE_OK/);
     report.checks.push('reusable-api-output-survives-source-cleanup');

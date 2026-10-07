@@ -13,3 +13,7 @@
 # Authored migration runtime inputs are embedded in deterministic browser bundles.
 /packages/vbnet-runtime/** text eol=lf
 /packages/vbnet-runtime-windows/** text eol=lf
+
+# Authored AppKit/runtime source is embedded in deterministic browser SDK kits.
+/packages/macos-native/native/** text eol=lf
+/packages/macos-native/LICENSE text eol=lf

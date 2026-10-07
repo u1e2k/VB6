@@ -9,6 +9,7 @@ import {compileMacOS,createMacOSBuildKit,cppText,macOSOptions} from '../packages
 import {verifyMacOSAppArchive} from '../packages/macos-native/src/archive.js';
 import {inspectMachO} from '../packages/macos-native/src/mach-o.js';
 import {macOSArchiveFixture,macOSImageFixture,fixtureZip,fixtureProject} from './macos-fixture.mjs';
+import {readMacOSSDK} from '../tools/build-macos-native.mjs';
 import {readZip} from '../src/project/zip.js';
 
 // All image fixtures below are structural and nonexecutable. macOS CI separately
@@ -65,4 +66,31 @@ test('npm package compiles and exposes reusable local APIs after independent off
   const node=await import(url('src/node.mjs')),bridge=await import(url('src/bridge.mjs'));
   assert.equal(typeof node.buildMacOSProject,'function');assert.equal(typeof bridge.createMacOSBridge,'function');
   execFileSync(process.execPath,[path.join(installed,'bin/vb6-macos.mjs'),'--help'],{encoding:'utf8'});
+});
+
+// This uses isolated source trees, never rewrites live SDK files during tests.
+test('LF and Windows CRLF SDK checkouts produce identical embedded source and revision inputs', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vb6-macos-eol-'));
+  t.after(() => fs.rm(root, {recursive: true, force: true}));
+  const sample = {
+    'native/a.cpp': '// Native source\nconst char16_t *text = u"Unicode \u0142";\n',
+    'native/b.hpp': '#pragma once\n',
+    'native/c.mm': '#import <AppKit/AppKit.h>\n',
+    'src/build-driver.mjs': 'export const target = "arm64";\n',
+    'src/target.js': 'export const minimum = "11.0";\n',
+    'src/mach-o.js': '// Mach-O\n'
+  };
+  for (const [folder, eol] of [['lf', '\n'], ['crlf', '\r\n']]) {
+    for (const [file, content] of Object.entries(sample)) {
+      const destination = path.join(root, folder, 'packages/macos-native', file);
+      await fs.mkdir(path.dirname(destination), {recursive: true});
+      await fs.writeFile(destination, content.replace(/\n/g, eol));
+    }
+    await fs.writeFile(path.join(root, folder, 'LICENSE'), 'MIT License' + eol + 'Test fixture' + eol);
+  }
+  const lf = readMacOSSDK(path.join(root, 'lf')), crlf = readMacOSSDK(path.join(root, 'crlf'));
+  assert.deepEqual(crlf, lf);
+  assert.equal(JSON.stringify(crlf), JSON.stringify(lf));
+  assert.equal(lf['native/a.cpp'], sample['native/a.cpp']);
+  assert.equal(lf.LICENSE, 'MIT License\nTest fixture\n');
 });
