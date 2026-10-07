@@ -139,7 +139,13 @@ with sync_playwright() as playwright:
                     comparison = pixels(images['canvas2d'], encoded.getvalue())
                     METRICS.setdefault('gpuFramebufferReadback', []).append({'backend':backend,'dpr':dpr,**comparison})
                     check(comparison['changedPixels']==0, 'GPU framebuffer differs before presentation: '+str(comparison))
-                images[backend] = page.locator('canvas.fixture').screenshot()
+                # The canvas is already wholly inside the viewport. A locator
+                # screenshot scrolls it and runs actionability before capture,
+                # potentially changing the first presentation after readback.
+                # Capture the same fixed region from the composed page instead.
+                # https://playwright.dev/python/docs/api/class-locator#locator-screenshot
+                page.evaluate('async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')
+                images[backend] = page.screenshot(clip={'x':0,'y':0,'width':256,'height':128}, caret='initial')
                 (OUT / f'primitives-{backend}-{dpr}.png').write_bytes(images[backend])
                 check(info[backend]['width'] == round(256*dpr), 'DPR was capped or ignored')
             check('canvas2d' in images, 'Reference backend did not execute')
