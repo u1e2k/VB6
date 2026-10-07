@@ -19,7 +19,7 @@ test('native control-flow source identities survive O2 lowering',()=>{
   const map=level=>compileWin32(p,{optimization:level}).report.sourceMap.map(({rva,...entry})=>entry);
   assert.deepEqual(map(2),map(0));
 });
-for(const value of [0,-1,16385,1.5,NaN,null,'8',true])test('native GoSub depth rejects '+value,()=>{
+for(const value of [0,-1,65537,1.5,NaN,null,'8',true])test('native GoSub depth rejects '+value,()=>{
   assert.throws(()=>nativeGoSubLimit(value),/maxGoSubDepth/);
   assert.throws(()=>compileWin32(project('Sub Main()\nEnd Sub'),{maxGoSubDepth:value}),/maxGoSubDepth/);
 });

@@ -57,6 +57,18 @@ export function encodingCases(){
   for(const name of ['cvtss2si','cvttss2si','cvtsd2si','cvttsd2si']){const width=name.includes('ss')?32:64;add(`${name} edi,xmm6`,x=>x.sseConvert(name,'edi','xmm6'));add(`${name} edi,${ms(width)}`,x=>x.sseConvert(name,'edi',m(width)));}
   for(const name of ['psrlw','psraw','psllw','psrld','psrad','pslld','psrlq','psllq','psrldq','pslldq'])for(const count of [0,1,16,255])add(`${name} xmm6,${count}`,x=>x.sseShift(name,'xmm6',count));
   add(`lock cmpxchg8b ${ms(64)}`,x=>x.cmpxchg8b(m(64)));
+  for(const width of [8,16,32])for(const name of ['inc','dec'])add(`${name} ${ms(width)}`,x=>x[name](m(width)));
+  for(const reg of X86_REGISTERS.gpr)add(`bswap ${reg}`,x=>x.bswap(reg));
+  for(const width of [16,32]){
+    const reg=width===16?'dx':'edx';
+    for(const name of ['bsf','bsr'])add(`${name} ${reg},${ms(width)}`,x=>x[name](reg,m(width)));
+    for(const name of ['bt','bts','btr','btc'])for(const index of [0,15,31,255,reg])add(`${name} ${ms(width)},${index}`,x=>x.bit(name,m(width),index));
+    for(const name of ['shld','shrd'])for(const count of [0,1,31,'cl'])add(`${name} ${ms(width)},${reg},${count}`,x=>x.doubleShift(name,m(width),reg,count));
+  }
+  for(const name of ['ldmxcsr','stmxcsr'])add(`${name} ${ms(32)}`,x=>x[name](m(32)));
+  add('movd xmm3,edx',x=>x.movd('xmm3','edx'));add('movd edx,xmm3',x=>x.movd('edx','xmm3'));
+  add(`movd xmm7,${ms(32)}`,x=>x.movd('xmm7',m(32)));add(`movd ${ms(32)},xmm7`,x=>x.movd(m(32),'xmm7'));
+  add('movq xmm2,xmm7',x=>x.movq('xmm2','xmm7'));add(`movq xmm2,${ms(64)}`,x=>x.movq('xmm2',m(64)));add(`movq ${ms(64)},xmm2`,x=>x.movq(m(64),'xmm2'));
   return cases;
 }
 function run(command,args){const result=spawnSync(command,args,{encoding:'utf8',maxBuffer:32*1024*1024});if(result.error||result.status!==0)throw new Error(`${command} failed: ${result.error?.message||result.stderr}`);return result.stdout;}

@@ -67,3 +67,8 @@ test('Option Compare Text lowers through length-aware Windows collation',()=>{
   const code='Option Compare Text\nSub Main()\nDim a As String\na="A"\nIf a="a" Then a="b"\nEnd Sub';
   const result=build(code);assert.ok(result.report.imports.some(i=>i.symbol==='CompareStringW'));assert.deepEqual(result.bytes,build(code).bytes);
 });
+
+test('native Option Compare Text uses the installed Windows NLS comparison path',()=>{
+  const result=build('Option Compare Text\nPublic Sub Main()\nDim a As String\na="A"\nIf a="a" Then a="b"\nEnd Sub');
+  assert.ok(result.report.imports.some(i=>i.symbol==='CompareStringW'));
+});
