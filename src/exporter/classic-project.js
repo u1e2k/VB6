@@ -1,9 +1,9 @@
+import {prepareClassicDesigner} from './classic-designer.js';
 import {normalizeProject} from '../project/model.js';
 import {sourceFiles} from '../project/formats.js';
 import {bytesOf, decodeNativeText} from '../project/native-text.js';
 import {cleanProjectPath} from '../project/frx.js';
 import {normalizeClassicOptions, CLASSIC_TARGET, CLASSIC_LIMITS} from './classic-options.js';
-import {prepareClassicDesigner} from './classic-designer.js';
 import {configureClassicVBP, classicField, classicFields} from './classic-vbp.js';
 
 function fail(message, code = 'CLASSIC_PROJECT') {

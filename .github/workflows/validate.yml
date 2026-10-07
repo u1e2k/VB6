@@ -102,6 +102,10 @@ jobs:
       - run: npm run build
       - run: python -m pip install playwright==1.57.0
       - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Microsoft runtime EXE dialog, downloads and cancellation (synthetic compiler)
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-classic-export-tests.py
       - name: Portable COM/OLE source and bundled runtime contracts
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -159,6 +163,7 @@ jobs:
             reports/auto-layout
             reports/exporter
             reports/com-ole
+            reports/classic-export
           if-no-files-found: ignore
           retention-days: 7
   win32-system-contracts:
@@ -169,6 +174,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Classic compiler bridge, source and archive contracts (synthetic compiler)
+        run: node --test tests/classic-runtime-export.test.mjs tests/classic-compiler-bridge.test.mjs tests/native-classic.test.mjs
       - name: Validate existing native layout exports against Windows Forms and HWND bounds
         shell: pwsh
         run: |
