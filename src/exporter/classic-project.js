@@ -3,6 +3,7 @@ import {sourceFiles} from '../project/formats.js';
 import {bytesOf, decodeNativeText} from '../project/native-text.js';
 import {cleanProjectPath} from '../project/frx.js';
 import {normalizeClassicOptions, CLASSIC_TARGET, CLASSIC_LIMITS} from './classic-options.js';
+import {prepareClassicDesigner} from './classic-designer.js';
 import {configureClassicVBP, classicField, classicFields} from './classic-vbp.js';
 
 function fail(message, code = 'CLASSIC_PROJECT') {
@@ -34,7 +35,7 @@ export function prepareClassicProject(input, options = {}) {
       }
     }
   }
-  const files = sourceFiles(project), paths = Object.keys(files);
+  const files = sourceFiles(prepareClassicDesigner(project)), paths = Object.keys(files);
   if (paths.length > CLASSIC_LIMITS.files) fail('Too many classic project files.');
   const projects = paths.filter(path => /\.vbp$/i.test(path));
   if (projects.length !== 1) fail('A classic EXE export must contain exactly one .vbp project.');

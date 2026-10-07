@@ -8,7 +8,7 @@ export const CLASSIC_LIMITS = Object.freeze({projectBytes: 20 * 1024 * 1024, exe
 
 export function classicProductName(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > 100 ||
-      /[<>:"/\\|?*\x00-\x1f]/.test(value) || /[. ]$/.test(value) ||
+      /[<>:"/\\|?*\x00-\x1f]/.test(value) || /[. ]$/.test(value) || /\.exe$/i.test(value) ||
       /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value)) {
     throw new Error('Use a Windows-safe executable name (1–100 characters, without a path or .exe extension).');
   }
