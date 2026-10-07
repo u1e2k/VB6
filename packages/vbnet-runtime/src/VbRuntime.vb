@@ -14,7 +14,7 @@ Namespace VB6.Compatibility
     Public Module VbRuntime
         Public Function CopyValue(value As Object) As Object
             If TypeOf value Is IVbValue Then Return DirectCast(value, IVbValue).CopyValue()
-            If TypeOf value Is System.Array Then Return DirectCast(value, System.Array).Clone()
+            If TypeOf value Is System.Array Then Return VbArrays.CopyNativeArray(DirectCast(value, System.Array))
             Return value
         End Function
         Public Function AutoNew(Of T As Class)(ByRef value As T, factory As Func(Of T)) As T
@@ -77,7 +77,7 @@ Namespace VB6.Compatibility
             If TypeOf value Is Integer Then Return "Long"
             If TypeOf value Is IVbArray Then
                 Dim array = DirectCast(value, IVbArray)
-                Return TypeNameFromType(array.ElementType) & "()"
+                Return If(array.ElementVarType = 9 AndAlso array.ElementType Is GetType(Object), "Object", TypeNameFromType(array.ElementType)) & "()"
             End If
             Return Information.TypeName(value)
         End Function
@@ -91,9 +91,7 @@ Namespace VB6.Compatibility
         Public Function VarType(value As Object) As Integer
             If TypeOf value Is VbCurrency Then Return 6
             If TypeOf value Is IVbArray Then
-                Dim type = DirectCast(value, IVbArray).ElementType
-                Dim element As Object = If(type.IsValueType, Activator.CreateInstance(type), If(type Is GetType(String), CObj(""), Nothing))
-                Return 8192 Or If(type Is GetType(Object), 12, VarType(element))
+                Return 8192 Or DirectCast(value, IVbArray).ElementVarType
             End If
             Return CInt(Information.VarType(value))
         End Function

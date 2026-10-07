@@ -11,6 +11,10 @@ Namespace VB6.Compatibility
     Public Interface IVbArray
         ReadOnly Property Rank As Integer
         ReadOnly Property ElementType As Type
+        ReadOnly Property ElementVarType As Integer
+        Function GetValue(indices As Integer()) As Object
+        Sub SetValue(indices As Integer(), value As Object)
+        Sub Resize(lower As Integer(), upper As Integer(), Optional preserve As Boolean = False)
         Function LowerBound(dimension As Integer) As Integer
         Function UpperBound(dimension As Integer) As Integer
         Function Values() As IEnumerable
@@ -25,8 +29,10 @@ Namespace VB6.Compatibility
         Private _stride As Integer()
         Private ReadOnly _fixed As Boolean
         Private ReadOnly _factory As Func(Of T)
+        Private ReadOnly _objectElements As Boolean
 
-        Public Sub New(Optional elementFactory As Func(Of T) = Nothing)
+        Public Sub New(Optional elementFactory As Func(Of T) = Nothing, Optional objectElements As Boolean = False)
+            _objectElements = objectElements
             If elementFactory Is Nothing Then
                 _factory = AddressOf DefaultElement
             Else
@@ -34,8 +40,8 @@ Namespace VB6.Compatibility
             End If
         End Sub
 
-        Public Sub New(lower As Integer(), upper As Integer(), Optional fixedSize As Boolean = False, Optional elementFactory As Func(Of T) = Nothing)
-            Me.New(elementFactory)
+        Public Sub New(lower As Integer(), upper As Integer(), Optional fixedSize As Boolean = False, Optional elementFactory As Func(Of T) = Nothing, Optional objectElements As Boolean = False)
+            Me.New(elementFactory, objectElements)
             Resize(lower, upper, False)
             _fixed = fixedSize
         End Sub
@@ -54,7 +60,7 @@ Namespace VB6.Compatibility
 
         ' <summary>VB array assignment copies the array and any nested value records.</summary>
         Public Function Copy() As VbArray(Of T)
-            Dim result As New VbArray(Of T)(_factory)
+            Dim result As New VbArray(Of T)(_factory, _objectElements)
             If _data Is Nothing Then Return result
             result._lower = DirectCast(_lower.Clone(), Integer())
             result._length = DirectCast(_length.Clone(), Integer())
@@ -62,7 +68,7 @@ Namespace VB6.Compatibility
             result._data = DirectCast(_data.Clone(), T())
             For i = 0 To result._data.Length - 1
                 Dim value As Object = result._data(i)
-                If TypeOf value Is IVbValue Then result._data(i) = DirectCast(DirectCast(value, IVbValue).CopyValue(), T)
+                result._data(i) = DirectCast(VbRuntime.CopyValue(value), T)
             Next
             Return result
         End Function
@@ -75,6 +81,9 @@ Namespace VB6.Compatibility
             If items Is Nothing Then Throw New ArgumentNullException(NameOf(items))
             Dim data = New List(Of T)(items).ToArray()
             Dim result = New VbArray(Of T)()
+            For i = 0 To data.Length - 1
+                data(i) = DirectCast(VbRuntime.CopyValue(data(i)), T)
+            Next
             result._data = data
             result._lower = New Integer() {lower}
             result._length = New Integer() {data.Length}
@@ -93,6 +102,23 @@ Namespace VB6.Compatibility
                 Return GetType(T)
             End Get
         End Property
+
+        Public ReadOnly Property ElementVarType As Integer Implements IVbArray.ElementVarType
+            Get
+                Return VbArrays.ElementTypeCode(GetType(T), _objectElements)
+            End Get
+        End Property
+
+        Public Function GetValue(indices As Integer()) As Object Implements IVbArray.GetValue
+            If indices Is Nothing OrElse indices.Length = 0 Then Throw New IndexOutOfRangeException("Subscript required")
+            Return _data(Offset(indices(0), indices, 1))
+        End Function
+
+        Public Sub SetValue(indices As Integer(), value As Object) Implements IVbArray.SetValue
+            If indices Is Nothing OrElse indices.Length = 0 Then Throw New IndexOutOfRangeException("Subscript required")
+            Dim index = Offset(indices(0), indices, 1)
+            _data(index) = DirectCast(VbArrays.CoerceElement(value, GetType(T), _objectElements), T)
+        End Sub
 
         Public ReadOnly Property Count As Integer
             Get
@@ -123,19 +149,24 @@ Namespace VB6.Compatibility
             End Set
         End Property
 
-        Private Function Offset(first As Integer, remaining As Integer()) As Integer
-            If remaining Is Nothing OrElse remaining.Length + 1 <> Rank Then Throw New IndexOutOfRangeException("Subscript out of range")
+        Private Function Offset(first As Integer, remaining As Integer(), Optional start As Integer = 0) As Integer
+            If remaining Is Nothing OrElse remaining.Length - start + 1 <> Rank Then Throw New IndexOutOfRangeException("Subscript out of range")
             Dim result As Long = 0
             For i = 0 To Rank - 1
-                Dim index = CLng(If(i = 0, first, remaining(i - 1))) - _lower(i)
+                Dim index = CLng(If(i = 0, first, remaining(i - 1 + start))) - _lower(i)
                 If index < 0 OrElse index >= _length(i) Then Throw New IndexOutOfRangeException("Subscript out of range")
                 result += index * _stride(i)
             Next
             Return CInt(result)
         End Function
 
+        Public Sub Resize(bounds As VbArrayBounds, Optional preserve As Boolean = False)
+            If bounds Is Nothing Then Throw New ArgumentNullException(NameOf(bounds))
+            Resize(bounds.Lower, bounds.Upper, preserve)
+        End Sub
+
         ''' <summary>Validates and allocates before committing any state changes.</summary>
-        Public Sub Resize(lower As Integer(), upper As Integer(), Optional preserve As Boolean = False)
+        Public Sub Resize(lower As Integer(), upper As Integer(), Optional preserve As Boolean = False) Implements IVbArray.Resize
             If _fixed Then Throw New InvalidOperationException("Cannot ReDim a fixed-size array")
             If lower Is Nothing OrElse upper Is Nothing OrElse lower.Length = 0 OrElse lower.Length <> upper.Length OrElse lower.Length > 60 Then Throw New IndexOutOfRangeException("Invalid array rank")
             Dim lengths(lower.Length - 1) As Integer, strides(lower.Length - 1) As Integer
