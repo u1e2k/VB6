@@ -19,16 +19,30 @@ export function solidBackgroundLayers(style) {
   return images.map((image, index) => {
     if (!image.startsWith('linear-gradient(') || !image.endsWith(')')) throw new TypeError('Native background image');
     const stops=list(image.slice(16,-1));
+    const direction=/^to (left|right|top|bottom)$/.exec(stops[0])?.[1];
     if(stops.length===3 && /^(?:-?[\d.]+deg|to (?:left|right|top|bottom))$/.test(stops[0])) stops.shift();
     if(stops.length!==2) throw new TypeError('Native background gradient');
-    const color=parseColor(stops[0]), end=parseColor(stops[1]);
-    if(!color.every((v,i)=>v===end[i])) throw new TypeError('Native multistop gradient');
+    let color, band=null;
+    // An opaque-to-transparent hard stop is a rectangle, not an interpolated
+    // gradient. Preserve the full image positioning area; resolve the painted
+    // band inside it. CSS Images: https://www.w3.org/TR/css-images-3/#color-stop-syntax
+    const positioned=stops.map(stop=>/^(.*?)\s+(-?(?:\d*\.)?\d+(?:px|%))$/.exec(stop));
+    if(direction && positioned.every(Boolean)) {
+      const extent=length(positioned[0][2]), end=length(positioned[1][2]);
+      color=parseColor(positioned[0][1]);
+      if(extent.value<0 || extent.value!==end.value || extent.percent!==end.percent ||
+          parseColor(positioned[1][1])[3]!==0) throw new TypeError('Native multistop gradient');
+      band={direction,extent};
+    } else {
+      color=parseColor(stops[0]); const end=parseColor(stops[1]);
+      if(!color.every((v,i)=>v===end[i])) throw new TypeError('Native multistop gradient');
+    }
     const at = values => values[index%values.length];
     if(at(repeats)!=='no-repeat' || at(origins)!=='border-box' || at(clips)!=='border-box') throw new TypeError('Native background repeat or box');
     const size=at(sizes).split(/\s+/), position=at(positions).split(/\s+/);
     if(size.length!==2 || position.length!==2) throw new TypeError('Native background sizing');
     const aliases=[{left:'0%',center:'50%',right:'100%'},{top:'0%',center:'50%',bottom:'100%'}];
-    return {color, size:size.map(length), position:position.map((v,i)=>length(aliases[i][v] || v))};
+    return {color, size:size.map(length), position:position.map((v,i)=>length(aliases[i][v] || v)), ...(band ? {band} : {})};
   });
 }
 export function paintBackgroundLayers(scene, rect, clip, layers) {
@@ -38,8 +52,15 @@ export function paintBackgroundLayers(scene, rect, clip, layers) {
     // Percent position applies to the remaining space, not the whole box.
     const left=x+resolve(layer.position[0],width-w), top=y+resolve(layer.position[1],height-h);
     const area=[left,top,w,h];
+    if(layer.band) {
+      const {direction,extent}=layer.band, horizontal=direction==='left'||direction==='right';
+      const size=Math.min(horizontal?w:h,resolve(extent,horizontal?w:h));
+      if(direction==='left') area[0]+=w-size;
+      if(direction==='top') area[1]+=h-size;
+      area[horizontal?2:3]=size;
+    }
     scene.add(area,layer.color,{clip});
-    if(layer.color[3]>0 && w>0 && h>0) painted.push(area);
+    if(layer.color[3]>0 && area[2]>0 && area[3]>0) painted.push(area);
   }
   return painted;
 }

@@ -1,0 +1,49 @@
+name: Publish reviewed canvas capture correction
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.github/workflows/rendering-capture-fix.yml]
+permissions:
+  contents: write
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply the exact locally reviewed capture edit
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path('tools/browser-rendering-tests.py');text=p.read_text()
+          assert hashlib.sha256(text.encode()).hexdigest()=='04ab23f29a504b4697872e0d51539fbc81469c0f129e2706d11d8de1e5bbb564'
+          old="                images[backend] = page.locator('canvas.fixture').screenshot()"
+          lines=[
+            '                # The canvas is already wholly inside the viewport. A locator',
+            '                # screenshot scrolls it and runs actionability before capture,',
+            '                # potentially changing the first presentation after readback.',
+            '                # Capture the same fixed region from the composed page instead.',
+            '                # https://playwright.dev/python/docs/api/class-locator#locator-screenshot',
+            "                page.evaluate('async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}')",
+            "                images[backend] = page.screenshot(clip={'x':0,'y':0,'width':256,'height':128}, caret='initial')"
+          ]
+          assert text.count(old)==1
+          text=text.replace(old,'\n'.join(lines))
+          assert hashlib.sha256(text.encode()).hexdigest()=='18c9432187a85210454c6e22fd66f56192d8b8bcd85c666cbe79ffbcaf9670f4'
+          p.write_text(text)
+          PY
+          python -m py_compile tools/browser-rendering-tests.py
+          python tools/test_rendering_capture.py
+          test "$(git diff --name-only)" = tools/browser-rendering-tests.py
+          test "$(git ls-remote origin refs/heads/feat/webgpu-ui-rendering | cut -f1)" = '${{ github.sha }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/browser-rendering-tests.py
+          git commit -m 'test(rendering): capture first presentation without scrolling the canvas'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
