@@ -78,12 +78,15 @@ function output(x,opcodes,encoding={bytes:[]},suffix=[]) {
   return x;
 }
 const prefix=width=>width===16?[0x66]:[];
+const signedImmediate=(value,width)=>width===16?(value<<16)>>16:value|0;
 const arithmetic={add:[0x00,0],or:[0x08,1],adc:[0x10,2],sbb:[0x18,3],and:[0x20,4],sub:[0x28,5],xor:[0x30,6],cmp:[0x38,7]};
 function binary(x,name,dst,src) {
   const spec=own(arithmetic,name)?arithmetic[name]:null,width=widthOf(dst);
   if(!spec||![8,16,32].includes(width))throw new Error('Invalid x86 arithmetic operand');
   if(typeof src==='number') {
-    const full=immediate(src,width),signed=src|0,short=width!==8&&signed>=-128&&signed<=127&&(width===32||src>=-128&&src<=127);
+    const full=immediate(src,width),signed=signedImmediate(src,width),short=width!==8&&signed>=-128&&signed<=127;
+    // Accumulator opcodes omit ModR/M; prefer sign-extended imm8 when shorter.
+    if(!short&&dst===(width===8?'al':width===16?'ax':'eax'))return output(x,[...prefix(width),spec[0]+(width===8?4:5)],undefined,full);
     return output(x,[...prefix(width),width===8?0x80:short?0x83:0x81],rm(spec[1],dst,width),short?[signed&255]:full);
   }
   if(widthOf(src)!==width)throw new Error('x86 arithmetic width mismatch');
@@ -116,7 +119,11 @@ export const x86OperandMethods={
   xor(dst,src){return binary(this,'xor',dst,src);},cmp(dst,src){return binary(this,'cmp',dst,src);},
   testOperand(dst,src) {
     const width=widthOf(dst);if(![8,16,32].includes(width))throw new Error('Invalid x86 TEST destination');
-    if(typeof src==='number')return output(this,[...prefix(width),width===8?0xf6:0xf7],rm(0,dst,width),immediate(src,width));
+    if(typeof src==='number'){
+      const bytes=immediate(src,width);
+      if(dst===(width===8?'al':width===16?'ax':'eax'))return output(this,[...prefix(width),width===8?0xa8:0xa9],undefined,bytes);
+      return output(this,[...prefix(width),width===8?0xf6:0xf7],rm(0,dst,width),bytes);
+    }
     return output(this,[...prefix(width),width===8?0x84:0x85],rm(register(src,width),dst,width));
   },
   neg(operand){return unary(this,3,operand);},not(operand){return unary(this,2,operand);},
@@ -126,7 +133,7 @@ export const x86OperandMethods={
     const width=widthOf(dst);if(![16,32].includes(width))throw new Error('IMUL requires word/dword destination');
     const enc=rm(register(dst,width),src,width);
     if(imm===undefined)return output(this,[...prefix(width),0x0f,0xaf],enc);
-    const full=immediate(imm,width),n=imm|0,short=n>=-128&&n<=127&&(width===32||imm>=-128&&imm<=127);
+    const full=immediate(imm,width),n=signedImmediate(imm,width),short=n>=-128&&n<=127;
     return output(this,[...prefix(width),short?0x6b:0x69],enc,short?[n&255]:full);
   },
   shift(name,dst,count) {
@@ -137,8 +144,8 @@ export const x86OperandMethods={
     return output(this,[...prefix(width),opcode],rm(groups[name],dst,width),count==='cl'||count===1?[]:[count]);
   },
   /** INC/DEC intentionally preserve CF; use ADD/SUB when carry must change. */
-  inc(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid INC width');return output(this,[...prefix(w),w===8?0xfe:0xff],rm(0,dst,w));},
-  dec(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid DEC width');return output(this,[...prefix(w),w===8?0xfe:0xff],rm(1,dst,w));},
+  inc(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid INC width');if(w!==8&&typeof dst==='string')return output(this,[...prefix(w),0x40+register(dst,w)]);return output(this,[...prefix(w),w===8?0xfe:0xff],rm(0,dst,w));},
+  dec(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid DEC width');if(w!==8&&typeof dst==='string')return output(this,[...prefix(w),0x48+register(dst,w)]);return output(this,[...prefix(w),w===8?0xfe:0xff],rm(1,dst,w));},
   bswap(dst){return output(this,[0x0f,0xc8+register(dst)]);},
   bsf(dst,src){const w=widthOf(dst);if(![16,32].includes(w))throw new Error('Invalid BSF width');return output(this,[...prefix(w),0x0f,0xbc],rm(register(dst,w),src,w));},
   bsr(dst,src){const w=widthOf(dst);if(![16,32].includes(w))throw new Error('Invalid BSR width');return output(this,[...prefix(w),0x0f,0xbd],rm(register(dst,w),src,w));},
