@@ -1,3 +1,5 @@
+import {HttpTransport} from '../automation/http-transport.js';
+import {httpCommandOptions} from './service-definitions.js';
 import {RDOEngine,RDOConnection,RDOQuery,RDO_CONSTANTS} from './rdo.js';
 import {DAOEngine} from './dao.js';
 import {normalizeDataSources,assertData,DATA_CONSTANTS} from './common.js';
@@ -11,7 +13,7 @@ import {VirtualFileSystem} from '../runtime/filesystem.js';
 export class DataContext {
   constructor(project={},options={}){
     this.config=normalizeDataSources(project.dataSources);this.fs=options.fs||new VirtualFileSystem(project.vfs);this.persist=options.persist;
-    this.fetch=options.fetch||globalThis.fetch?.bind(globalThis);this.credentialProvider=options.credentialProvider;
+    this.fetch=options.fetch||globalThis.fetch?.bind(globalThis);this.credentialProvider=options.credentialProvider;this.transport=new HttpTransport({fetch:(...args)=>this.fetch(...args),authorize:options.httpAuthorize});
     this.providers=new Map([['sqlite',SQLiteProvider],['rest',HTTPProvider],['odata',HTTPProvider],['graphql',HTTPProvider],['gateway',GatewayProvider],['json',FileDataProvider],['csv',FileDataProvider]]);
     this.databases=new Map();this.connections=new Set();this.credentials=new Map();this.closed=false;
   }
@@ -40,16 +42,17 @@ export class DataContext {
     environment.ClearCredentials=()=>this.credentials.clear();
     for(const definition of this.config.connections){const cn=this.connection();cn.Name=definition.name;cn.ConnectionString=definition.name;environment[definition.name]=cn;environment.Connections.items.push(cn);}
     for(const definition of this.config.commands){
-      const cmd=this.command();cmd.Name=definition.name;cmd.CommandText=definition.text||'';cmd.CommandType=definition.type||1;cmd.ActiveConnection=environment.Connections.Item(definition.connection);
+      const cmd=this.command();cmd.Name=definition.name;cmd.CommandText=definition.text||'';cmd.CommandType=definition.type||1;cmd._requestOptions=httpCommandOptions(definition);cmd.ActiveConnection=environment.Connections.Item(definition.connection);
       for(const p of definition.parameters||[])cmd.Parameters.Append(cmd.CreateParameter(p.name,p.type||202,1,p.size||0,p.value??null));
       environment.Commands.items.push(cmd);environment['rs'+definition.name]=new ConnectedRecordset(this);
       environment[definition.name]=async(...args)=>{
-        if(cmd.ActiveConnection.State===0)await cmd.ActiveConnection.Open();
         assertData(args.length<=cmd.Parameters.Count,'Too many command parameters',450);
-        args.forEach((value,i)=>cmd.Parameters.Item(i).Value=value);
+        for(const [i,p]of (definition.parameters||[]).entries()){assertData(p.required!==true||i<args.length&&args[i]!==undefined,'Argument not optional: '+p.name,449);cmd.Parameters.Item(i).Value=i<args.length?args[i]:(p.value??null);}
+        if(cmd.ActiveConnection.State===0)await cmd.ActiveConnection.Open();
         const previous=environment['rs'+definition.name];if(previous.State)await previous.Close();
         return cmd.execute(undefined,undefined,cmd.CommandType,previous);
       };
+      environment[definition.name].vbParams=(definition.parameters||[]).map(p=>({name:p.name,optional:p.required!==true}));
     }
     return environment;
   }
@@ -61,8 +64,8 @@ export class DataContext {
   }
   close(){
     if(this.closing)return this.closing;
-    this.closed=true;
+    this.closed=true;this.transport.cancel();
     const work=[...this.connections].map(cn=>cn.Close());
-    return this.closing=Promise.allSettled(work).finally(()=>this.credentials.clear());
+    return this.closing=Promise.allSettled(work).finally(()=>{this.transport.close();this.credentials.clear();});
   }
 }
