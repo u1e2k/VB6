@@ -90,7 +90,7 @@ struct Ref {
   explicit operator bool() const { return static_cast<bool>(read); }
 };
 struct Arg {
-  Value value; Ref reference; std::string name;
+  Value value; Ref reference; std::string name; bool nativeByRef=false;
   Arg() : value(Value::missing()) {}
   explicit Arg(Value value, std::string name="") : value(std::move(value)),name(std::move(name)) {}
   explicit Arg(Ref reference, std::string name="") : value(reference.get()),reference(std::move(reference)),name(std::move(name)) {}
@@ -141,6 +141,12 @@ struct Procedure {
   std::vector<Parameter> parameters;
   Value (*code)(Frame&)=nullptr;
 };
+struct NativeCallback final : Object {
+  std::weak_ptr<Instance> owner; std::string procedure;
+  NativeCallback(std::shared_ptr<Instance> value,std::string name):owner(std::move(value)),procedure(std::move(name)) {}
+  std::string className() const override { return "NativeCallback"; }
+  Value invoke(Runtime&,const std::string&,Args) override;
+};
 struct Property { std::string name; Value value; };
 struct ControlSpec {
   std::string name,type,parent; std::vector<Property> properties;
@@ -162,7 +168,7 @@ struct Instance : Object {
   Runtime* runtime; Module* module; std::map<std::string,CellPtr> fields;
   std::map<std::string,std::map<std::string,CellPtr>> statics;
   std::map<std::string,ObjectPtr> controls;
-  bool initialized=false,initializing=false,loaded=false,loading=false,unloading=false;
+  bool initialized=false,initializing=false,loaded=false,loading=false,unloading=false,formInitialized=false;
   explicit Instance(Runtime& runtime,Module& module):runtime(&runtime),module(&module) {}
   std::string className() const override { return module->name; }
   Value get(Runtime&,const std::string&) override;
@@ -187,6 +193,7 @@ struct Frame {
   Value get(const std::string& name); Ref ref(const std::string& name);
   Value call(const std::string& name,Args args={});
   Value create(const std::string& type);
+  Value callback(const std::string& module,const std::string& procedure);
   void declare(const std::string& name,const std::string& type,Bounds bounds={},int arrayKind=0,size_t fixedLength=0,bool constant=false,bool isStatic=false,bool autoNew=false);
   void initial(const std::string& name,Value value);
   void global(const std::string& name,const std::string& type,Bounds bounds={},int arrayKind=0,size_t fixedLength=0,bool constant=false,bool autoNew=false,bool withEvents=false);
