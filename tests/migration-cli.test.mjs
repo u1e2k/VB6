@@ -37,3 +37,17 @@ test('CLI rejects symlink inputs and native roots outside the selected directory
   await assert.rejects(loadMigrationInput(file,{root:path.join(dir,'child')}),/inside/);
   if(process.platform!=='win32'){const link=path.join(dir,'link.vbp');await fs.symlink(file,link);await assert.rejects(loadMigrationInput(link),/symlink/);}
 }));
+
+
+test('CLI carries native support and explicit modernization policies into reports',async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'vbnet-native-cli-'));
+  try{
+    const input=path.join(directory,'input.vb6web');
+    await fs.writeFile(input,JSON.stringify(procedure('Dim c As Currency\nc=1.23456@')));
+    const outputs=[];
+    const code=await runMigrationCli([input,'--inspect','--runtime','none'],{stdout:value=>outputs.push(value),stderr:()=>{}});
+    assert.equal(code,2);assert.ok(JSON.parse(outputs.pop()).diagnostics.some(d=>d.code==='MIG_RUNTIME_REQUIRED'));
+    assert.equal(await runMigrationCli([input,'--inspect','--runtime','none','--semantic-policy','modernize','--accept-rule','currency-decimal'],{stdout:value=>outputs.push(value),stderr:()=>{}}),0);
+    const report=JSON.parse(outputs.pop());assert.deepEqual(report.runtime.features,[]);assert.equal(report.modernization[0].rule,'currency-decimal');
+  }finally{await fs.rm(directory,{recursive:true,force:true});}
+});
