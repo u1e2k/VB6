@@ -136,6 +136,24 @@ export const x86OperandMethods={
     const opcode=count==='cl'?(width===8?0xd2:0xd3):count===1?(width===8?0xd0:0xd1):(width===8?0xc0:0xc1);
     return output(this,[...prefix(width),opcode],rm(groups[name],dst,width),count==='cl'||count===1?[]:[count]);
   },
+  /** INC/DEC intentionally preserve CF; use ADD/SUB when carry must change. */
+  inc(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid INC width');return output(this,[...prefix(w),w===8?0xfe:0xff],rm(0,dst,w));},
+  dec(dst){const w=widthOf(dst);if(![8,16,32].includes(w))throw new Error('Invalid DEC width');return output(this,[...prefix(w),w===8?0xfe:0xff],rm(1,dst,w));},
+  bswap(dst){return output(this,[0x0f,0xc8+register(dst)]);},
+  bsf(dst,src){const w=widthOf(dst);if(![16,32].includes(w))throw new Error('Invalid BSF width');return output(this,[...prefix(w),0x0f,0xbc],rm(register(dst,w),src,w));},
+  bsr(dst,src){const w=widthOf(dst);if(![16,32].includes(w))throw new Error('Invalid BSR width');return output(this,[...prefix(w),0x0f,0xbd],rm(register(dst,w),src,w));},
+  bit(name,dst,index) {
+    const groups={bt:[0xa3,4],bts:[0xab,5],btr:[0xb3,6],btc:[0xbb,7]},w=widthOf(dst);
+    if(!own(groups,name)||![16,32].includes(w))throw new Error('Invalid bit-test operand');
+    const [opcode,extension]=groups[name];
+    if(typeof index==='number'){integer(index,0,255,'bit index');return output(this,[...prefix(w),0x0f,0xba],rm(extension,dst,w),[index]);}
+    return output(this,[...prefix(w),0x0f,opcode],rm(register(index,w),dst,w));
+  },
+  doubleShift(name,dst,src,count) {
+    const w=widthOf(dst);if(!['shld','shrd'].includes(name)||![16,32].includes(w))throw new Error('Invalid double shift');
+    if(count!=='cl')integer(count,0,255,'shift count');
+    return output(this,[...prefix(w),0x0f,(name==='shld'?0xa4:0xac)+(count==='cl'?1:0)],rm(register(src,w),dst,w),count==='cl'?[]:[count]);
+  },
   setcc(name,dst) {return output(this,[0x0f,0x90+condition(name)],rm(0,dst,8));},
   cmovcc(name,dst,src) {const width=widthOf(dst);if(![16,32].includes(width))throw new Error('CMOV requires word/dword operands');return output(this,[...prefix(width),0x0f,0x40+condition(name)],rm(register(dst,width),src,width));},
   pushOperand(src) {
