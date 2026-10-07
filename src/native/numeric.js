@@ -42,7 +42,8 @@ export const nativeNumericMethods = {
       const name=key(node.callee.name).replace(/\$$/,'');
       if(['cdbl','val','sqr','round'].includes(name))return 'double';
       if(name==='csng')return 'single';
-      if(['abs','fix','int'].includes(name)&&node.args.length===1)return this.type(node.args[0]);
+      if(name==='sgn')return 'integer';
+      if(['abs','fix','int'].includes(name)&&node.args.length===1){const type=this.type(node.args[0]);return type==='boolean'?'integer':type;}
       return {cint:'integer',cbyte:'byte',cbool:'boolean',clng:'long'}[name]||null;
     }
     return null;
