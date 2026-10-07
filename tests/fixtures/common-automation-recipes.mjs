@@ -1,0 +1,19 @@
+/** Identical recipes for the installed native classes and portable adapters.
+ * VB type names are case-insensitive. Keep array bounds and scalar payloads exact. */
+import {automationInvoke} from '../../src/runtime/automation.js';
+import {VBArray,unbox} from '../../src/runtime/values.js';
+export const normalizeCommonValue=v=>v instanceof VBArray?{type:v.type.toLowerCase(),bounds:v.bounds,data:v.data.map(unbox)}:unbox(v);
+const invoke=async(o,n,mode=1,args=[])=>normalizeCommonValue(await automationInvoke(o,n,mode,args));
+const get=(o,n)=>invoke(o,n,2),set=(o,n,v)=>invoke(o,n,4,[v]);
+export function nativeStreamPolicyBlock(error){return error?.number===440&&(error.hresult>>>0)===0x80070005&&error.message==='Component is blocked by the ActiveX killbit';}
+export const commonRecipes={
+  defaults:async s=>{const o=await s.create('ADODB.Stream');return {type:await get(o,'Type'),mode:await get(o,'Mode'),charset:await get(o,'Charset'),line:await get(o,'LineSeparator'),state:await get(o,'State')};},
+  utf8:async s=>{const o=await s.create('ADODB.Stream');await set(o,'Charset','utf-8');await invoke(o,'Open');await invoke(o,'WriteText',1,['first',1]);await invoke(o,'WriteText',1,['Żółć']);const size=await get(o,'Size');await set(o,'Position',0);const first=await invoke(o,'ReadText',1,[-2]),position=await get(o,'Position'),rest=await invoke(o,'ReadText');return {size,first,position,rest,eos:await get(o,'EOS')};},
+  unicode:async s=>{const o=await s.create('ADODB.Stream');await invoke(o,'Open');await invoke(o,'WriteText',1,['A日本']);await set(o,'Position',0);const a=await invoke(o,'ReadText',1,[1]),position=await get(o,'Position'),rest=await invoke(o,'ReadText');return {a,position,rest,size:await get(o,'Size')};},
+  zeroRead:async s=>{const o=await s.create('ADODB.Stream');await set(o,'Charset','utf-8');await invoke(o,'Open');await invoke(o,'WriteText',1,['abc']);await set(o,'Position',0);const value=await invoke(o,'ReadText',1,[0]);return {value,position:await get(o,'Position'),rest:await invoke(o,'ReadText'),eof:await invoke(o,'ReadText')};},
+  embeddedBom:async s=>{const o=await s.create('ADODB.Stream');await set(o,'Charset','utf-8');await invoke(o,'Open');await invoke(o,'WriteText',1,['\ufeffdata']);await set(o,'Position',0);return {value:await invoke(o,'ReadText'),position:await get(o,'Position')};},
+  astral:async s=>{const o=await s.create('ADODB.Stream');await set(o,'Charset','utf-8');await invoke(o,'Open');await invoke(o,'WriteText',1,['😀Z']);await set(o,'Position',0);const value=await invoke(o,'ReadText',1,[1]),position=await get(o,'Position');let rest;try{rest=await invoke(o,'ReadText');}catch(error){rest={error:error.number};}return {value,position,rest};},
+  binaryEmpty:async s=>{const o=await s.create('ADODB.Stream');await set(o,'Type',1);await invoke(o,'Open');return {value:await invoke(o,'Read'),zero:await invoke(o,'Read',1,[0]),size:await get(o,'Size')};},
+  copy:async s=>{const a=await s.create('ADODB.Stream'),b=await s.create('ADODB.Stream');for(const o of [a,b]){await set(o,'Charset','utf-8');await invoke(o,'Open');}await invoke(a,'WriteText',1,['abcd']);await invoke(b,'WriteText',1,['long tail']);await set(a,'Position',0);await set(b,'Position',0);await invoke(a,'CopyTo',1,[b,2]);const position=await get(a,'Position');await set(b,'Position',0);return {position,text:await invoke(b,'ReadText'),size:await get(b,'Size')};},
+  http:async (s,url)=>{const results=[];for(const name of ['MSXML2.ServerXMLHTTP.6.0','WinHttp.WinHttpRequest.5.1']){const o=await s.create(name);await invoke(o,'open',1,['GET',url+'/text',false]);await invoke(o,'send');results.push({status:await get(o,'status'),text:await get(o,'responseText'),body:await get(o,'responseBody'),header:await invoke(o,'getResponseHeader',1,['X-Common-Contract'])});await invoke(o,'open',1,['POST',url+'/echo',false]);await invoke(o,'send',1,['body']);results.push(await get(o,'responseText'));}return results;}
+};

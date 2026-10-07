@@ -24,9 +24,9 @@ Common supported additions include geometry/Move/ZOrder/Refresh, Tag ownership, 
 
 Full Text reads no longer use the old 4096-unit scratch buffer. The compiler adopts a dynamically sized BSTR before invoking Windows, bounds it at the existing 1,048,576 UTF-16-unit limit and shrinks it through OleAut32 when text changes during reentry. EDIT SelText validates its captured range against the new snapshot. RichEdit SelText uses EM_GETTEXTRANGE with EM_EXGETSEL logical positions, rather than applying those positions to WM_GETTEXT's CRLF representation.
 
-String RTF streaming explicitly uses UTF-8, including strict Windows UTF-8 conversion, rather than relying on the machine's ANSI code page. Each call has its own stack-local EDITSTREAM and cookie. Stream-out grows an owned byte buffer up to four MiB; exact-length byte content is then converted to an owned Unicode BSTR. Streaming callbacks report bounded allocation/I/O failures to Windows and do not jump across Windows frames to a VB error handler. File methods close their file handle after SendMessage returns, before raising a stream error. Native file type 1 follows SF_TEXT's Windows plain-text encoding conventions; it is not an explicit UTF-8 file API.
+String RTF input explicitly uses UTF-8 with strict Windows conversion rather than an ANSI round trip. TextRTF/SelRTF output requests standard SF_RTF without SF_USECODEPAGE: Windows emits 7-bit RTF with non-ASCII text escaped, not the UTF-8-specific URTF dialect. The ASCII stream is decoded as UTF-8 without losing its escape sequences or depending on the system code page. Each call has its own stack-local EDITSTREAM and cookie. Stream-out grows an owned byte buffer up to four MiB; exact-length byte content is then converted to an owned Unicode BSTR. Streaming callbacks report bounded allocation/I/O failures to Windows and do not jump across Windows frames to a VB error handler. File methods close their file handle after SendMessage returns, before raising a stream error. Native file type 1 follows SF_TEXT's Windows plain-text encoding conventions; it is not an explicit UTF-8 file API.
 
-RTF helpers, Unicode conversion and read/write directions are emitted only when requested. A RichTextBox used only for plain Text does not import the file-stream API or include the RTF helper family. These implementation contracts still need actual Windows execution validation; source/PE structure tests do not prove RTF parsing or resource-lifetime behavior.
+RTF helpers, Unicode conversion and read/write directions are emitted only when requested. A RichTextBox used only for plain Text does not import the file-stream API or include the RTF helper family. Validate these contracts with the current-head Windows execution matrix; source/PE structure tests alone do not prove RTF parsing or resource-lifetime behavior.
 
 ## Native layout
 
@@ -44,7 +44,7 @@ Initial equal fonts reuse the existing cache. Mutable fonts have per-control own
 
 ```sh
 npm run build
-node --test tests/win32-richtext.test.mjs tests/win32-control-plan.test.mjs tests/win32-controls.test.mjs tests/win32-aot.test.mjs tests/layout-native.test.mjs
+node --test tests/win32-richtext*.test.mjs tests/win32-control*.test.mjs tests/win32-aot.test.mjs tests/layout-native.test.mjs
 node tools/win32-control-fixtures.mjs
 ```
 
@@ -54,9 +54,9 @@ On Windows, execute the generated native fixtures:
 ./tools/test-win32-controls.ps1
 ```
 
-The driver requires exactly six fixture families at O0/O1/O2: 18 distinct EXEs. It verifies each executable hash, copies only that executable to an isolated directory, enforces a timeout, associates nonzero exit codes with explicit assertions and checks that no adjacent runtime files were extracted. Results are written to `reports/native-controls/execution.json`. Assertions cover real HWND hierarchy/notifications, editing, fonts, saved content, filesystem enumeration and GDI bitmap pixels/resource counts. The RichText family adds persisted RTF, Unicode escape handling, full/selection streaming, paragraph-based logical selection positions, more-than-65535-character selections, nested SelChange notification routing, disk RTF/plain-text round trips, closed-handle deletion and VB file-error recovery. The existing optimizer/native Windows matrix remains unchanged.
+The driver requires exactly six fixture families at O0/O1/O2: 18 distinct EXEs. It verifies each executable hash, copies only that executable to an isolated directory, enforces a timeout, associates nonzero exit codes with explicit assertions and checks that no adjacent runtime files were extracted. Results are written to `reports/native-controls/execution.json`. Assertions cover real HWND hierarchy/notifications, editing, fonts, saved content, filesystem enumeration and GDI bitmap pixels/resource counts. The RichText family adds persisted RTF, Unicode escape handling, standard RTF header and BMP/supplementary Unicode full/selection round trips, paragraph-based logical selection positions, more-than-65535-character selections, nested SelChange notification routing, disk RTF/plain-text round trips, closed-handle deletion and VB file-error recovery. The existing optimizer/native Windows matrix remains unchanged.
 
-**Compilation and Node tests are not Windows execution evidence.** This implementation snapshot passed local compilation and Node tests, but its new Windows fixtures had not been executed when packaged. Keep the associated PR in draft until the implementation is published and current-head Windows and repository checks pass.
+**Compilation and Node tests are not Windows execution evidence.** Require successful current-head Windows and repository checks before merging changes to these paths. Historical passes, diagnostic-only instrumented copies and a successful compilation do not substitute for execution of the unmodified self-checking executables. Linked-PE regressions separately check contiguous native record fields, relocated caption pointers and RTF stream flags at every optimization level.
 
 ## Remaining control/runtime boundaries
 

@@ -220,6 +220,12 @@ export function richTextControlFixture(){
   add('On Error Resume Next\nErr.Clear\nRich.LoadFile "a-file-that-does-not-exist.rtf"');
   check('Err.Number=75','file-open failure returns a VB error instead of invoking an invalid stream callback');
   add('Err.Clear\nOn Error GoTo 0');
+  add('Plain.Text="Unicode " & ChrW$(261) & ChrW$(937) & ChrW$(20013) & ChrW$(-10179) & ChrW$(-8576)\nRich.Text=Plain.Text\ns=Rich.TextRTF');
+  check('Left$(s,6)="{\\rtf1" And InStr(s,ChrW$(20013))=0','standard RTF output uses escaped non-ASCII content, not the URTF dialect');
+  add('Rich.Text="cleared"\nRich.TextRTF=s');
+  check('Rich.Text=Plain.Text','TextRTF round-trips BMP and supplementary Unicode through standard RTF');
+  add('Rich.SelStart=0\nRich.SelLength=Len(Rich.Text)\ns=Rich.SelRTF\nRich.Text=""\nRich.SelRTF=s');
+  check('Rich.Text=Plain.Text','SelRTF round-trips the full Unicode selection through standard RTF');
   return finish(`Private Type NMHDR
  hwnd As Long
  id As Long

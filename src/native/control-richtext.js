@@ -2,7 +2,10 @@
  * never jump across Windows frames into a suspended VB error handler.
  * https://learn.microsoft.com/en-us/windows/win32/controls/em-streamin
  * https://learn.microsoft.com/en-us/windows/win32/controls/em-streamout
- * TextRTF strings use explicit UTF-8 conversion, not the machine ANSI code page.
+ * RTF input uses explicit UTF-8. Output uses standard escaped 7-bit RTF,
+ * not the UTF-8-specific URTF dialect; ASCII output is also valid UTF-8.
+ * Independent Windows implementation reference (no source copied):
+ * https://github.com/wxWidgets/wxWidgets/blob/master/src/msw/textctrl.cpp
  * File streams retain Windows' native SF_RTF / SF_TEXT byte representation.
  */
 import {MAX_NATIVE_STRING} from './storage.js';
@@ -78,7 +81,9 @@ export const nativeRichTextMethods={
       // to each call, so nested streaming never reuses another operation's state.
       x.label(R+'get').enter(24).value(0);for(const offset of [-12,-8,-4,-20])save(x,offset);
       x.local(-12);save(x,-24);x.value(R+'write-memory');save(x,-16);
-      x.local(-24).push().value(arg(12)).emit(0x0d).imm(UTF8_RTF).push().push(0x44a).push(arg(8)).invoke(U,'SendMessageW');
+      // Without SF_USECODEPAGE, RichEdit preserves Unicode through RTF escapes.
+      // Keep SFF_SELECTION from the caller, but never request a URTF header.
+      x.local(-24).push().value(arg(12)).emit(0x0d).imm(2).push().push(0x44a).push(arg(8)).invoke(U,'SendMessageW');
       x.value(arg(-20)).test().branch('ne',freeError);
       x.api(OLE,'SysAllocStringByteLen',[arg(-12),arg(-8)]).emit(0x89,0xc6);
       x.api(OLE,'SysFreeString',[arg(-12)]).emit(0x85,0xf6).branch('e','error:7');
