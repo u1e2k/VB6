@@ -146,7 +146,7 @@ export function compileModule(input) {
   const typeNames=new Set();
   for(const entry of lines){let {text,line}=entry,m;
     try {
-      if(current){if(/^Def(?:Bool|Byte|Int|Lng|Cur|Sng|Dbl|Date|Str|Obj|Var)\b/i.test(text))throw new VBError('Default-type declarations are valid only at module level',1002);if(PROCEDURE_END[current.kind].test(text)){current.code=new ProcedureCompiler(current,module).compile(body);const key=lower(current.name)+(current.kind==='property'?':'+current.accessor:'');if(module.procedures.has(key))throw new VBError(`Ambiguous name detected: ${current.name}`,1002);module.procedures.set(key,current);current=null;body=[];}else body.push(entry);continue;}
+      if(current){if(/^Def(?:Bool|Byte|Int|Lng|Cur|Sng|Dbl|Date|Str|Obj|Var)\b/i.test(text))throw new VBError('Default-type declarations are valid only at module level',1002);if(PROCEDURE_END[current.kind].test(text)){if(input.retainSyntax)current.statements=body.map(entry=>({...entry}));current.code=new ProcedureCompiler(current,module).compile(body);const key=lower(current.name)+(current.kind==='property'?':'+current.accessor:'');if(module.procedures.has(key))throw new VBError(`Ambiguous name detected: ${current.name}`,1002);module.procedures.set(key,current);current=null;body=[];}else body.push(entry);continue;}
       if(enumState){
         if(/^End\s+Enum$/i.test(text)){if(!enumState.previous)throw new VBError('Enum requires at least one member',1002);enumState=null;continue;}
         if(entry.label)throw new VBError('Labels are not allowed in Enum declarations',1002);
@@ -209,10 +209,10 @@ export function compileModule(input) {
   }
   return module;
 }
-export function compileProject(project) {
+export function compileProject(project,{retainSyntax=false}={}) {
   const modules=new Map(),diagnostics=[];
   try{validateLayout(project,false);}catch(error){diagnostics.push({severity:'error',message:error.message,number:error.number||380,source:error.source||project.name,line:1,column:1});}
-  for(const input of project.modules||[]){try{const module=compileModule({...input,conditionalConstants:project.settings?.conditionalConstants||{}});const key=lower(module.name);if(modules.has(key))throw new VBError(`Duplicate module name: ${module.name}`,1002,module.name,1);modules.set(key,module);}catch(error){diagnostics.push({severity:'error',message:error.message,number:error.number||1002,source:error.source||input.name,line:error.line||1,column:error.column||1});}}
+  for(const input of project.modules||[]){try{const module=compileModule({...input,retainSyntax,conditionalConstants:project.settings?.conditionalConstants||{}});const key=lower(module.name);if(modules.has(key))throw new VBError(`Duplicate module name: ${module.name}`,1002,module.name,1);modules.set(key,module);}catch(error){diagnostics.push({severity:'error',message:error.message,number:error.number||1002,source:error.source||input.name,line:error.line||1,column:error.column||1});}}
   diagnostics.push(...validateCompiledModules(modules,project.settings));
   return {name:project.name,startup:project.startup,modules,diagnostics,valid:!diagnostics.length,settings:project.settings||{},sourceProject:project};
 }
@@ -227,4 +227,14 @@ export function validateCompiledModules(modules,settings={}) {
   for(const module of modules.values())if(module.form){if(module.form.type==='MDIForm'&&Number(module.form.properties?.MDIChild))diagnostics.push({severity:'error',message:'An MDI Form cannot also be an MDI child',number:380,source:module.name,line:1,column:1});if(Number(module.form.properties?.MDIChild)&&!parents.length)diagnostics.push({severity:'error',message:'An MDI child requires an MDI Form in the project',number:366,source:module.name,line:1,column:1});}
   diagnostics.push(...validateInterfaces(modules));
   return diagnostics;
+}
+
+/** Parse an isolated leaf statement with the same grammar used by the VM.
+ * Branch/block statements deliberately require the enclosing procedure parser.
+ * This API does not evaluate expressions or execute project code. */
+export function parseLeafStatement(text, module, procedure, line=1) {
+  const compiler=new ProcedureCompiler(procedure,module);
+  compiler.statement(text,line);
+  if(compiler.blocks.length||compiler.patches.length)throw new VBError('Expected a leaf statement',1002,module.name,line);
+  return compiler.code;
 }

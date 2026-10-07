@@ -1,3 +1,4 @@
+import './build-vbnet-migration.mjs';
 import {recordIdeArtifacts,verifyIdeArtifacts} from './ide-artifacts.mjs';
 import './theme-css.mjs';
 import {writeApplicationThemeTokens} from './application-theme-css.mjs';
