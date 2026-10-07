@@ -36,6 +36,8 @@ class NativeCaptions(unittest.TestCase):
  def setUp(self):
   self.context=self.browser.new_context(viewport={'width':1100,'height':800});self.context.set_default_timeout(8000);self.errors=[]
   self.context.on('page',lambda p:p.on('pageerror',lambda e:self.errors.append(str(e))))
+  self.document_requests=[]
+  self.context.on('request',lambda r:self.document_requests.append(r.url) if r.resource_type=='document' else None)
   self.page=self.context.new_page();path=ROOT/'reports/application-themes/fixtures/gallery.html'
   if MEMORY:self.page.set_content(path.read_text())
   else:self.page.goto(self.base+str(path.relative_to(ROOT)))
@@ -74,7 +76,11 @@ class NativeCaptions(unittest.TestCase):
   popup.wait_for_load_state('load')
   popup.wait_for_timeout(100)
   self.assertNotEqual(popup,self.page)
-  self.assertEqual(popup.url,'about:blank')
+  # document.open copies the entry document URL (HTML document-open step 12);
+  # it does not navigate or fetch that URL again. Verify both parts of that contract.
+  expected_url=self.page.url.split('#')[0]
+  self.assertEqual(popup.evaluate('document.URL'),expected_url)
+  self.assertEqual(self.document_requests,[] if MEMORY else [expected_url])
   self.assertEqual(popup.evaluate('document.compatMode'),'CSS1Compat')
   self.assertTrue(self.page.evaluate('''()=>{const f=nativeApp.forms[0],r=f.nativeWindow;
    return f.node.isConnected && f.node.ownerDocument===r.doc && r.doc===r.win.document && r.doc.defaultView.opener===window;
@@ -82,7 +88,7 @@ class NativeCaptions(unittest.TestCase):
   self.assertEqual(popup.locator('html').get_attribute('data-vb-theme'),'fluent-dark')
   popup.locator('[data-control="TextBox1"] input').fill('Still connected after navigation')
   self.assertEqual(self.page.evaluate('nativeApp.forms[0].controls.find(c=>c.model.name==="TextBox1").Text'),'Still connected after navigation')
-  self.record(stableDocumentAfterLoad=True,quirksMode=False,liveControlEvents=True)
+  self.record(stableDocumentAfterLoad=True,quirksMode=False,liveControlEvents=True,noExtraDocumentFetch=True)
  def test_theme_captions_and_native_client_dimensions(self):
   popup,options=self.native();self.assertEqual(options['captionMode'],'application')
   self.assertEqual(options['width'],408);self.assertEqual(options['height'],226)
