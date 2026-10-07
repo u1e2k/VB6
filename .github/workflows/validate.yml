@@ -34,6 +34,7 @@ jobs:
         run: |
           node tools/verify-x86-encodings.mjs
           node tools/test-x86-cpu.mjs
+          node tools/test-native-optimizer-cpu.mjs
       - name: Independently installed COM and Automation packages
         run: node tools/test-com-ole-packages.mjs
       - uses: actions/upload-artifact@v4
@@ -265,7 +266,7 @@ jobs:
         with:
           node-version: 22
       - name: Build self-checking native executables at every optimization level
-        run: node tools/win32-optimizer-fixtures.mjs
+        run: node tools/win32-speed-size-fixtures.mjs
       - name: Execute x86 compiler and assembler fixtures on Windows
         shell: pwsh
         run: ./tools/test-win32-optimizer.ps1

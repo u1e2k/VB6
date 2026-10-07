@@ -69,6 +69,18 @@ export function encodingCases(){
   add('movd xmm3,edx',x=>x.movd('xmm3','edx'));add('movd edx,xmm3',x=>x.movd('edx','xmm3'));
   add(`movd xmm7,${ms(32)}`,x=>x.movd('xmm7',m(32)));add(`movd ${ms(32)},xmm7`,x=>x.movd(m(32),'xmm7'));
   add('movq xmm2,xmm7',x=>x.movq('xmm2','xmm7'));add(`movq xmm2,${ms(64)}`,x=>x.movq('xmm2',m(64)));add(`movq ${ms(64)},xmm2`,x=>x.movq(m(64),'xmm2'));
+  // Compact accumulator, signed imm8 and one-byte register forms.
+  for(const [width,regs]of [[8,X86_REGISTERS.byte],[16,X86_REGISTERS.word],[32,X86_REGISTERS.gpr]]){
+    for(const reg of regs)for(const name of ['inc','dec'])add(`${name} ${reg}`,x=>x[name](reg));
+    const accumulator=regs[0],values=width===8?[-128,-1,0,1,127,128,255]:width===16?[-32768,-129,-128,-1,0,1,127,128,32767,65408,65535]:[-2147483648,-129,-128,-1,0,1,127,128,2147483647,4294967295];
+    for(const value of values)for(const name of ['add','sub','adc','sbb','and','or','xor','cmp','testOperand'])add(`${name==='testOperand'?'test':name} ${accumulator},${value}`,x=>x[name](accumulator,value));
+    if(width===16)for(const value of values)add(`imul cx,${ms(16)},${value}`,x=>x.imul('cx',m(16),value));
+  }
+  for(const [width,suffix]of [[8,'b'],[16,'w'],[32,'d']])for(const name of ['movs','cmps','stos','lods','scas']){
+    add(name+suffix,x=>x.stringInstruction(name,width));
+    for(const repeat of ['cmps','scas'].includes(name)?['repe','repne']:['rep'])add(`${repeat} ${name+suffix}`,x=>x.stringInstruction(name,width,repeat));
+  }
+  for(const [name,source]of [['std','std'],['cld','cld'],['stc','stc'],['clc','clc'],['cmc','cmc'],['pushFlags','pushfd'],['popFlags','popfd']])add(source,x=>x[name]());
   return cases;
 }
 function run(command,args){const result=spawnSync(command,args,{encoding:'utf8',maxBuffer:32*1024*1024});if(result.error||result.status!==0)throw new Error(`${command} failed: ${result.error?.message||result.stderr}`);return result.stdout;}
