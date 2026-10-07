@@ -344,7 +344,7 @@ class NativeCompiler {
         if (method === 'setfocus' && !args.length) { x.api('user32.dll','SetFocus',[this.controlHandleRef(object)]); return; }
         if (['ListBox','ComboBox'].includes(object.model?.type)) {
           const combo = object.model.type === 'ComboBox';
-          if (method === 'additem' && args.length === 1) { this.textExpression(args[0]); x.push().push(0).push(combo ? 0x143 : 0x180).push(this.controlHandleRef(object)).invoke('user32.dll','SendMessageW'); return; }
+          if (method === 'additem' && args.length === 1) { this.textExpression(args[0]); x.push().push(0).push(combo ? 0x143 : 0x180).push(this.controlHandleRef(object)).invoke('user32.dll','SendMessageW').test().branch('s','error:7'); return; }
           if (method === 'clear' && !args.length) { x.api('user32.dll','SendMessageW',[this.controlHandleRef(object),combo ? 0x14b : 0x184,0,0]); return; }
           if (method === 'removeitem' && args.length === 1) { this.numeric(args[0]); x.emit(0x89,0xc3).push(0).emit(0x53).push(combo ? 0x144 : 0x182).push(this.controlHandleRef(object)).invoke('user32.dll','SendMessageW').test().branch('s','error:5'); return; }
         }
