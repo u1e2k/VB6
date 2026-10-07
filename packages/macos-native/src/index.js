@@ -5,3 +5,8 @@ import {MACOS_CONTROLS,MACOS_API_SIGNATURES,resolveMacOSDeclaration,macOSControl
 import {inspectMachO} from './mach-o.js';
 import {importFiles} from '../../../src/project/formats.js';
 export {compileMacOS,cppText,createMacOSBuildKit,MACOS_TARGET,MacOSCompileError,macOSOptions,macOSInfoPlist,MACOS_CONTROLS,MACOS_API_SIGNATURES,resolveMacOSDeclaration,macOSControlReport,inspectMachO,importFiles};
+
+import {MacOSCompilerClient} from './client.js';
+import {verifyMacOSAppArchive,sha256Bytes} from './archive.js';
+import {MACOS_PROTOCOL,MACOS_LIMITS,macOSBridgeURL,normalizeMacOSBuildRequest} from './protocol.js';
+export {MacOSCompilerClient,verifyMacOSAppArchive,sha256Bytes,MACOS_PROTOCOL,MACOS_LIMITS,macOSBridgeURL,normalizeMacOSBuildRequest};
