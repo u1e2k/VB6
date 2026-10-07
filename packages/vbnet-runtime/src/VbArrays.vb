@@ -94,7 +94,7 @@ Namespace VB6.Compatibility
             For dimension = 0 To source.Rank - 1
                 indices(dimension) = source.GetLowerBound(dimension)
             Next
-            For element = 0 To source.Length - 1
+            For offset As Integer = 0 To source.Length - 1
                 Yield indices
                 For dimension = 0 To source.Rank - 1
                     If indices(dimension) < source.GetUpperBound(dimension) Then
