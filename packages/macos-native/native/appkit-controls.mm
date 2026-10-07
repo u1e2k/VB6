@@ -67,7 +67,7 @@ void MacControl::applyFont(){
   NSFontTraitMask traits=0;if(flag("fontbold"))traits|=NSBoldFontMask;if(flag("fontitalic"))traits|=NSItalicFontMask;
   if(traits)font=[NSFontManager.sharedFontManager convertFont:font toHaveTrait:traits];
   if([widget respondsToSelector:@selector(setFont:)])[(id)widget setFont:font];
-  if([widget isKindOfClass:NSTableView.class]){auto table=(NSTableView*)widget;for(NSTableColumn*c in table.tableColumns)c.dataCell.font=font;table.rowHeight=std::max(16.0,std::ceil(font.ascender-font.descender+5));}
+  if([widget isKindOfClass:NSTableView.class]){auto table=(NSTableView*)widget;for(NSTableColumn*c in table.tableColumns)[(NSCell*)c.dataCell setFont:font];table.rowHeight=std::max(16.0,std::ceil(font.ascender-font.descender+5));}
 }
 static NSTextView* textView(MacControl&c){return [c.widget isKindOfClass:NSTextView.class]?(NSTextView*)c.widget:nil;}
 static NSTextField* textField(MacControl&c){return [c.widget isKindOfClass:NSTextField.class]?(NSTextField*)c.widget:nil;}

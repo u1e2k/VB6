@@ -92,7 +92,7 @@ void MacHost::attach(Runtime&rt){runtime=&rt;}
 void MacHost::ensureApplication(){
   if(!NSThread.isMainThread)fail(5,"AppKit must be accessed on the main thread");if(initialized)return;
   [NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];applicationDelegate=[VB6ApplicationDelegate new];applicationDelegate->host=this;NSApp.delegate=applicationDelegate;
-  auto menu=[NSMenu new];auto root=[[NSMenuItem alloc]initWithTitle:@""action:nil keyEquivalent:@""];auto app=[NSMenu new];
+  auto menu=[NSMenu new];auto root=[[NSMenuItem alloc]initWithTitle:@"" action:nil keyEquivalent:@""];auto app=[NSMenu new];
   auto quit=[[NSMenuItem alloc]initWithTitle:[@"Quit " stringByAppendingString:ns(fromUTF8(runtime->name))]action:@selector(terminate:)keyEquivalent:@"q"];[app addItem:quit];root.submenu=app;[menu addItem:root];NSApp.mainMenu=menu;
   initialized=true;MacHost*pointer=this;
   auto mask=NSEventMaskKeyDown|NSEventMaskKeyUp|NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp|NSEventMaskRightMouseDown|NSEventMaskRightMouseUp|NSEventMaskOtherMouseDown|NSEventMaskOtherMouseUp|NSEventMaskMouseMoved|NSEventMaskLeftMouseDragged|NSEventMaskRightMouseDragged|NSEventMaskOtherMouseDragged;
@@ -288,7 +288,7 @@ Value MacHost::dialog(MacControl&control,const std::string&name){
     Text filename=text(panel.URL.path);if(name=="showopen"&&((NSOpenPanel*)panel).allowsMultipleSelection&&((NSOpenPanel*)panel).URLs.count>1){auto urls=((NSOpenPanel*)panel).URLs;filename=text(((NSURL*)urls.firstObject).URLByDeletingLastPathComponent.path);for(NSURL*url in urls){filename+=u'\0';filename+=text(url.lastPathComponent);}}
     control.properties["filename"]=Value::string(filename);control.properties["filetitle"]=Value::string(text(panel.URL.lastPathComponent));return {};
   }
-  if(name=="showprinter"){auto info=[NSPrintInfo.sharedPrintInfo copy];auto result=[NSPrintPanel.printPanel runModalWithPrintInfo:info];check();if(result!=NSModalResponseOK&&control.flag("cancelerror"))fail(32755);return {};}
+  if(name=="showprinter"){NSPrintInfo*info=[NSPrintInfo.sharedPrintInfo copy];auto result=[NSPrintPanel.printPanel runModalWithPrintInfo:info];check();if(result!=NSModalResponseOK&&control.flag("cancelerror"))fail(32755);return {};}
   if(name=="showcolor"){
     NSAlert*alert=[NSAlert new];alert.messageText=@"Color";[alert addButtonWithTitle:@"OK"];[alert addButtonWithTitle:@"Cancel"];
     NSColorWell*well=[[NSColorWell alloc]initWithFrame:NSMakeRect(0,0,240,80)];well.color=color(int64_t(control.number("color",0)));alert.accessoryView=well;
