@@ -89,6 +89,40 @@ with sync_playwright() as pw:
             page.set_content((ROOT/'dist/VB6-Studio-Web.html').read_text())
         else: page.goto(ORIGIN+'/')
         page.wait_for_function('!!globalThis.vb6Studio?.classicExportInstalled')
+        def save_archive(label, source_page=page):
+            snapshot=source_page.evaluate('JSON.stringify(vb6Studio.project)')
+            source_page.evaluate('void vb6Studio.command("exportClassic")')
+            with source_page.expect_download() as downloaded:
+                source_page.get_by_role('button',name='Download Build Archive',exact=True).click()
+            target=OUT/(label+'-build.zip');downloaded.value.save_as(target)
+            with zipfile.ZipFile(target) as zipped:
+                check(label+' ZIP preserves exact project bytes and valid checksums',zipped.testzip() is None and zipped.read('project.vb6web').decode()==snapshot)
+                manifest=json.loads(zipped.read('classic-build.json'))
+                check(label+' ZIP records explicit uncompiled readiness',manifest['compiled'] is False and isinstance(manifest['buildable'],bool))
+            check(label+' leaves a visible connected download link',source_page.get_by_role('link',name='Save ZIP: '+downloaded.value.suggested_filename,exact=True).is_visible())
+            check(label+' does not mutate the project',source_page.evaluate('JSON.stringify(vb6Studio.project)')==snapshot)
+            return target,manifest
+        # Do not replace the shipped starter with a blank project before testing.
+        starter,manifest=save_archive('starter')
+        check('starter archive clearly reports native compilation blockers',manifest['buildable'] is False and any('StatusBar' in d['message'] for d in manifest['diagnostics']))
+        # Ignore the automatic click once to simulate a browser declining it;
+        # the retained, genuine user-click link must still download exact bytes.
+        page.evaluate('''() => {const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('-vb6-build.zip'))return;return click.call(this);};globalThis.restoreArchiveClick=()=>HTMLAnchorElement.prototype.click=click;}''')
+        page.get_by_role('button',name='Download Build Archive',exact=True).click()
+        with page.expect_download() as retried:page.get_by_role('link',name='Save ZIP:',exact=False).click()
+        retry=OUT/'starter-retry.zip';retried.value.save_as(retry)
+        with zipfile.ZipFile(starter) as a, zipfile.ZipFile(retry) as b:
+            check('visible link retries a suppressed automatic download without rebuilding data',a.namelist()==b.namelist() and all(a.read(n)==b.read(n) for n in a.namelist()))
+        page.evaluate('void restoreArchiveClick()')
+        page.get_by_label('Executable name',exact=True).focus();page.keyboard.press('Shift+Tab')
+        check('Save ZIP link is reachable inside the modal keyboard focus trap',page.evaluate('document.activeElement.matches("[data-classic-download] a[download]")'))
+        page.screenshot(path=str(OUT/'starter-archive-download.png'))
+        page.get_by_role('button',name='Cancel',exact=True).click()
+        for sample in page.evaluate('VB6StudioAPI.EXAMPLES.map(example=>example.id)'):
+            page.evaluate('id=>vb6Studio.loadProject(VB6StudioAPI.EXAMPLES.find(example=>example.id===id).create())',sample)
+            save_archive('sample-'+sample)
+            page.get_by_role('button',name='Cancel',exact=True).click()
+        check('all starter/sample archive downloads work without contacting a compiler',not requests and (not MEMORY or page.evaluate('__classicFixture.requests.length')==0))
         page.evaluate('vb6Studio.loadProject(VB6StudioAPI.newProject("RuntimeExport"))')
         check('AOT and Microsoft runtime commands remain independent',page.evaluate('vb6Studio.menu("File").some(i=>i?.id==="exportWin32"&&i.enabled)&&vb6Studio.menu("File").some(i=>i?.id==="exportClassic"&&i.enabled)'))
         before=page.evaluate('JSON.stringify(vb6Studio.project)')
@@ -106,6 +140,7 @@ with sync_playwright() as pw:
             script=OUT/'extracted-build.mjs';script.write_bytes(zipped.read('build.mjs'))
             check('UI archive build driver parses independently',subprocess.run(['node','--check',str(script)],capture_output=True).returncode==0)
         check('archive does not invoke bridge or edit project',not requests and before==page.evaluate('JSON.stringify(vb6Studio.project)'))
+        page.get_by_role('button',name='Cancel',exact=True).click()
         dialog();page.get_by_label('Compiler bridge token',exact=True).fill(TOKEN)
         with page.expect_download() as downloaded:page.get_by_role('button',name='Build EXE',exact=True).click()
         executable=OUT/'fixture-not-runnable.exe';downloaded.value.save_as(executable)
@@ -142,9 +177,22 @@ with sync_playwright() as pw:
         page.evaluate('vb6Studio.runState="running"')
         check('runtime export is disabled while executing',page.evaluate('!vb6Studio.menu("File").find(i=>i?.id==="exportClassic").enabled'))
         page.evaluate('vb6Studio.runState="design";vb6Studio.project.settings.anchoring=true')
-        dialog();count=len(downloads);page.get_by_role('button',name='Download Build Archive',exact=True).click()
-        check('unsupported extension stays visible and produces no lossy archive',page.get_by_role('dialog').get_by_role('status').inner_text().find('anchoring/auto-layout')>=0 and len(downloads)==count)
+        _archive,manifest=save_archive('browser-layout')
+        check('unsupported extension saves losslessly but remains blocked for compilation',manifest['buildable'] is False and page.get_by_role('dialog').get_by_role('status').inner_text().find('anchoring/auto-layout')>=0)
+        count=len(downloads);page.get_by_role('button',name='Build EXE',exact=True).click()
+        check('direct EXE still rejects unsupported layout',len(downloads)==count and page.get_by_role('dialog').get_by_role('status').inner_text().find('anchoring/auto-layout')>=0)
         page.get_by_role('button',name='Cancel',exact=True).click()
+        # File-origin ZIP saving uses no fetch/crypto adapter or compiler bridge.
+        if not MEMORY:
+            local=browser.new_page(accept_downloads=True,viewport={'width':1440,'height':1050})
+            local.on('pageerror',lambda error: errors.append(str(error)))
+            local.goto((ROOT/'dist/VB6-Studio-Web.html').as_uri())
+            local.wait_for_function('!!globalThis.vb6Studio?.classicExportInstalled')
+            save_archive('file-starter',local)
+            local.get_by_role('button',name='Cancel',exact=True).click()
+            local.evaluate('vb6Studio.loadProject(VB6StudioAPI.newProject("FileArchive"))')
+            save_archive('file-blank',local)
+            local.close()
         check('standalone IDE has no JavaScript errors',not errors)
     finally:
         (OUT/('browser-'+kind+'.json')).write_text(json.dumps({'browser':kind,'checks':checks,'errors':errors,'transport':'labelled in-memory fetch/SHA adapter' if MEMORY else 'HTTP origin and browser WebCrypto','compiler':'Synthetic protocol fixture only; no licensed compiler/runtime execution'},indent=2))
