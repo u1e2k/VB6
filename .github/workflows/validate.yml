@@ -32,6 +32,13 @@ jobs:
       - run: npm test
       - name: Verify checked IA-32 encodings against GNU assembler
         run: node tools/verify-x86-encodings.mjs
+      - name: Independently installed COM and Automation packages
+        run: node tools/test-com-ole-packages.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: com-ole-packages
+          path: artifacts/com-ole
+          retention-days: 7
       - name: Independently extracted layout package and labelled solver benchmarks
         run: |
           npm run pack:layout
@@ -93,6 +100,10 @@ jobs:
       - run: npm run build
       - run: python -m pip install playwright==1.57.0
       - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Portable COM/OLE source and bundled runtime contracts
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-com-ole-tests.py
       - name: Detached browser windows over HTTP and file origins
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -145,6 +156,7 @@ jobs:
             reports/layout
             reports/auto-layout
             reports/exporter
+            reports/com-ole
           if-no-files-found: ignore
           retention-days: 7
   win32-system-contracts:
@@ -200,6 +212,41 @@ jobs:
             reports/win32-system
             reports/layout/native
           retention-days: 7
+
+  native-com-ole:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x86, x64]
+    env:
+      VB6_COM_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Real system Automation and typed VARIANT regression
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-native.mjs
+      - name: Native COM identity, OLE data, advisories and compound files
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-com-ole.mjs
+      - name: Native OCX container and OLE contract fixtures
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-container-contracts.mjs
+      - name: Offline installed native package consumer
+        if: ${{ !cancelled() }}
+        run: node tools/test-com-ole-packages.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-com-ole-${{ matrix.architecture }}
+          path: reports/native-interop
+          if-no-files-found: warn
+          retention-days: 7
+
   native-compiler:
     runs-on: windows-latest
     timeout-minutes: 10
