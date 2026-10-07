@@ -284,6 +284,17 @@ jobs:
       - name: Execute x86 compiler and assembler fixtures on Windows
         shell: pwsh
         run: ./tools/test-win32-optimizer.ps1
+      - name: Build freestanding native control behavior fixtures
+        run: node tools/win32-control-fixtures.mjs
+      - name: Execute real HWND, input, font, file and GDI control assertions
+        shell: pwsh
+        run: ./tools/test-win32-controls.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-control-execution
+          path: reports/native-controls
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
