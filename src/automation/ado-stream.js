@@ -58,7 +58,7 @@ export class AdoStream {
     const value=decodeText(this.bytes.subarray(start,end),encoding,{ignoreBOM:true,preserveCodeUnits:true});
     return {value,end:Math.max(this.position,after)};
   }
-  ReadText(count=-1){const result=this.textSlice(count);this.position=result.end;return result.value;}
+  ReadText(count=-1){this.guard(1);if(this.type!==2)throw new VBError('ReadText requires a text stream',3219);count=int(count,-2,HTTP_LIMIT);if(this.position>=this.bytes.length&&count!==0)return null;const result=this.textSlice(count);this.position=result.end;return result.value;}
   SkipLine(){this.ReadText(-2);}
   WriteText(value,options=0){
     this.guard(2);if(this.type!==2)throw new VBError('WriteText requires a text stream',3219);options=int(options,0,1);if(typeof value!=='string')throw new VBError('Expected text',13);

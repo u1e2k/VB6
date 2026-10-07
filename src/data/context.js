@@ -72,6 +72,9 @@ export class DataContext {
     return environment;
   }
   install(vm){
+    if(vm.host.dataHttpAuthorize!==undefined){assertData(typeof vm.host.dataHttpAuthorize==='function','HTTP host policy must be a function');this.transport.authorize=vm.host.dataHttpAuthorize;}
+    if(vm.host.commonAutomation!==undefined)assertData(typeof vm.host.commonAutomation==='boolean','commonAutomation must be Boolean');
+    if(vm.host.commonAutomation===false){this.commonAutomation?.close();this.commonAutomation=null;}
     for(const [name,value]of Object.entries({...DATA_CONSTANTS,...RDO_CONSTANTS}))vm.library.set(name.toLowerCase(),value);
     const environment=this.environment();vm.library.set('dataenvironment1',environment);vm.library.set('dataenvironment',environment);
     const rdo=this.rdoEngine||(this.rdoEngine=new RDOEngine(this));vm.library.set('rdoengine',rdo);vm.library.set('rdoenvironments',rdo.rdoEnvironments);vm.library.set('rdoerrors',rdo.rdoErrors);vm.library.set('rdocreateenvironment',(...args)=>rdo.rdoCreateEnvironment(...args));

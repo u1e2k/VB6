@@ -1,3 +1,4 @@
+import {xmlObjectText} from './xml-dom.js';
 /** Fetch-backed MSXML/WinHTTP Automation. Synchronous VB calls await I/O without
  * blocking the browser thread. Native proxy/TLS/OS authentication is not emulated. */
 import {VBError} from '../language/errors.js';
@@ -57,11 +58,11 @@ export class HttpRequest {
   setRequestHeader(name,value){this.alive();if(this.state!==1||this.sent)throw new VBError('Set headers after open and before send',5);const [key,text]=httpHeader(name,value);if(this.kind==='winhttp')this.headers.set(key,text);else this.headers.append(key,text);}
   getResponseHeader(name){this.requireResponse(2);if(!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))throw new VBError('Invalid HTTP header name',5);if(/^set-cookie2?$/i.test(name))return '';return this.response.headers?.get(name)||'';}
   getAllResponseHeaders(){this.requireResponse(2);let result='';for(const [name,value]of this.response.headers||[])if(!/^set-cookie2?$/i.test(name))result+=name+': '+value+'\r\n';return result;}
-  setTimeouts(...values){this.alive();if(values.length!==4)throw new VBError('Four timeout values are required',450);this.timeouts=values.map(value=>int(value,0,600000));}
+  setTimeouts(...values){this.alive();if(values.length!==4)throw new VBError('Four timeout values are required',450);this.timeouts=values.map(value=>Math.max(0,int(value,this.kind==='winhttp'?-1:0,600000)));}
   send(body){
     this.alive();if(this.state!==1||this.sent)throw new VBError('Call open before each send',5);
     if(body===NOTHING||body===null)body=undefined;
-    if(body!==undefined&&typeof body!=='string')body=byteArray(body);
+    if(body!==undefined&&typeof body!=='string'){const xml=xmlObjectText(body);if(xml!==null){body=xml;if(!this.headers.has('content-type'))this.headers.set('Content-Type','application/xml; charset=utf-8');}else body=byteArray(body);}
     if(body!==undefined&&['GET','HEAD'].includes(this.method))throw new VBError('GET and HEAD cannot carry a request body',5);
     this.sent=true;this.controller=new AbortController();const epoch=this.epoch,controller=this.controller;
     const work=this.perform(body,epoch,controller);this.pending=work;work.catch(()=>{});return this.async?undefined:work;

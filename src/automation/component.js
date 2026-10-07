@@ -15,10 +15,10 @@ export function componentAdapter(object,metadata){
   const adapter={metadata,async invoke(name,mode,args){
     if(released)throw new VBError('Automation object has been released',91);
     const definition=metadata.members.find(m=>m.name===name);if(!definition||!definition.modes.includes(mode))throw new VBError('Member is not supported',438);
-    const values=args.map((v,i)=>{if(v===MISSING)return undefined;const type=mode===4||mode===8?definition.type:definition.params[i]?.type;return type&&type!=='Variant'?coerce(unbox(v),type):unbox(v);});let value;
+    const values=args.map((v,i)=>{if(v===MISSING)return undefined;const type=mode===4||mode===8?definition.type:definition.params[i]?.type;return type&&type!=='Variant'&&!type.includes('.')?coerce(unbox(v),type):unbox(v);});let value;
     if(mode===1)value=await object[name](...values);else if(mode===2)value=object[name];else {object[name]=values.at(-1);value=undefined;}
     value=await value;
-    if(mode!==4&&mode!==8&&['Byte','Integer','Long','Single','Double','Boolean','String','Date'].includes(definition.type))value=tagScalar(value,definition.type.toLowerCase());
+    if(value!==null&&value!==undefined&&mode!==4&&mode!==8&&['Byte','Integer','Long','Single','Double','Boolean','String','Date'].includes(definition.type))value=tagScalar(value,definition.type.toLowerCase());
     return {value,args};
   },release(){if(released)return;released=true;return object.dispose?.();}};
   adapter.invokeScalar=adapter.invoke;if(object.subscribe)adapter.subscribe=handler=>object.subscribe(handler);

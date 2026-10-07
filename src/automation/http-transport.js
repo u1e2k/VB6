@@ -22,11 +22,11 @@ export function abortable(work,signal){
 }
 export async function responseBytes(response,limit=HTTP_LIMIT,signal,onChunk){
   const length=Number(response.headers?.get('content-length')||0);
-  if(Number.isFinite(length)&&length>limit){await response.body?.cancel?.().catch(()=>{});throw new VBError('HTTP response exceeds the data limit',7);}
+  if(Number.isFinite(length)&&length>limit){response.body?.cancel?.().catch(()=>{});throw new VBError('HTTP response exceeds the data limit',7);}
   if(!response.body?.getReader){const bytes=response.arrayBuffer?new Uint8Array(await abortable(response.arrayBuffer(),signal)):new TextEncoder().encode(await abortable(response.text(),signal));if(bytes.length>limit)throw new VBError('HTTP response exceeds the data limit',7);return bytes;}
   const reader=response.body.getReader(),parts=[];let size=0;
   try{for(;;){const {done,value}=await abortable(reader.read(),signal);if(done)break;if(!(value instanceof Uint8Array))throw new VBError('Invalid response byte stream',13);size+=value.length;if(size>limit)throw new VBError('HTTP response exceeds the data limit',7);parts.push(value.slice());if(onChunk)await abortable(onChunk(value,size),signal);} }
-  catch(error){await reader.cancel().catch(()=>{});throw error;}
+  catch(error){reader.cancel().catch(()=>{});throw error;}
   finally{reader.releaseLock();}
   const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.length;}return bytes;
 }
@@ -55,7 +55,7 @@ export class HttpTransport {
       receive();if(onHeaders)await abortable(onHeaders(response),controller.signal);
       const bytes=await responseBytes(response,limit,controller.signal,async(...args)=>{receive();if(onChunk)await onChunk(...args);});
       if(controller.signal.aborted||this.closed)throw aborted(controller.signal);return {response,bytes,url:url.href};
-    }catch(error){if(response?.body&&!response.body.locked)await response.body.cancel().catch(()=>{});if(error instanceof VBError)throw error;if(controller.signal.aborted)throw aborted(controller.signal);throw new VBError('HTTP request failed. Check the connection, CORS/CSP policy and credentials.',-2147467259,'VB6.HTTP');}
+    }catch(error){if(response?.body&&!response.body.locked)response.body.cancel().catch(()=>{});if(error instanceof VBError)throw error;if(controller.signal.aborted)throw aborted(controller.signal);throw new VBError('HTTP request failed. Check the connection, CORS/CSP policy and credentials.',-2147467259,'VB6.HTTP');}
     finally{clearTimeout(phaseTimer);if(timer)clearTimeout(timer);signal?.removeEventListener('abort',cancel);this.pending.delete(controller);}
   }
   cancel(){for(const pending of this.pending)pending.abort();}

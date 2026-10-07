@@ -106,6 +106,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: python tools/browser-com-ole-tests.py
+      - name: Common HTTP, XML, ADO streams and DataEnvironment end-to-end contracts
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-common-automation-tests.py
       - name: Detached browser windows over HTTP and file origins
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -235,6 +239,9 @@ jobs:
       - name: Native and portable common HTTP and ADO Stream differential recipes
         if: ${{ !cancelled() }}
         run: node tools/interop/test-common-automation.mjs
+      - name: Real MSXML DOM identity, XPath, binary data and compiled enumeration
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-xml.mjs
       - name: Native COM identity, OLE data, advisories and compound files
         if: ${{ !cancelled() }}
         run: node tools/interop/test-com-ole.mjs
