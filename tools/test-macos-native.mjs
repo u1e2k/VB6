@@ -9,7 +9,7 @@ import {buildMacOSPackage} from './build-macos-native.mjs';
 import {runTool,writeBuildKit,buildNativeKit} from '../packages/macos-native/src/build-driver.mjs';
 import {conformanceProject} from '../packages/macos-native/tests/conformance.mjs';
 const root=path.resolve(import.meta.dirname,'..');buildMacOSPackage(root);
-const {compileMacOS,createMacOSBuildKit}=await import('../packages/macos-native/dist/index.js');
+const {compileMacOS,createMacOSBuildKit,MacOSCompilerClient,verifyMacOSAppArchive}=await import('../packages/macos-native/dist/index.js');
 const sdk=path.join(root,'packages/macos-native'),native=path.join(sdk,'native');
 const work=await fs.mkdtemp(path.join(os.tmpdir(),'vb6-native-test-'));
 let transcript='';
@@ -45,6 +45,37 @@ try {
     await run('/usr/bin/codesign',['--sign','-','--timestamp=none',ui]);
     assert.match(await run(ui,[],{timeout:30000}),/APPKIT_CONFORMANCE_OK/);report.checks.push('appkit-controls-events-api');
     const reused=await buildNativeKit(kitDir,{out:path.join(work,'reused'),cache,jobs:3,log});assert.equal(reused.cacheHit,true);report.checks.push('native-cache-reuse');
+    // Verify the exact signed bytes produced by ditto; do not repack the bundle.
+    const archive=await verifyMacOSAppArchive(new Uint8Array(await fs.readFile(built.zip)),kit.options);
+    assert.equal(archive.executableSha256,built.sha256);report.checks.push('signed-app-archive-contract');
+    const {createMacOSBridge}=await import('../packages/macos-native/src/bridge.mjs');
+    const origin='http://127.0.0.1:8080';let approvals=0;
+    const bridge=await createMacOSBridge({port:0,origins:[origin],cache,jobs:3,
+      authorize:async manifest=>{assert.equal(manifest.sourceSha256,report.sourceSha256);assert.equal(manifest.name,project.name);approvals++;return true;}});
+    const client=new MacOSCompilerClient((url,options)=>fetch(url,{...options,headers:{...options.headers,Origin:origin}}));
+    try {
+      await client.connect(bridge.url,bridge.token);
+      const response=await client.build(project);assert.equal(approvals,1);
+      const downloaded=path.join(work,'downloaded.app.zip'),expanded=path.join(work,'downloaded');
+      await fs.writeFile(downloaded,response.bytes);await fs.mkdir(expanded);
+      await run('/usr/bin/ditto',['-x','-k',downloaded,expanded]);
+      const app=path.join(expanded,kit.options.name+'.app'),executable=path.join(app,'Contents','MacOS',kit.options.name);
+      assert.equal(createHash('sha256').update(await fs.readFile(executable)).digest('hex'),response.report.executableSha256);
+      await run('/usr/bin/codesign',['--verify','--strict','--verbose=2',app]);
+      assert.match(await run(executable,[]),/NATIVE_CONFORMANCE_OK/);
+      report.bridge={sha256:response.report.sha256,executableSha256:response.report.executableSha256,signatureVerifiedByCodesign:true,executedOn:process.arch};
+      report.checks.push('real-approved-bridge-download-signature-execution');
+    } finally {client.disconnect();await bridge.close();}
+    // The reusable API must not delete its default output with its temporary kit.
+    const {buildMacOSProject}=await import('../packages/macos-native/src/node.mjs');
+    const apiCwd=path.join(work,'api-default-output');await fs.mkdir(apiCwd);
+    const previousCwd=process.cwd();let apiOutput;
+    try {process.chdir(apiCwd);apiOutput=await buildMacOSProject(project,{cache,jobs:3,zip:false});}
+    finally {process.chdir(previousCwd);}
+    assert.equal(apiOutput.app,path.join(apiCwd,'out',kit.options.name+'.app'));
+    assert.equal((await fs.stat(apiOutput.executable)).isFile(),true);
+    assert.match(await run(apiOutput.executable,[]),/NATIVE_CONFORMANCE_OK/);
+    report.checks.push('reusable-api-output-survives-source-cleanup');
     report.macOSExecutionVerified=true;report.build=built;
     const artifacts=path.join(root,'artifacts/macos-native');await fs.mkdir(artifacts,{recursive:true});
     await fs.copyFile(built.zip,path.join(artifacts,path.basename(built.zip)));

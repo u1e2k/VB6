@@ -32,3 +32,31 @@ jobs:
             reports/macos-native
             artifacts/macos-native
           retention-days: 7
+  browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: python -m pip install playwright==1.57.0
+      - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Native export UI, HTTP transport and file-origin source kits
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-macos-export-tests.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-export-${{ matrix.browser }}
+          path: reports/macos-export
+          retention-days: 7

@@ -4,9 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import {createMacOSBuildKit,importFiles} from '../dist/index.js';
 import {writeBuildKit,buildNativeKit} from './build-driver.mjs';
-export async function buildMacOSProject(project,{compiler={},...build}={}) {
+export async function buildMacOSProject(project,{compiler={},out=path.resolve('out'),...build}={}) {
   const kit=createMacOSBuildKit(project,compiler),temporary=await fs.mkdtemp(path.join(os.tmpdir(),'vb6-macos-'));
-  try {const dir=path.join(temporary,'kit');await writeBuildKit(dir,kit.files);return await buildNativeKit(dir,build);}
+  try {const dir=path.join(temporary,'kit');await writeBuildKit(dir,kit.files);return await buildNativeKit(dir,{...build,out:path.resolve(out)});}
   finally {await fs.rm(temporary,{recursive:true,force:true});}
 }
 export async function readMacOSProject(input) {
