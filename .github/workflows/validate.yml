@@ -340,11 +340,13 @@ jobs:
         env:
           DISPLAY_MODE: ${{ matrix.display }}
           REQUIRED_BACKEND: ${{ matrix.backend }}
-          # Select Dawn's software adapter without forcing Chromium's native
-          # compositor/raster onto experimental Vulkan. Both APIs still execute
-          # actual draws and must pass the unchanged framebuffer/pixel gates.
-          # https://chromium.googlesource.com/chromium/src/+/80eb7960c9f238670b58fc68b87d6a59af5c1241
-          RENDERING_BROWSER_FLAGS: --enable-gpu --ignore-gpu-blocklist --use-webgpu-adapter=swiftshader
+          # Software-driver correctness profile: use Vulkan presentation with
+          # no native Vulkan surface. Raster native HTML tiles on the CPU to
+          # avoid unstable fractional native control edges; the WebGPU/WebGL2
+          # painters, framebuffer readback and exact pixel gates still execute.
+          # These flags never ship in the IDE or physical-device measurements.
+          # https://github.com/vercel-labs/vgpu/issues/109
+          RENDERING_BROWSER_FLAGS: --enable-gpu --ignore-gpu-blocklist --enable-features=Vulkan --use-webgpu-adapter=swiftshader --disable-vulkan-surface --disable-gpu-rasterization
         run: |
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
