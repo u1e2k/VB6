@@ -4,8 +4,8 @@ Imports System
 Namespace VB6.Compatibility
     ''' <summary>Small address/bounds adapters for private shifted native vectors.</summary>
     Public Module VbNativeArrays
-        Public Function Index(index As Integer, lower As Integer, length As Integer) As Integer
-            Dim offset As Long = CLng(index) - CLng(lower)
+        Public Function Index(subscript As Integer, lower As Integer, length As Integer) As Integer
+            Dim offset As Long = CLng(subscript) - CLng(lower)
             If offset < 0 OrElse offset >= length Then Throw New IndexOutOfRangeException()
             Return CInt(offset)
         End Function

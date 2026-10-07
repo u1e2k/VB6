@@ -17,10 +17,10 @@ test('each runtime root compiles in isolation with only its declared dependency 
   if(spec.windows&&process.platform!=='win32')continue;
   const dir=path.join(root,feature);fs.mkdirSync(dir);
   for(const name of runtimeClosure([feature]))fs.writeFileSync(path.join(dir,name+'.vb'),RUNTIME_FEATURES[name].source);
-  fs.writeFileSync(path.join(dir,'Feature.vbproj'),'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>'+(spec.windows?'net10.0-windows':'net10.0')+'</TargetFramework><RootNamespace>Isolation</RootNamespace><OptionStrict>On</OptionStrict><OptionExplicit>On</OptionExplicit><OptionInfer>On</OptionInfer>'+(spec.windows?'<UseWindowsForms>true</UseWindowsForms>':'')+'</PropertyGroup></Project>');
+  fs.writeFileSync(path.join(dir,feature+'.vbproj'),'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>'+(spec.windows?'net10.0-windows':'net10.0')+'</TargetFramework><RootNamespace>Isolation</RootNamespace><OptionStrict>On</OptionStrict><OptionExplicit>On</OptionExplicit><OptionInfer>On</OptionInfer>'+(spec.windows?'<UseWindowsForms>true</UseWindowsForms>':'')+'</PropertyGroup></Project>');
   projects.push(feature);
  }
- fs.writeFileSync(path.join(root,'Features.slnx'),'<Solution>'+projects.map(name=>'<Project Path="'+name+'/Feature.vbproj" />').join('')+'</Solution>');
+ fs.writeFileSync(path.join(root,'Features.slnx'),'<Solution>'+projects.map(name=>'<Project Path="'+name+'/'+name+'.vbproj" />').join('')+'</Solution>');
  const args=['build','Features.slnx','--nologo','-v','minimal','--maxcpucount:2'];
  const result=spawnSync('dotnet',args,{cwd:root,encoding:'utf8',timeout:330000,maxBuffer:32*1024*1024,env:{...process.env,DOTNET_CLI_TELEMETRY_OPTOUT:'1',DOTNET_NOLOGO:'1'}});
  const report=path.resolve(import.meta.dirname,'../reports/vbnet-migration/dotnet');fs.mkdirSync(report,{recursive:true});

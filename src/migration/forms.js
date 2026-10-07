@@ -131,7 +131,7 @@ export function emitForm(state,module,path) {
       const adapter=eventAdapter(proc,event,control,context,adapters.length);
       if(!adapter)continue;
       if(adapter.lines.length)adapters.push(adapter);
-      writer.line('AddHandler '+(control.field==='Me'?'Me':'Me.'+identifier(control.field))+'.'+adapter.event+', AddressOf '+adapter.name);
+      writer.line('AddHandler '+(control.field==='Me'?'Me':'Me.'+identifier(control.field))+'.'+adapter.event+', '+(adapter.handler||'AddressOf '+adapter.name));
     }
   }
   writer.line('Me.ResumeLayout(False)');writer.line('Me.PerformLayout()');writer.close('End Sub');writer.line();
@@ -165,7 +165,9 @@ function eventAdapter(proc,event,control,context,index) {
   if(proc.params.length!==args.length){context.add('MIG_EVENT_SIGNATURE','Event signature does not match adapter: '+proc.name);return null;}
   if(['keydown','keyup'].includes(k))context.runtime('VbForms.ShiftState');
   if(['mousedown','mouseup','mousemove'].includes(k)){context.runtime('VbForms.ShiftState');context.runtime('VbForms.MouseButton');context.runtime('VbForms.PixelsToTwips');}
-  if(context.options.codeStyle==='native'&&!args.length&&!before.length&&!after.length)return {name:identifier(proc.name),event:netEvent,lines:[]};
+  // Dropping EventHandler parameters with AddressOf is narrowing under Option
+  // Strict On. A typed inline Sub keeps the original handler and strict designer.
+  if(context.options.codeStyle==='native'&&!args.length&&!before.length&&!after.length)return {handler:'Sub(sender As Object, e As '+type+') '+identifier(proc.name)+'()',event:netEvent,lines:[]};
   lines.push('Private Sub '+name+'(sender As Object, e As '+type+')',...before.map(l=>'    '+l),'    '+identifier(proc.name)+'('+args.join(', ')+')',...after.map(l=>'    '+l),'End Sub');
   return {name,event:netEvent,lines};
 }

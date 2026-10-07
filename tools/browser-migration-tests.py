@@ -106,7 +106,7 @@ try:
             check(report['success'] and report['runtime']['features'] == [], 'Simple form retained compatibility support')
             check(not any(p.startswith('VB6.Compatibility') or p.startswith('Application/Compatibility/') for p in z.namelist()), 'Runtime-free archive includes support')
             designer = z.read('Application/MainForm.Designer.vb').decode()
-            check('AddressOf RunButton_Click' in designer and '__vbEvent' not in designer, 'Simple event adapters were not removed')
+            check('Sub(sender As Object, e As EventArgs) RunButton_Click()' in designer and '__vbEvent' not in designer, 'Simple event adapters were not removed')
             check('ProjectReference' not in z.read('Application/MigrationForms.vbproj').decode(), 'Unused project reference remains')
         results.append({'case': 'native-runtime-free-menu-download', 'passed': True})
         page.evaluate('project => {vb6Studio.loadProject(project); vb6Studio.project.modules[0].code += "\\nPrivate Function Amount() As Currency\\nAmount=CCur(1.23456)\\nEnd Function";}', fixture)

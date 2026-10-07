@@ -58,9 +58,9 @@ test('scalar Variant specialization requires homogeneous writes dominating every
   const q=good(convert(procedure(body)));assert.match(code(q),/value As Object/);assert.equal(q.report.representations.some(d=>d.kind==='variant'),false);
  }
 });
-test('simple forms use direct ownership, framework colors and relaxed event handlers',()=>{
+test('simple forms use direct ownership, framework colors and strict typed event lambdas',()=>{
  const r=good(convert(formProject()));assert.deepEqual(r.report.runtime.features,[]);assert.match(r.files['Application/__vbEntry.vb'],/Application.Run\(New MainForm\(\)\)/);
- const d=r.files['Application/MainForm.Designer.vb'];assert.match(d,/AddressOf RunButton_Click/);assert.doesNotMatch(d,/__vbEvent|__vbTips|__vbComponents|VbForms/);
+ const d=r.files['Application/MainForm.Designer.vb'];assert.match(d,/Sub\(sender As Object, e As EventArgs\) RunButton_Click\(\)/);assert.doesNotMatch(d,/__vbEvent|__vbTips|__vbComponents|VbForms/);
 });
 test('default instance use retains lifecycle support, without dragging in core arrays',()=>{
  const p=formProject();p.modules[0].code+='\nPrivate Sub More()\nMainForm.Hide\nEnd Sub';

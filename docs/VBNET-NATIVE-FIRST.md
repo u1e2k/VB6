@@ -199,13 +199,15 @@ so short-circuit range matching cannot suppress an observable endpoint call.
 A function consisting of one executable assignment to its result, without reading
 that result first, can emit a direct `Return`. General function-result assignment
 is not converted to an early exit. Other control flow keeps its result variable.
-Native console startup uses the original Main directly instead of an extra
-entry/forwarder pair. A simple single-form startup without observable default
+Native console startup uses an accessible public Main directly instead of an
+extra entry/forwarder pair. Private Main retains its visibility and an in-module
+forwarder because the VB.NET startup method must be accessible. A simple single-form startup without observable default
 instance use can construct its form directly. Other form lifetime cases retain
 required support and diagnostics.
 
-Parameterless events can use `AddressOf OriginalHandler` through VB.NET relaxed
-delegate conversion. Mouse/key/cancel/indexed-control events keep their adapters.
+Parameterless events use typed inline `Sub` lambdas calling the original handler.
+This avoids narrowing parameter-dropping `AddressOf` conversions under the
+designer's `Option Strict On`. Mouse/key/cancel/indexed-control events keep their adapters.
 Unused tooltip/component/disposal scaffolding is omitted only when no control
 needs it. WinForms designer construction remains standard editable source.
 

@@ -49,7 +49,9 @@ function singleProject(project,options,plugins,compile) {
   const state={project,compiled,target,options,plugins,diagnostics,interfaces,files,sourceMap,modernization:[]};state.entry=selectEntry(state);
   state.runtimePlan=createRuntimePlan(options,diagnostics);
   state.requireRuntime=(feature,location={},reason)=>state.runtimePlan.require(feature,location,reason);
-  state.directEntry=options.codeStyle==='native'&&target==='console'&&state.entry?.kind==='main';
+  // VB.NET requires an accessible startup method. Keep the original private
+  // Main and its in-module forwarding entry rather than changing source visibility.
+  state.directEntry=options.codeStyle==='native'&&target==='console'&&state.entry?.kind==='main'&&compiled.modules.get(key(state.entry.module)).procedures.get('main').scope==='public';
   if(target==='winforms'&&state.entry?.kind==='main')diagnostics.push(diagnostic('MIG_MAIN_FORM_LIFETIME','Sub Main starts a WinForms loop around the first open form; review multi-form application shutdown semantics.'));
 
   invokeAll(plugins,'analyze',project,state);
