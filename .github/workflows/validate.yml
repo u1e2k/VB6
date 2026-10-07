@@ -315,23 +315,15 @@ jobs:
           from playwright.sync_api import sync_playwright
           with sync_playwright() as p: print('CHROMIUM_PATH=' + p.chromium.executable_path)
           PY
-      - name: Investigate native tile and designer isolation independently
-        if: matrix.backend == 'webgpu' && matrix.display == 'headless'
-        env:
-          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist --disable-gpu-rasterization
-        run: xvfb-run -a python tools/browser-rendering-diagnostics.py
       - name: Actual GPU API execution and exact theme pixels
         env:
           DISPLAY_MODE: ${{ matrix.display }}
           REQUIRED_BACKEND: ${{ matrix.backend }}
-          # CPU rasterization applies only to Chromium's native HTML tiles.
-          # The independent Dawn/WebGPU and ANGLE/WebGL2 painters still execute
-          # and must pass every direct framebuffer/presentation assertion.
-          # Chromium 143 alternated 42 native scrollbar edge pixels at DPR 1.25
-          # before any renderer overlay existed. Keep the fixed zero-pixel oracle;
-          # do not hide scrollbars, mask regions or retry until an image matches.
-          # https://chromium.googlesource.com/chromium/src/+/main/gpu/config/gpu_switches.cc
-          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist --disable-gpu-rasterization
+          # Select Dawn's software adapter without forcing Chromium's native
+          # compositor/raster onto experimental Vulkan. Both APIs still execute
+          # actual draws and must pass the unchanged framebuffer/pixel gates.
+          # https://chromium.googlesource.com/chromium/src/+/80eb7960c9f238670b58fc68b87d6a59af5c1241
+          RENDERING_BROWSER_FLAGS: --enable-gpu --ignore-gpu-blocklist --use-webgpu-adapter=swiftshader
         run: |
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
