@@ -143,7 +143,7 @@ export const nativeRecordMethods={
     if(variable.nativeArray||variable.recordFieldArray)this.fail(name+' requires a scalar or record, not a whole array');
     const size=variable.nativeRecord?(name==='lenb'?variable.nativeRecord.size:variable.nativeRecord.fileSize):scalarBytes[key(variable.type)];
     if(!size)return false;
-    if(variable.recordOf||variable.elementOf||variable.nativeWithAddress||variable.owner?.form){const pin=this.address(variable);this.releaseArrayPin(pin);}
+    if(variable.recordOf||variable.elementOf||variable.nativeWithActive||variable.owner?.form){const pin=this.address(variable);this.releaseArrayPin(pin);}
     this.x.value(size);return true;
   }
 };

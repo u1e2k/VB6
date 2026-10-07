@@ -9,8 +9,8 @@ import {compileWin32} from '../src/native/compiler.js';
 import {nativeLanguageFixture} from './fixtures/native-language.mjs';
 
 test('GoSub CLI budgets are validated before any file build',()=>{
-  for(const n of [1,8,1024,16384])assert.equal(parseWin32Options(['--max-gosub-depth',String(n)]).maxGoSubDepth,n);
-  for(const n of ['0','-1','1.5','16385','NaN','Infinity','9007199254740993','1e2','0x10'])assert.throws(()=>parseWin32Options(['--max-gosub-depth',n]),/GoSubDepth|gosub-depth/);
+  for(const n of [1,8,1024,65536])assert.equal(parseWin32Options(['--max-gosub-depth',String(n)]).maxGoSubDepth,n);
+  for(const n of ['0','-1','1.5','65537','NaN','Infinity','9007199254740993','1e2','0x10'])assert.throws(()=>parseWin32Options(['--max-gosub-depth',n]),/GoSubDepth|gosub-depth/);
   assert.throws(()=>parseWin32Options(['--max-gosub-depth']),/Missing/);
   for(const key of ['constructor','toString','__proto__'])assert.throws(()=>parseWin32Options([key,'ignored']),/Unknown/);
 });

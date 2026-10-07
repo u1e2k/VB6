@@ -1,3 +1,4 @@
+import {createCommonAutomationRegistry} from '../automation/common-objects.js';
 import {HttpTransport} from '../automation/http-transport.js';
 import {httpCommandOptions} from './service-definitions.js';
 import {RDOEngine,RDOConnection,RDOQuery,RDO_CONSTANTS} from './rdo.js';
@@ -15,16 +16,19 @@ export class DataContext {
     this.config=normalizeDataSources(project.dataSources);this.fs=options.fs||new VirtualFileSystem(project.vfs);this.persist=options.persist;
     this.fetch=options.fetch||globalThis.fetch?.bind(globalThis);this.credentialProvider=options.credentialProvider;this.transport=new HttpTransport({fetch:(...args)=>this.fetch(...args),authorize:options.httpAuthorize});
     this.providers=new Map([['sqlite',SQLiteProvider],['rest',HTTPProvider],['odata',HTTPProvider],['graphql',HTTPProvider],['gateway',GatewayProvider],['json',FileDataProvider],['csv',FileDataProvider]]);
+    this.commonAutomation=options.commonAutomation===false?null:createCommonAutomationRegistry({transport:this.transport,fs:this.fs,parseXML:options.parseXML}).createSession();
     this.databases=new Map();this.connections=new Set();this.credentials=new Map();this.closed=false;
   }
   connection(){return new ADOConnection(this);}
   command(){return new ADOCommand(this);}
   async credential(name){
+    assertData(!this.closed,'Data context is closed',3704);
     if(this.credentials.has(name))return this.credentials.get(name);
-    const value=await this.credentialProvider?.(name);assertData(value,'A runtime credential is required: '+name,70);this.credentials.set(name,value);return value;
+    const value=await this.credentialProvider?.(name);assertData(!this.closed,'Data context is closed',3704);assertData(value,'A runtime credential is required: '+name,70);this.credentials.set(name,value);return value;
   }
   isObjectType(name){return /^(?:ADODB\.(?:Connection|Command|Recordset|Parameter)|DAO\.(?:DBEngine|Workspace|Database|Recordset|QueryDef|TableDef|Index|Field|Parameter)|(?:RDO\.)?rdo(?:Engine|Connection|Environment|Query|Resultset|Parameter|Column|Table)|VB6\.Data\.(?:Connection|Command))$/i.test(String(name));}
   createObject(name){
+    if(this.commonAutomation?.has(name))return this.commonAutomation.create(name);
     switch(String(name).toLowerCase()){
       case 'rdo.rdoengine':case 'rdoengine':return new RDOEngine(this);
       case 'rdo.rdoconnection':case 'rdoconnection':return new RDOConnection(this,(this.rdoEngine||(this.rdoEngine=new RDOEngine(this))).rdoEnvironments.Item(0));
@@ -65,7 +69,7 @@ export class DataContext {
   close(){
     if(this.closing)return this.closing;
     this.closed=true;this.transport.cancel();
-    const work=[...this.connections].map(cn=>cn.Close());
+    const work=[...this.connections].map(cn=>cn.Close());work.push(this.commonAutomation?.close());
     return this.closing=Promise.allSettled(work).finally(()=>{this.transport.close();this.credentials.clear();});
   }
 }

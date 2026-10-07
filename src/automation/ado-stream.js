@@ -4,7 +4,8 @@ import {method,property,parameter as p,int,byteArray,vbBytes,componentAdapter} f
 import {HTTP_LIMIT} from './http-transport.js';
 import {charset,bom,encodeText,decodeText} from './text-codec.js';
 const streams=new WeakMap();
-export const STREAM_CONSTANTS=Object.freeze({adTypeBinary:1,adTypeText:2,adReadAll:-1,adReadLine:-2,adWriteChar:0,adWriteLine:1,adSaveCreateNotExist:1,adSaveCreateOverWrite:2,adCR:13,adLF:10,adCRLF:-1,adOpenStreamUnspecified:-1,adOpenStreamFromRecord:4,adOpenStreamAsync:1});
+import {STREAM_CONSTANTS} from './constants.js';
+export {STREAM_CONSTANTS};
 export const STREAM_METADATA=Object.freeze({name:'ADODB.Stream',members:[
   property('Type','Long',true),property('Charset','String',true),property('Mode','Long',true),property('LineSeparator','Long',true),property('Position','Long',true),property('Size','Long'),property('State','Long'),property('EOS','Boolean'),
   method('Open',[p('Source','Variant',true),p('Mode','Long',true),p('OpenOptions','Long',true),p('UserName','String',true),p('Password','String',true)]),method('Close'),method('Cancel'),method('Flush'),method('SetEOS'),method('SkipLine'),
@@ -63,4 +64,4 @@ export class AdoStream {
   SaveToFile(name,options=1){this.guard();if(!this.fs)throw new VBError('No virtual filesystem is installed',429);options=int(options,1,2);name=String(name);if(options===1&&this.fs.exists(name))throw new VBError('File already exists',58);this.fs.writeBytes(name,this.bytes);this.position=0;}
   dispose(){this.Close();}
 }
-export function streamAdapter(session,options){const stream=new AdoStream(options),adapter=componentAdapter(stream,STREAM_METADATA),proxy=session.adopt(adapter);streams.set(proxy,stream);return {adapter,proxy,stream};}
+export function streamAdapter(session,options){const stream=new AdoStream(options),adapter=componentAdapter(stream,STREAM_METADATA);try{const proxy=session.adopt(adapter);streams.set(proxy,stream);return {adapter,proxy,stream};}catch(error){adapter.release();throw error;}}
