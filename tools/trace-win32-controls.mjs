@@ -23,6 +23,7 @@ export function traceControlFixture(project){
     if(line.includes('Pages.Tabs.Count=3'))values.push('NativeTrace "Tabs=" & CStr(Pages.Tabs.Count) & "," & CStr(Strip.Tabs.Count)');
     if(line.includes('Drives.ListCount>0'))values.push('NativeTrace "Drives=" & CStr(Drives.ListCount)');
     if(line.includes('Left$(s,5)='))values.push('NativeTrace "RTF length=" & CStr(Len(s)) & ", prefix=" & Left$(s,48)', 'If Len(s)>0 Then NativeTrace "First UTF16=" & CStr(AscW(Left$(s,1)))');
+    if(line.includes('Rich.Text=Plain.Text'))values.push('NativeTrace "RTF=" & s','NativeTrace "Actual=" & Rich.Text & ", expected=" & Plain.Text','NativeTrace "Lengths=" & CStr(Len(Rich.Text)) & "," & CStr(Len(Plain.Text))');
     return [marker,...values,line];
   }).join('\n').replace('Option Explicit','Option Explicit\n'+api)+'\n'+routine+'\n';
   return copy;

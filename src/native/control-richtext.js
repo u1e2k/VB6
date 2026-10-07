@@ -2,7 +2,8 @@
  * never jump across Windows frames into a suspended VB error handler.
  * https://learn.microsoft.com/en-us/windows/win32/controls/em-streamin
  * https://learn.microsoft.com/en-us/windows/win32/controls/em-streamout
- * RTF input uses explicit UTF-8. Output uses standard escaped 7-bit RTF,
+ * Literal Unicode input uses UTF-8; ASCII RTF retains its own code pages.
+ * Output uses standard escaped 7-bit RTF,
  * not the UTF-8-specific URTF dialect; ASCII output is also valid UTF-8.
  * Independent Windows implementation reference (no source copied):
  * https://github.com/wxWidgets/wxWidgets/blob/master/src/msw/textctrl.cpp
@@ -55,6 +56,14 @@ export const nativeRichTextMethods={
     const features=this.nativeRichTextFeatures;if(!features?.size)return;
     const x=this.x;
     if(features.has('set')){
+      // Do not override font/ANSI code pages in ordinary ASCII RTF: the
+      // document may contain \'hh escapes using several native font charsets.
+      // Only raw non-ASCII UTF-8 bytes require SF_USECODEPAGE. Scan the counted
+      // buffer, not a NUL-terminated view; do not read beyond the input length.
+      const scan=x.unique(),utf8=x.unique(),flagsDone=x.unique();
+      x.label(R+'input-flags').enter().value(arg(12)).emit(0x89,0xc1).value(arg(8)).emit(0x89,0xc2).value(2).emit(0x85,0xc9).branch('e',flagsDone);
+      x.label(scan).emit(0xf6,0x02,0x80).branch('ne',utf8).emit(0x42,0x49).branch('ne',scan).jump(flagsDone);
+      x.label(utf8).value(UTF8_RTF).label(flagsDone).leave(8);
       const bounded=x.unique(),bad=x.unique();
       x.label(R+'read-memory').enter().value(arg(20)).emit(0xc7,0x00,0,0,0,0).value(arg(16)).test().branch('s',bad).emit(0x89,0xc1).value(arg(8)).emit(0x89,0xc3,0x3b,0x4b,4).branch('be',bounded).emit(0x8b,0x4b,4).label(bounded);
       x.value(arg(20)).emit(0x89,0x08,0x29,0x4b,4,0x8b,0x33,0x01,0x0b).value(arg(12)).emit(0x89,0xc7,0xfc,0xf3,0xa4).value(0).leave(16);
@@ -63,7 +72,9 @@ export const nativeRichTextMethods={
         x.label(R+(selection?'set-selection':'set')).enter(20);
         x.value(arg(12));save(x,-8);x.value(arg(16));save(x,-4);
         x.local(-8);save(x,-20);x.value(0);save(x,-16);x.value(R+'read-memory');save(x,-12);
-        x.local(-20).push().push((UTF8_RTF|(selection?0x8000:0))>>>0).push(0x449).push(arg(8)).invoke(U,'SendMessageW');
+        x.push(arg(16)).push(arg(12)).call(R+'input-flags');
+        if(selection)x.emit(0x0d).imm(0x8000);
+        x.emit(0x89,0xc3).local(-20).push().emit(0x53).push(0x449).push(arg(8)).invoke(U,'SendMessageW');
         x.value(arg(-16)).test().branch('ne','error:5').value(0).leave(12);
       }
     }

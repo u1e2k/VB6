@@ -226,6 +226,10 @@ export function richTextControlFixture(){
   check('Rich.Text=Plain.Text','TextRTF round-trips BMP and supplementary Unicode through standard RTF');
   add('Rich.SelStart=0\nRich.SelLength=Len(Rich.Text)\ns=Rich.SelRTF\nRich.Text=""\nRich.SelRTF=s');
   check('Rich.Text=Plain.Text','SelRTF round-trips the full Unicode selection through standard RTF');
+  add("Rich.TextRTF=\"{\\rtf1\\ansi\\ansicpg1252 {\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}}\\f0 Caf\\'e9}\"");
+  check('Rich.Text="Caf" & ChrW$(233)','ASCII RTF hex escapes retain the declared native font code page');
+  add('Rich.TextRTF="{\\rtf1\\ansi " & Plain.Text & "}"');
+  check('Rich.Text=Plain.Text','literal Unicode String RTF still uses explicit UTF-8 input');
   return finish(`Private Type NMHDR
  hwnd As Long
  id As Long
