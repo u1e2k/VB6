@@ -306,7 +306,14 @@ jobs:
         env:
           DISPLAY_MODE: ${{ matrix.display }}
           REQUIRED_BACKEND: ${{ matrix.backend }}
-          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist
+          # CPU rasterization applies only to Chromium's native HTML tiles.
+          # The independent Dawn/WebGPU and ANGLE/WebGL2 painters still execute
+          # and must pass every direct framebuffer/presentation assertion.
+          # Chromium 143 alternated 42 native scrollbar edge pixels at DPR 1.25
+          # before any renderer overlay existed. Keep the fixed zero-pixel oracle;
+          # do not hide scrollbars, mask regions or retry until an image matches.
+          # https://chromium.googlesource.com/chromium/src/+/main/gpu/config/gpu_switches.cc
+          RENDERING_BROWSER_FLAGS: --enable-gpu --enable-features=Vulkan --ignore-gpu-blocklist --disable-gpu-rasterization
         run: |
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
