@@ -6,10 +6,10 @@ export const method=(name,params=[],type='Variant')=>Object.freeze({name,params,
 export const property=(name,type='Variant',writable=false)=>Object.freeze({name,params:[],modes:writable?[2,4]:[2],type});
 export function int(value,min=0,max=2147483647){value=Number(unbox(value));if(!Number.isInteger(value)||value<min||value>max)throw new VBError('Invalid procedure call or argument',5);return value;}
 export function byteArray(value){
-  if(value instanceof VBArray){if(value.bounds.length!==1||value.type.toLowerCase()!=='byte')throw new VBError('Expected a one-dimensional Byte array',13);value=Uint8Array.from(value.data.map(unbox));}
+  if(value instanceof VBArray){if(value.bounds.length!==1||value.type.toLowerCase()!=='byte')throw new VBError('Expected a one-dimensional Byte array',13);const values=value.data.map(unbox);if(values.some(v=>!Number.isInteger(v)||v<0||v>255))throw new VBError('Invalid Byte array element',13);value=Uint8Array.from(values);}
   if(!(value instanceof Uint8Array))throw new VBError('Expected binary byte data',13);return value.slice();
 }
-export function vbBytes(bytes){const array=new VBArray([[0,bytes.length-1]],'Byte');array.data=Array.from(bytes);return array;}
+export function vbBytes(bytes){if(!(bytes instanceof Uint8Array))throw new VBError('Expected bytes',13);if(bytes.length>1000000)throw new VBError('Byte array exceeds the runtime element limit',7);const array=new VBArray([],'Byte');array.bounds=[[0,bytes.length-1]];array.data=Array.from(bytes);return array;}
 export function componentAdapter(object,metadata){
   let released=false;
   const adapter={metadata,async invoke(name,mode,args){

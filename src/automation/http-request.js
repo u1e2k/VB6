@@ -41,8 +41,9 @@ export class HttpRequest {
   set onreadystatechange(value){if(value!==NOTHING&&value!==null&&typeof value!=='function')throw new VBError('Use WithEvents or a host callback for onreadystatechange',13);this.callback=value===NOTHING?null:value;}
   subscribe(listener){this.alive();if(typeof listener!=='function'||this.listeners.size>=256)throw new TypeError('Invalid or excessive HTTP event listener');this.listeners.add(listener);return ()=>this.listeners.delete(listener);}
   async emit(name,args=[],reentrant=false){
-    const tasks=[];for(const listener of [...this.listeners])if(this.listeners.has(listener))tasks.push(Promise.resolve().then(()=>listener(name,args,{reentrant})));
-    if(name==='onreadystatechange'&&this.callback)tasks.push(Promise.resolve().then(()=>this.callback()));
+    const epoch=this.epoch,callback=this.callback,current=()=>!this.disposed&&epoch===this.epoch;
+    const tasks=[];for(const listener of [...this.listeners])tasks.push(Promise.resolve().then(()=>current()&&this.listeners.has(listener)?listener(name,args,{reentrant}):undefined));
+    if(name==='onreadystatechange'&&callback)tasks.push(Promise.resolve().then(()=>current()&&this.callback===callback?callback():undefined));
     const report=Promise.allSettled(tasks).then(results=>{for(const r of results)if(r.status==='rejected'){if(this.eventErrors.length===16)this.eventErrors.shift();this.eventErrors.push(r.reason);}});
     if(reentrant)await report;else report.catch(()=>{});
   }
@@ -53,7 +54,7 @@ export class HttpRequest {
     const endpoint=httpURL(url);if(user||password)unsupported('HTTP challenge authentication');
     this.abort();this.reset();this.method=method;this.url=endpoint.href;this.async=!!async;await this.transition(1,this.epoch);
   }
-  setRequestHeader(name,value){this.alive();if(this.state!==1||this.sent)throw new VBError('Set headers after open and before send',5);const [key,text]=httpHeader(name,value);this.headers.append(key,text);}
+  setRequestHeader(name,value){this.alive();if(this.state!==1||this.sent)throw new VBError('Set headers after open and before send',5);const [key,text]=httpHeader(name,value);if(this.kind==='winhttp')this.headers.set(key,text);else this.headers.append(key,text);}
   getResponseHeader(name){this.requireResponse(2);if(!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))throw new VBError('Invalid HTTP header name',5);if(/^set-cookie2?$/i.test(name))return '';return this.response.headers?.get(name)||'';}
   getAllResponseHeaders(){this.requireResponse(2);let result='';for(const [name,value]of this.response.headers||[])if(!/^set-cookie2?$/i.test(name))result+=name+': '+value+'\r\n';return result;}
   setTimeouts(...values){this.alive();if(values.length!==4)throw new VBError('Four timeout values are required',450);this.timeouts=values.map(value=>int(value,0,600000));}
