@@ -1,4 +1,4 @@
-import {prepareClassicProject} from './classic-project.js';
+import {prepareClassicArchiveProject} from './classic-archive-project.js';
 import {bytesOf} from '../project/native-text.js';
 import {inspectPE, verifyClassicExecutable} from './pe.js';
 
@@ -17,11 +17,15 @@ export async function runClassicArchive(rootURL) {
   }
   options.timeout = Number(options.timeout);
   if (!Number.isInteger(options.timeout) || options.timeout < 1000 || options.timeout > 3600000) throw new Error('Timeout must be 1000..3600000 ms.');
-  if (process.platform !== 'win32') throw new Error('Microsoft VB6 compilation requires Windows. Copy this archive to your licensed VB6 build machine.');
   const root = path.dirname(fileURLToPath(rootURL));
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'classic-build.json'), 'utf8'));
   if (manifest.target !== 'classic-vb6' || manifest.arch !== 'x86' || typeof manifest.name !== 'string' ||
       !/^[^<>:"/\\|?*\x00-\x1f]{1,100}$/.test(manifest.name) || /[. ]$/.test(manifest.name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(manifest.name)) throw new Error('Invalid classic build manifest.');
+  if (manifest.buildable !== true || manifest.sourceStatus !== 'ready' || !Array.isArray(manifest.diagnostics) || manifest.diagnostics.length) {
+    const details = (Array.isArray(manifest.diagnostics) ? manifest.diagnostics : []).map(item => String(item.message || '')).join('\n');
+    throw new Error('Compilation is blocked for this archive. Open project.vb6web in the web IDE, resolve compatibility issues and export again.\n' + details);
+  }
+  if (process.platform !== 'win32') throw new Error('Microsoft VB6 compilation requires Windows. Copy this archive to your licensed VB6 build machine.');
   const source = path.join(root, 'source');
   if (typeof manifest.projectPath !== 'string' || path.win32.isAbsolute(manifest.projectPath)) throw new Error('Invalid project path.');
   const input = path.resolve(source, manifest.projectPath.replace(/\\/g, '/'));
@@ -83,18 +87,27 @@ export async function runClassicArchive(rootURL) {
 }
 
 export function exportClassicArchive(project, options = {}) {
-  const prepared = prepareClassicProject(project, options), files = Object.create(null);
+  const prepared = prepareClassicArchiveProject(project, options), files = Object.create(null);
   for (const [name, content] of Object.entries(prepared.files)) files['source/' + name] = bytesOf(content);
+  files['project.vb6web'] = prepared.snapshot;
   files['classic-build.json'] = JSON.stringify(prepared.manifest, null, 2) + '\n';
   files['build.mjs'] = '// Generated standalone build driver; no Microsoft code or binaries.\n' +
     inspectPE.toString() + '\n' + verifyClassicExecutable.toString() + '\n' +
     '(' + runClassicArchive.toString() + ')(import.meta.url).catch(error => {console.error(error.message); process.exitCode = 1;});\n';
   files['README.txt'] = 'Microsoft VB6 runtime EXE build archive\r\n\r\n' +
+    (prepared.manifest.buildable ? 'Native-source preflight passed. Licensed compilation is still required.\r\n' :
+      'COMPILATION BLOCKED — this archive saves the project, not a buildable native application.\r\n') +
+    'project.vb6web is the exact original web project, including data and unsupported state.\r\n' +
+    'Native source status: ' + prepared.manifest.sourceStatus + '. See classic-build.json for diagnostics.\r\n' +
+    (prepared.manifest.sourceStatus === 'requires-review' ? 'source/ contains unverified source for review; output settings have NOT been applied.\r\n' : '') +
+    (prepared.manifest.sourceStatus === 'unavailable' ? 'Native source could not be serialized without loss. Use project.vb6web; no partial native project was written.\r\n' : '') +
+    prepared.manifest.diagnostics.map(item => item.code + ': ' + item.message).join('\r\n') + '\r\n\r\n' +
     'This is source, not an executable. Extract on Windows with Node 22+ and your licensed VB6 compiler.\r\n' +
     'Run: node build.mjs --compiler "C:\\Program Files (x86)\\Microsoft Visual Studio\\VB98\\VB6.EXE"\r\n' +
     'Or set VB6_COMPILER and run: node build.mjs\r\n' +
-    'Use source/' + prepared.manifest.projectPath + ' directly in Microsoft VB6 instead of the driver if preferred.\r\n' +
-    'The selected compilation mode is already recorded in the VBP. Builds go to a fresh release/build-* directory.\r\n' +
+    (prepared.manifest.buildable ? 'Use source/' + prepared.manifest.projectPath + ' directly in Microsoft VB6 instead of the driver if preferred.\r\n' +
+    'The selected compilation mode is already recorded in the VBP. Builds go to a fresh release/build-* directory.\r\n' :
+    'The driver refuses compilation until the project is corrected and re-exported. A ZIP download does not establish native compatibility.\r\n') +
     'Review and trust all source/references before compiling: native designers and COM controls may run during compilation.\r\n' +
     'No compiler, runtime DLL, OCX, npm dependency or browser engine is bundled or installed.\r\n' +
     'The final EXE needs the 32-bit Microsoft VB6 runtime and its native dependencies; it does not need Node.\r\n' +

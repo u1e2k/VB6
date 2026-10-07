@@ -62,7 +62,13 @@ The bridge is **not a compiler sandbox**. VB6 may load registered native designe
 
 ### Build without a connected compiler
 
-In the same dialog choose **Download Build Archive**. The ZIP contains native source/resource files, `classic-build.json`, a README and a standalone `build.mjs`. It is a **source build archive, not an executable**; its manifest records `compiled: false`. Extract it on the Windows build machine and run:
+In the same dialog choose **Download Build Archive**. Saving the ZIP does **not** require a compiler, token or successful native-compatibility preflight. The dialog requests a download and stays open with a **Save ZIP** link to retry it; it cannot determine whether the browser actually saved the file. Compatibility messages and the link are shown at the top of the dialog. A sandboxed/embedded preview can prohibit downloads; open the standalone IDE in its own browser tab rather than disabling browser security.
+
+Every ZIP includes the exact original **`project.vb6web`**, `classic-build.json`, a README and a standalone `build.mjs`. Open that snapshot through the web IDE's project-open command to restore the project. It preserves browser-only layout, data, OCX state and non-ANSI text rather than removing them to make a download succeed. The archive contains project data and possibly connection details; review it before sharing.
+
+The manifest always records `compiled: false` and separately records **`buildable`** and **`sourceStatus`**. With `buildable: true` / `sourceStatus: "ready"`, `source/` contains the native source/resources and selected compilation settings. With `buildable: false`, diagnostics explain why native compilation is blocked. Safely serializable source is included as `"requires-review"` (not lowered or configured for compilation); otherwise `"unavailable"` means no partial native tree is included and the exact web project is still preserved. Downloading a ZIP is not native-compatibility certification.
+
+For a blocked archive, correct the project in the web IDE and export again. The extracted build driver refuses **before launching any compiler** while blockers remain, including on non-Windows systems. Direct **Build EXE** retains its strict preflight; archive saving does not bypass compiler checks. For a ready archive, extract it on the Windows build machine and run:
 
 ```powershell
 node build.mjs --compiler "C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE"
