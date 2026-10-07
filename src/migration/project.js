@@ -1,10 +1,12 @@
+import {createRuntimePlan} from './runtime-plan.js';
+import {createRepresentationPlan} from './representations.js';
+import {projectFile,entrySource,solutionFile} from './project-layout.js';
 import {compileProject} from '../language/compiler.js';
 import {sourceFiles, workspaceProjects} from '../project/formats.js';
 import {normalizeOptions, validatePlugins, checkAbort, diagnostic, MigrationError, MIGRATION_VERSION, MIGRATION_SCHEMA} from './contracts.js';
 import {key, identifier, qualified, safeFileName, xml} from './names.js';
 import {emitModule} from './module-emitter.js';
 import {emitForm} from './forms.js';
-import {RUNTIME_FILES} from './runtime-sources.js';
 import {CAPABILITIES} from './registry.js';
 import {migrationZip} from './archive.js';
 
@@ -20,7 +22,10 @@ function snapshot(project,options) {
 }
 function invokeAll(plugins,hook,input,context) {
   for(const plugin of plugins){
-    const value=plugin[hook]?.(input,context);
+    if(!plugin[hook])continue;
+    if(plugin.requires)for(const feature of plugin.requires)context.runtimePlan.require(feature,{},'Extension: '+plugin.id);
+    else if(hook==='finalize')context.runtimePlan.opaque(context,plugin.id);
+    const value=plugin[hook](input,context);
     if(value&&typeof value.then==='function')throw new TypeError('Migration hooks are synchronous: '+plugin.id);
   }
 }
@@ -34,31 +39,6 @@ function selectEntry(state) {
   if(procedure.params.length||procedure.kind!=='sub')state.diagnostics.push(diagnostic('MIG_STARTUP_SIGNATURE','VB6 startup must be a parameterless Sub Main.',{source:mains[0].name,line:procedure.line}));
   return {kind:'main',module:mains[0].name};
 }
-function projectFile(state,assemblyName) {
-  const ui=state.target==='winforms',namespace=state.options.rootNamespace,tfm=ui?'net10.0-windows':'net10.0';
-  const references=['    <ProjectReference Include="../VB6.Compatibility/VB6.Compatibility.vbproj" />',...(ui?['    <ProjectReference Include="../VB6.Compatibility.Windows/VB6.Compatibility.Windows.vbproj" />']:[])];
-  return '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n'+
-    '    <TargetFramework>'+tfm+'</TargetFramework>\n'+
-    '    <OutputType>'+({winforms:'WinExe',console:'Exe',library:'Library'}[state.target])+'</OutputType>\n'+
-    '    <RootNamespace>'+xml(namespace)+'</RootNamespace>\n'+
-    '    <AssemblyName>'+xml(assemblyName)+'</AssemblyName>\n'+
-    '    <OptionExplicit>On</OptionExplicit>\n    <OptionInfer>On</OptionInfer>\n    <OptionStrict>'+(state.options.strict?'On':'Off')+'</OptionStrict>\n'+
-    '    <RemoveIntegerChecks>false</RemoveIntegerChecks>\n    <Deterministic>true</Deterministic>\n'+
-    '    <PlatformTarget>'+state.options.platform+'</PlatformTarget>\n'+
-    (ui?'    <UseWindowsForms>true</UseWindowsForms>\n    <EnableWindowsTargeting>true</EnableWindowsTargeting>\n':'')+
-    (state.target!=='library'?'    <StartupObject>'+xml((namespace?namespace+'.':'')+'__vbEntry')+'</StartupObject>\n':'')+
-    '  </PropertyGroup>\n  <ItemGroup>\n'+references.join('\n')+'\n  </ItemGroup>\n</Project>\n';
-}
-function entrySource(state) {
-  const entry=state.entry;
-  if(!entry)return "' No valid startup; see migration-report.json.\n";
-  const windows=state.target==='winforms',name=qualified(entry.module);
-  return 'Option Strict On\nImports System\n'+(windows?'Imports System.Windows.Forms\nImports VB6.Compatibility.Windows\n':'')+'\nFriend Module __vbEntry\n'+
-    (windows?'    <STAThread>\n':'')+'    Public Sub Main()\n'+
-    (windows?'        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)\n        Application.EnableVisualStyles()\n        Application.SetCompatibleTextRenderingDefault(False)\n':'')+
-    (entry.kind==='form'?'        Application.Run(VbForms.GetInstance(Of '+name+')())\n':'        '+name+'.__vbStart()\n'+(windows?'        VbForms.RunOpenForms()\n':''))+
-    '    End Sub\nEnd Module\n';
-}
 function singleProject(project,options,plugins,compile) {
   checkAbort(options.signal);
   const compiled=compile(project,{retainSyntax:true}),diagnostics=compiled.diagnostics.map(d=>diagnostic('MIG_VB6_'+(d.number||'PARSE'),d.message,d,d.severity||'error'));
@@ -66,10 +46,15 @@ function singleProject(project,options,plugins,compile) {
   const assemblyName=safeFileName(options.assemblyName||project.name||'MigratedProject'),application='Application',files=Object.create(null),sourceMap=[],interfaces=new Set();
   for(const module of compiled.modules.values())for(const entry of module.interfaces)interfaces.add(key(entry.name));
   if(options.rootNamespace)qualified(options.rootNamespace);
-  const state={project,compiled,target,options,plugins,diagnostics,interfaces,files,sourceMap};state.entry=selectEntry(state);
+  const state={project,compiled,target,options,plugins,diagnostics,interfaces,files,sourceMap,modernization:[]};state.entry=selectEntry(state);
+  state.runtimePlan=createRuntimePlan(options,diagnostics);
+  state.requireRuntime=(feature,location={},reason)=>state.runtimePlan.require(feature,location,reason);
+  state.directEntry=options.codeStyle==='native'&&target==='console'&&state.entry?.kind==='main';
   if(target==='winforms'&&state.entry?.kind==='main')diagnostics.push(diagnostic('MIG_MAIN_FORM_LIFETIME','Sub Main starts a WinForms loop around the first open form; review multi-form application shutdown semantics.'));
 
   invokeAll(plugins,'analyze',project,state);
+  state.representations=createRepresentationPlan(state);
+  if(state.representations.opaque)state.directEntry=false;
   if(target!=='winforms'&&project.modules.some(m=>m.form))diagnostics.push(diagnostic('MIG_UI_TARGET','Projects containing forms require the WinForms target.'));
   if(project.references?.length)diagnostics.push(diagnostic('MIG_REFERENCES','Original COM/type-library references are retained in the report; resolve each with a typed .NET/COM adapter before deployment.','', 'error'));
   if(project.resources)diagnostics.push(diagnostic('MIG_RESOURCE_TABLE','VB6 RES resources are retained; LoadRes* call-site and resource-ID conversion requires a resource adapter.'));
@@ -82,11 +67,8 @@ function singleProject(project,options,plugins,compile) {
       if(module.form){const designer=path.replace(/\.vb$/,'.Designer.vb'),form=emitForm(state,module,designer);put(designer,form.code);sourceMap.push(...form.mappings);}
     }catch(error){diagnostics.push(diagnostic('MIG_EMISSION',error.message,{source:module.name}));}
   }
-  for(const [path,text] of Object.entries(RUNTIME_FILES))if(target==='winforms'||!path.startsWith('VB6.Compatibility.Windows/'))put(path,text);
-  put(application+'/'+assemblyName+'.vbproj',projectFile(state,assemblyName));
-  if(target!=='library')put(application+'/__vbEntry.vb',entrySource(state));
+  if(target!=='library'&&!state.directEntry)put(application+'/__vbEntry.vb',entrySource(state));
   put('global.json',json({sdk:{version:'10.0.100',rollForward:'latestFeature',allowPrerelease:false}}));
-  put(assemblyName+'.slnx','<Solution>\n  <Project Path="'+application+'/'+xml(assemblyName)+'.vbproj" />\n  <Project Path="VB6.Compatibility/VB6.Compatibility.vbproj" />\n'+(target==='winforms'?'  <Project Path="VB6.Compatibility.Windows/VB6.Compatibility.Windows.vbproj" />\n':'')+'</Solution>\n');
   if(options.includeOriginals){
     // A complete, lossless in-memory snapshot is retained even if a native-file
     // serializer cannot represent browser-only designer extensions.
@@ -97,6 +79,9 @@ function singleProject(project,options,plugins,compile) {
   }
   const extensionContext={...state,addFile:put,report:reportDraft(state,assemblyName)};
   invokeAll(plugins,'finalize',files,extensionContext);
+  state.runtime=state.runtimePlan.materialize(target,put);
+  put(application+'/'+assemblyName+'.vbproj',projectFile(state,assemblyName));
+  put(assemblyName+'.slnx',solutionFile(state,assemblyName));
   // A review bundle contains original code, but never masquerades as a buildable
   // completed migration. Resolve diagnostics and deliberately edit this guard.
   const errors=diagnostics.filter(d=>d.severity==='error').length;
@@ -114,8 +99,8 @@ function singleProject(project,options,plugins,compile) {
     files[path]=content;
   }
 }
-function reportDraft(state,name){return {schema:MIGRATION_SCHEMA,converter:{name:'@vb6-studio/vbnet-migration',version:MIGRATION_VERSION},project:name,target:state.target,targetFramework:state.target==='winforms'?'net10.0-windows':'net10.0',platform:state.options.platform,validation:{generated:true,dotnetBuild:'not-run',behavioralEquivalence:'not-certified'},plugins:state.plugins.map(p=>p.id),capabilities:CAPABILITIES};}
-function readme(report,name){return '# '+name+' — VB.NET migration\n\nTarget: **'+report.targetFramework+'**, platform **'+report.platform+'**.\n\n'+(report.success?'No blocking converter diagnostics. This is not a guarantee of build success or behavioral equivalence.':'**REVIEW BUNDLE: '+report.errors+' blocking diagnostics. The included MSBuild guard intentionally prevents compilation.**')+'\n\nInstall the .NET 10 SDK. WinForms applications run only on Windows.\n\n```sh\ndotnet build "'+name+'.slnx"\n'+(report.target!=='library'?'dotnet run --project "Application/'+name+'.vbproj"\n':'')+'```\n\nReview `migration-report.json` and `source-map.json`. All retained original modules, native files and resources are under `Originals/`; `project.vb6web` preserves the full input snapshot. The exported compatibility libraries contain their complete VB source and project files. No VB6 project code is executed during conversion.\n\nThe converter preserves Integer/Long widths, eager Boolean operators, procedure-scope locals, lower-bound arrays, fixed strings and Currency through explicit generated code and helpers. Microsoft.VisualBasic supplies supported classic intrinsics. Exact Variant promotion, COM/OCX contracts, deterministic COM destruction, raw pointer APIs, binary record layout, graphics and unsupported control members require explicit review/adapters. Only the selected conditional-compilation configuration is converted; inactive source remains in Originals.\n\n`Option Strict Off` is the compatibility default; select strict mode to expose all required narrowing/late-binding conversions to the VB compiler. The report records generated output only; it never asserts that dotnet was run by the browser.\n';}
+function reportDraft(state,name){return {schema:MIGRATION_SCHEMA,converter:{name:'@vb6-studio/vbnet-migration',version:MIGRATION_VERSION},project:name,target:state.target,targetFramework:state.target==='winforms'?'net10.0-windows':'net10.0',platform:state.options.platform,codeStyle:state.options.codeStyle,semanticPolicy:state.options.semanticPolicy,modernization:state.modernization,runtime:state.runtime,representations:state.representations?.decisions||[],validation:{generated:true,dotnetBuild:'not-run',behavioralEquivalence:'not-certified'},plugins:state.plugins.map(p=>p.id),capabilities:CAPABILITIES};}
+function readme(report,name){return '# '+name+' — VB.NET migration\n\nTarget: **'+report.targetFramework+'**, platform **'+report.platform+'**.\n\nOutput: **'+report.codeStyle+'**, support: **'+report.runtime.policy+'** ('+report.runtime.sourceFiles+' VB files, '+report.runtime.sourceBytes+' source bytes).\n\n'+(report.modernization.length?'**Approved semantic changes:** '+report.modernization.map(item=>item.rule).filter((item,index,items)=>items.indexOf(item)===index).join(', ')+'. Review the recorded behavior changes.\n\n':'')+(report.success?'No blocking converter diagnostics. This is not a guarantee of build success or behavioral equivalence.':'**REVIEW BUNDLE: '+report.errors+' blocking diagnostics. The included MSBuild guard intentionally prevents compilation.**')+'\n\nInstall the .NET 10 SDK. WinForms applications run only on Windows.\n\n```sh\ndotnet build "'+name+'.slnx"\n'+(report.target!=='library'?'dotnet run --project "Application/'+name+'.vbproj"\n':'')+'```\n\nReview `migration-report.json` and `source-map.json`. All retained original modules, native files and resources are under `Originals/`; `project.vb6web` preserves the full input snapshot. Compatibility support follows the selected packaging policy; the report lists each required feature and its reason. Minimal output includes only selected authored source units. Package output references explicitly configured external packages and does not certify their availability. No VB6 project code is executed during conversion.\n\nThe converter preserves Integer/Long widths, eager Boolean operators, procedure-scope locals, lower-bound arrays, fixed strings and Currency through explicit generated code and helpers. Microsoft.VisualBasic supplies supported classic intrinsics. Exact Variant promotion, COM/OCX contracts, deterministic COM destruction, raw pointer APIs, binary record layout, graphics and unsupported control members require explicit review/adapters. Only the selected conditional-compilation configuration is converted; inactive source remains in Originals.\n\n`Option Strict Off` is the compatibility default; select strict mode to expose all required narrowing/late-binding conversions to the VB compiler. The report records generated output only; it never asserts that dotnet was run by the browser.\n';}
 
 /** Reentrant, synchronous, no host APIs. Plugins are trusted code, not project data. */
 export function createVbNetMigrator({plugins=[],compile=compileProject}={}) {

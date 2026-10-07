@@ -1,6 +1,6 @@
 /** Explicit link dependencies of authored support units. This is not a scan of
  * generated application text. Build-time extraction validates every named unit. */
-export const RUNTIME_CATALOG = Object.freeze({
+const catalog = {
   'VbNativeArrays.Index': {dependencies:[]},
   'VbNativeArrays.Bound': {dependencies:[]},
   VbCurrency: {file:'VbCurrency.vb', dependencies:[]},
@@ -54,7 +54,13 @@ export const RUNTIME_CATALOG = Object.freeze({
   'VbForms.AddItem': {windows:true, dependencies:[]},
   'VbForms.OleColor': {windows:true, dependencies:[]},
   VbApp: {windows:true, file:'VbForms.vb', type:'Module', dependencies:[]}
-});
+};
+for (const spec of Object.values(catalog)) {
+  Object.freeze(spec.dependencies);
+  if (spec.fields) Object.freeze(spec.fields);
+  Object.freeze(spec);
+}
+export const RUNTIME_CATALOG = Object.freeze(catalog);
 
 export function runtimeFeature(symbol) {
   if(Object.hasOwn(RUNTIME_CATALOG,symbol))return symbol;

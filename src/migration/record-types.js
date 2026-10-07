@@ -1,7 +1,7 @@
 import {key} from './names.js';
 
-/** Resolve declared records without confusing a same-named class or another
- * module's private type. Ownership is retained for nested/cross-module fields. */
+/** Resolve records by explicit/local ownership, rejecting ambiguous project-wide
+ * matches. The shared frontend retains field layouts, not type access modifiers. */
 export function findRecord(compiled,module,type) {
   const parts=String(type||'').split('.'),name=key(parts.at(-1));
   const owner=parts.length>1?compiled.modules.get(key(parts.slice(0,-1).join('.'))):null;

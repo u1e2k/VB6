@@ -13,6 +13,12 @@ INPUT: .vb6web, .vbp, .vbg, or a ZIP containing a VB6 project.
   --namespace NAME                      VB.NET root namespace (default empty)
   --review                              Export unresolved review bundle with build guard
   --strict                              Emit Option Strict On
+  --code-style native|compatibility     Native-first by default
+  --runtime minimal|none|project|package Support packaging (default minimal)
+  --semantic-policy preserve|modernize   Preserve behavior by default
+  --accept-rule currency-decimal        Explicitly approve changed Currency semantics
+  --runtime-package ID@VERSION           Explicit shared core package
+  --windows-runtime-package ID@VERSION   Explicit shared Windows package
   --no-originals                        Omit original snapshot and source
   --inspect                             Print report without writing output
   --help                                Show usage
@@ -20,7 +26,7 @@ Existing output is never overwritten. Project source is never executed.
 `;
 export function parseMigrationArguments(args) {
   const flags=new Set(['--review','--strict','--no-originals','--inspect','--help']);
-  const values=new Set(['--out','--target','--platform','--root','--entry','--namespace']);
+  const values=new Set(['--out','--target','--platform','--root','--entry','--namespace','--code-style','--runtime','--semantic-policy','--accept-rule','--runtime-package','--windows-runtime-package']);
   const settings={},seen=new Set();let input;
   for(let i=0;i<args.length;i++){
     const arg=args[i];
@@ -70,7 +76,14 @@ export async function runMigrationCli(args,{stdout=console.log,stderr=console.er
   if(settings.help){stdout(MIGRATION_USAGE);return 0;}
   const loaded=await loadMigrationInput(input,settings),migrator=createVbNetMigrator();
   const inputDiagnostics=loaded.diagnostics||[];
-  const options={target:settings.target,platform:settings.platform,rootNamespace:settings.namespace,strict:!!settings.strict,includeOriginals:!settings['no-originals'],includeUnresolved:!!settings.review,
+  const packageSpec=value=>{
+    if(value===undefined)return undefined;
+    const split=value.lastIndexOf('@');
+    if(split<1||split===value.length-1)throw new Error('Package specification must be ID@VERSION');
+    return {id:value.slice(0,split),version:value.slice(split+1)};
+  };
+  const options={codeStyle:settings['code-style'],runtime:settings.runtime,semanticPolicy:settings['semantic-policy'],
+    acceptedRules:settings['accept-rule']?[settings['accept-rule']]:[],runtimePackage:packageSpec(settings['runtime-package']),windowsRuntimePackage:packageSpec(settings['windows-runtime-package']),target:settings.target,platform:settings.platform,rootNamespace:settings.namespace,strict:!!settings.strict,includeOriginals:!settings['no-originals'],includeUnresolved:!!settings.review,
     plugins:inputDiagnostics.length?[{id:'host-import-diagnostics',analyze(project,context){context.diagnostics.push(...inputDiagnostics.map(d=>({...d,code:'MIG_IMPORT_'+(d.code||d.number||'INPUT')})));}}]:[]};
   if(settings.inspect){const result=migrator.convertProject(loaded.project,options);stdout(JSON.stringify(result.report,null,2));return result.success?0:2;}
   const result=migrator.exportProject(loaded.project,options),output=path.resolve(settings.out);
@@ -79,6 +92,6 @@ export async function runMigrationCli(args,{stdout=console.log,stderr=console.er
   // replace any input, existing output, directory or symlink.
   await fs.writeFile(output,result.bytes,{flag:'wx'});
   for(const diagnostic of result.diagnostics)stderr(diagnostic.code+': '+diagnostic.message);
-  stdout(JSON.stringify({output,bytes:result.bytes.length,files:Object.keys(result.files).length,success:result.success,errors:result.report.errors,warnings:result.report.warnings}));
+  stdout(JSON.stringify({output,bytes:result.bytes.length,files:Object.keys(result.files).length,success:result.success,errors:result.report.errors,warnings:result.report.warnings,runtime:result.report.runtime}));
   return 0;
 }

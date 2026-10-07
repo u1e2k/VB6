@@ -1,3 +1,4 @@
+import {compactIdentifiers} from './vb-tokens.js';
 import {RUNTIME_CATALOG,runtimeFeature,runtimeClosure} from './runtime-catalog.js';
 import {RUNTIME_FILES,RUNTIME_FEATURES} from './runtime-sources.js';
 import {diagnostic} from './contracts.js';
@@ -19,7 +20,7 @@ export function createRuntimePlan(options,diagnostics) {
   }
   function materialize(target,put){
     const features=runtimeClosure([...roots.values()].map(root=>root.feature));
-    const windows=features.some(feature=>RUNTIME_FEATURES[feature].windows),core=features.some(feature=>!RUNTIME_FEATURES[feature].windows);
+    const windows=features.some(feature=>RUNTIME_FEATURES[feature].windows),core=features.some(feature=>!RUNTIME_FEATURES[feature].windows)||options.runtime==='project'&&windows;
     if(windows&&target!=='winforms')diagnostics.push(diagnostic('MIG_RUNTIME_PLATFORM','Selected compatibility support requires a Windows Forms target.'));
     const paths=[];
     const add=(path,source)=>{put(path,source);paths.push(path);};
@@ -57,7 +58,7 @@ export function finishRuntimeImports(writer,context) {
       if(!line&&!lines.at(-1))continue;
       lines.push(line);mapping.set(index+1,lines.length);
     }
-    return {code:lines.join('\n')+'\n',mappings:writer.mappings.filter(item=>mapping.has(item.generatedLine)).map(item=>({...item,generatedLine:mapping.get(item.generatedLine)}))};
+    return {code:lines.map(compactIdentifiers).join('\n')+'\n',mappings:writer.mappings.filter(item=>mapping.has(item.generatedLine)).map(item=>({...item,generatedLine:mapping.get(item.generatedLine)}))};
   }
   return {code:writer.toString(),mappings:writer.mappings};
 }

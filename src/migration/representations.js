@@ -44,7 +44,7 @@ export function createRepresentationPlan(state) {
   for(const module of state.compiled.modules.values()){
     for(const type of Object.keys(module.types)){
       const traits=recordTraits(state.compiled,module,type,records);
-      decisions.push({source:module.name,symbol:type,kind:'record',representation:enabled&&!traits.copy?'structure':'owned-value',initialization:traits.initialize?'factory':'default',reason:traits.copy?'Owned array/Variant fields require copying':'Fields use native value semantics'});
+      decisions.push({source:module.name,symbol:type,kind:'record',representation:enabled&&!opaque&&!traits.copy?'structure':'owned-value',initialization:traits.initialize||opaque?'factory':'default',reason:opaque?'Opaque extension may observe record representation':traits.copy?'Owned array/Variant fields require copying':'Fields use native value semantics'});
     }
     for(const proc of module.procedures.values()){
       const context=createContext(state,module,proc),candidates=new Map();
@@ -71,15 +71,19 @@ export function createRepresentationPlan(state) {
         if(op.op==='redim')for(const decl of op.decls){
           const item=candidates.get(key(decl.name));if(!item)continue;
           if(item.decl.bounds.length||decl.bounds?.length!==item.rank||decl.bounds.some(([lower])=>constant(lower,context)!==0)||key(item.decl.type)==='string'||decl.explicitType&&key(decl.type)!==key(item.decl.type))item.reason='ReDim changes storage rank, lower bound or element type';
+          if(op.preserve&&item.rank>1)item.reason='Multidimensional Preserve needs shape and error-boundary proof';
+          for(const [,upper] of decl.bounds||[])if(!Number.isInteger(constant(upper,context))||constant(upper,context)<-1||constant(upper,context)>=2147483647)item.reason='Dynamic upper bound needs a checked allocation/error adapter';
           // Bounds may reference the old array; preserve their evaluation dependencies.
           for(const bound of decl.bounds||[])visit(bound,(node)=>{if(node.kind==='id'&&candidates.has(key(node.name)))candidates.get(key(node.name)).uses.add(pc);});
         }
         visit(op,(node,parent,slot)=>{
           if(node.kind==='call'){
             const callee=context.resolve(node.callee);
-            for(const argument of node.args||[]){
+            for(const [argumentIndex,argument] of (node.args||[]).entries()){
               const actual=normalized(argument.kind==='named'?argument.expr:argument);
               const item=actual?.kind==='call'&&actual.callee.kind==='id'?candidates.get(key(actual.callee.name)):null;
+              const parameter=argument.kind==='named'?callee?.params?.find(p=>key(p.name)===key(argument.name)):callee?.params?.[argumentIndex];
+              if(item&&parameter?.byRef&&key(parameter.type)!==key(item.decl.type))item.reason='ByRef element and formal types differ';
               if(item&&(!callee?.procedure||callee.external||callee.owner?.kind!=='module'||[...state.compiled.modules.values()].some(m=>[...m.procedures.values()].some(p=>p.code.some(i=>i.op==='redim')))))item.reason='Unproven element-reference lifetime or redimensioning boundary';
             }
           }
@@ -162,14 +166,17 @@ export function createRepresentationPlan(state) {
   const startupForm=enabled&&state.entry?.kind==='form'&&[...state.compiled.modules.values()].filter(m=>m.form).length===1&&!opaque;
   let directForm=!!startupForm;
   if(directForm)for(const module of state.compiled.modules.values())for(const proc of module.procedures.values())visit(proc.code,node=>{
-    if(node.kind==='id'&&key(node.name)===key(state.entry.module))directForm=false;
+    if((node.kind==='id'||node.kind==='new')&&key(node.name)===key(state.entry.module))directForm=false;
   });
   if(directForm){const module=state.compiled.modules.get(key(state.entry.module));if(module.form?.type==='MDIForm'||module.form?.properties?.MDIChild)directForm=false;}
   return {
-    decisions,directForm,
+    decisions,directForm,opaque,
     array(symbol,context){if(!symbol||symbol.owner&&symbol.owner!==context.module)return null;return arrays.get(identity(context.module,symbol.local||symbol.parameter?context.proc:null,symbol.name))||null;},
     localArray(module,proc,name){return arrays.get(identity(module,proc,name))||null;},
     scalarType(module,proc,name){return specialized.get(identity(module,proc,name));},
-    record(module,type){return recordTraits(state.compiled,module,type,records);}
+    record(module,type){
+      const traits=recordTraits(state.compiled,module,type,records);
+      return traits&&enabled&&opaque?{...traits,initialize:true,copy:true}:traits;
+    }
   };
 }

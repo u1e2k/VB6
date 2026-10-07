@@ -3,8 +3,13 @@ import {key} from './names.js';
 /** Bind standard-library overloads from proven argument representations. Return
  * null when Null, owned arrays or legacy subtype behavior still needs a helper. */
 export function nativeIntrinsic(node,context,emit,usage={}) {
-  if(context.options.codeStyle!=='native'||node.callee.kind!=='id'||context.find(node.callee.name))return null;
-  const name=key(node.callee.name),arg=node.args[0],symbol=context.resolve(arg),type=key(context.type(arg));
+  if(node.callee.kind!=='id'||context.find(node.callee.name))return null;
+  const name=key(node.callee.name);
+  // An approved semantic rule is independent of the chosen output style.
+  if(name==='ccur'&&context.decimalCurrency)return 'CDec('+node.args.map(value=>emit(value)).join(', ')+')';
+  if(context.options.codeStyle!=='native')return null;
+  const arg=node.args[0],symbol=context.resolve(arg),declared=key(context.type(arg));
+  const type=declared==='currency'&&context.decimalCurrency?'decimal':declared;
   const scalar=symbol?.bounds==null&&!['object','variant'].includes(type)&&!context.record(type);
   const nativeArray=context.arrayPlan(symbol)||symbol?.paramArray;
   if(nativeArray?.lower&&['lbound','ubound'].includes(name)){
@@ -15,7 +20,6 @@ export function nativeIntrinsic(node,context,emit,usage={}) {
   const args=()=>node.args.map(value=>emit(value)).join(', ');
   const strings='Global.Microsoft.VisualBasic.Strings.',info='Global.Microsoft.VisualBasic.Information.';
   if(['lbound','ubound','isarray'].includes(name)&&nativeArray)return info+({lbound:'LBound',ubound:'UBound',isarray:'IsArray'}[name])+'('+args()+')';
-  if(name==='ccur'&&context.decimalCurrency)return 'CDec('+args()+')';
   if(['split','filter'].includes(name)&&usage.nativeArray)return strings+(name==='split'?'Split':'Filter')+'('+args()+')';
   if(name==='join'){
     const split=arg?.kind==='call'&&arg.callee.kind==='id'&&['split','filter'].includes(key(arg.callee.name))&&!context.find(arg.callee.name);
