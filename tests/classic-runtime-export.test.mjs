@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import {newProject} from '../src/project/model.js';
+import {newProject, createControl} from '../src/project/model.js';
 import {importFiles} from '../src/project/formats.js';
 import {bytesOf} from '../src/project/native-text.js';
 import {normalizeClassicOptions, classicBridgeURL} from '../src/exporter/classic-options.js';
@@ -10,7 +10,7 @@ import {prepareClassicProject} from '../src/exporter/classic-project.js';
 
 test('runtime target options reject host authority and unsafe output names', () => {
   assert.deepEqual(normalizeClassicOptions({}, 'Hello'), {name:'Hello', codegen:'preserve'});
-  for (const options of [{compiler:'evil.exe'}, {timeout:1}, {args:[]}, {codegen:'aot'}, {name:'../app'}, {name:'NUL.exe'}, {name:'a:stream'}, {name:'bad\nname'}]) assert.throws(() => normalizeClassicOptions(options));
+  for (const options of [{compiler:'evil.exe'}, {timeout:1}, {args:[]}, {codegen:'aot'}, {name:'../app'}, {name:'NUL.exe'}, {name:'Hello.exe'}, {name:'a:stream'}, {name:'bad\nname'}]) assert.throws(() => normalizeClassicOptions(options));
   assert.equal(classicBridgeURL('http://127.0.0.1:8768/classic'), 'http://127.0.0.1:8768/classic');
   for (const url of ['https://remote.test/classic','http://localhost:8768/classic','http://127.0.0.1/classic?token=x','http://user@127.0.0.1/classic','http://127.0.0.1/other']) assert.throws(() => classicBridgeURL(url));
 });
@@ -58,4 +58,30 @@ test('native files reject Windows device paths and Unicode BOMs', () => {
   assert.throws(() => prepareClassicProject(device), /Unsafe Windows/);
   const unicode = newProject(); unicode.modules[0].sourceEncoding = 'utf-16le';
   assert.throws(() => prepareClassicProject(unicode), /ANSI source code page/);
+});
+
+test('browser-authored intrinsic forms, Timer and Line lower to native designer records', () => {
+  const project=newProject('Intrinsics'), form=project.modules[0].form;
+  for(const type of ['CommandButton','Label','Frame','Timer','Line','Image','HScrollBar','VScrollBar','Shape','ComboBox','ListBox','OLE']) form.controls.push(createControl(type));
+  const before=JSON.stringify(project), source=String(prepareClassicProject(project).files['Form1.frm']);
+  assert.equal(JSON.stringify(project),before);
+  assert.match(source,/ClientLeft\s*=\s*360/);assert.match(source,/ClientTop\s*=\s*690/);
+  const timer=source.match(/Begin VB.Timer Timer1([\s\S]*?)\r\n   End/)[1];
+  assert.match(timer,/Interval\s*=\s*1000/);assert.doesNotMatch(timer,/Width|Height|Font|ForeColor|TabStop|Visible/);
+  const line=source.match(/Begin VB.Line Line1([\s\S]*?)\r\n   End/)[1];
+  assert.match(line,/X2\s*=\s*1740/);assert.match(line,/Y2\s*=\s*300/);assert.doesNotMatch(line,/\b(?:Left|Top|Width|Height|FontName)\s*=/);
+  const command=source.match(/Begin VB.CommandButton CommandButton1([\s\S]*?)\r\n   End/)[1];
+  assert.doesNotMatch(command,/ForeColor/);assert.match(command,/Caption/);
+});
+test('nondefault browser-only intrinsic settings cannot silently change on export', () => {
+  const project=newProject();const command=createControl('CommandButton');command.properties.ForeColor=255;project.modules[0].form.controls.push(command);
+  assert.throws(()=>prepareClassicProject(project),/CommandButton.ForeColor/);
+  const list=newProject();const control=createControl('ListBox');control.properties.ListIndex=0;list.modules[0].form.controls.push(control);
+  assert.throws(()=>prepareClassicProject(list),/ListBox.ListIndex/);
+});
+
+test('minimal browser forms cannot serialize NaN client geometry', () => {
+  const project=newProject();project.modules[0].form.properties={Caption:'Minimal'};
+  const source=String(prepareClassicProject(project).files['Form1.frm']);
+  assert.match(source,/ClientWidth\s*=\s*9000/);assert.doesNotMatch(source,/NaN|undefined/);
 });
