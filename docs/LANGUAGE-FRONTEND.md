@@ -14,6 +14,8 @@ The language front end is shared by execution, exported applications, editor dia
 | `compiler.js` | Public compilation entry points, structured instructions, labels and source mapping. |
 | `binding.js`, `semantic-checks.js` | Side-effect-free constants, enum storage, fixed strings, declaration/property constraints and statically known loop-control types. |
 | `diagnostics.js` | Incremental parsed-module caching with fresh cross-module binding after each snapshot. |
+| `source-context.js`, `declaration-index.js`, `signature-syntax.js`, `type-catalog.js`, `data-type-catalog.js`, `reference-metadata.js` | Shared data-only language-service implementation; existing `src/editor/` entry points retain the same exports. |
+| `../native/declarations.js` | Lower bound external-procedure metadata into checked native imports without a second Declare grammar. |
 
 The existing `compileModule`, `compileProject`, `parseDeclarations` and `parseParameters` exports remain available. The project format and IDE UI are unchanged. Rebuild generated bundles after changing language source; see [the reproducible artifact contract](IDE-BUILD-ARTIFACTS.md). Normal build/CI verifies committed fingerprints and cannot refresh its own expectations.
 
@@ -34,6 +36,26 @@ The existing `compileModule`, `compileProject`, `parseDeclarations` and `parsePa
 | Incremental diagnostics | Stable unique module IDs preserve syntax across reorder operations; duplicate IDs are isolated. Public variable/type/enum changes are rebound even when the dependent module's syntax is cached. |
 
 Constant/default binding and semantic checks do not execute user procedures, instantiate objects or open host services. Runtime permissions, native visibility, debugger budgets and optional layout gating are unchanged.
+
+## Shared native declarations and language-service entries
+
+The native compiler compiles the original normalized project once, then passes each bound module to `lowerNativeDeclarations`. External procedures are imports, not authored procedure bodies. The saved project is not changed. Parameterless declarations can omit parentheses, just as in the common frontend:
+
+```vb
+Private Declare Function Tick Lib "kernel32" Alias "GetTickCount" As Long
+```
+
+Equivalent `Tick()` declaration syntax produces identical PE bytes. Shared parsing also handles Unicode and escaped source identifiers, type suffixes, continued and colon-separated declarations, conditional compilation, default types and enum Long storage. Native DLL basenames, ASCII entry names or ordinals 1 through 65,535, visibility, argument-area size and supported ABI/storage types are still checked before machine-code emission. Language acceptance alone does not enable arbitrary native types or services.
+
+The existing `extractNativeDeclarations` and `NativeCompileError` exports from `src/native/compiler.js` remain available. The extraction helper accepts a single module, preserves its physical line count and reconstructs active non-Declare logical statements; its `code` output is not a byte-preserving source round trip. The compiler itself lowers the original bound project, rather than using this reconstruction. Native import metadata and the source project remain separate.
+
+Six data-only language-service implementations now live under `src/language/`. Their `src/editor/` facades preserve every named export and share the same function/object identities. This avoids duplicate definitions while retaining existing editor imports and behavior. The symbol-snapshot, record-resolution, compute-symbol and storage helper modules retained from the parity work are preparatory internal APIs; they do not by themselves install a general static type checker or the separate array/property runtime continuation. The existing VM frame, reference and procedure-call paths are unchanged by this integration.
+
+Focused checks:
+
+```sh
+node --test tests/native-shared-declarations.test.mjs tests/language-service-facades.test.mjs
+```
 
 ## Explicit robustness limits
 
@@ -77,7 +99,7 @@ The retained Validate workflow supplies browser and Windows checks for the exact
 
 Remaining work includes exhaustive licensed-VB6 differential validation, general symbol/type checking beyond the targeted checks above, typed-array return and property-signature edge cases, residual graphics/statement grammar, and complete locale/code-page/Variant/native/COM/OCX agreement. File Print still follows the existing runtime's semicolon-oriented output behavior; this parser change does not implement full comma tab-zone semantics.
 
-The separate native Declare extractor still requires parentheses and its supported native signatures. A regression verifies that a parameterless Declare runs through the browser VM, is explicitly rejected by native lowering, and produces a PE only after using the supported parenthesized form. PE byte generation/inspection is not execution of that new fixture. Escaped keyword counters and arbitrary host types likewise do not gain universal native support simply because the common parser accepts them. No licensed Microsoft VB6 compiler was available for a differential run. Unsupported host behavior remains diagnosed, not silently enabled.
+The native Declare grammar is now shared, and its former parenthesized-only restriction is removed. Native regressions check both successful equivalent-syntax generation and source-located rejection of unsupported imports/signatures. PE byte generation/inspection is not execution of every new fixture; native execution results must identify the actual Windows fixtures run. Escaped keyword counters and arbitrary host types do not gain universal native support simply because the common parser accepts them. No licensed Microsoft VB6 compiler was available for a differential run. Unsupported host behavior remains diagnosed, not silently enabled.
 
 ## Semantic references
 

@@ -111,6 +111,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: python tools/browser-com-ole-tests.py
+      - name: Common HTTP, XML, ADO streams and DataEnvironment end-to-end contracts
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-common-automation-tests.py
       - name: Detached browser windows over HTTP and file origins
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -240,6 +244,12 @@ jobs:
       - name: Real system Automation and typed VARIANT regression
         if: ${{ !cancelled() }}
         run: node tools/interop/test-native.mjs
+      - name: Native and portable common HTTP and ADO Stream differential recipes
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-automation.mjs
+      - name: Real MSXML DOM identity, XPath, binary data and compiled enumeration
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-xml.mjs
       - name: Native COM identity, OLE data, advisories and compound files
         if: ${{ !cancelled() }}
         run: node tools/interop/test-com-ole.mjs
@@ -270,6 +280,17 @@ jobs:
       - name: Execute x86 compiler and assembler fixtures on Windows
         shell: pwsh
         run: ./tools/test-win32-optimizer.ps1
+      - name: Build freestanding native control behavior fixtures
+        run: node tools/win32-control-fixtures.mjs
+      - name: Execute real HWND, input, font, file and GDI control assertions
+        shell: pwsh
+        run: ./tools/test-win32-controls.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-control-execution
+          path: reports/native-controls
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:

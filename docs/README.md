@@ -20,6 +20,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 ## Language, runtime and project files
 
 - [Language frontend](LANGUAGE-FRONTEND.md): scanning, declarations and diagnostics.
+- [VB.NET / .NET 10 migration](VBNET-MIGRATION.md): source conversion, ZIP export,
+  reusable packages, compatibility runtime, extensions and conformance gates.
 - [Compiler/runtime](COMPILER-RUNTIME.md) and [scalar/Variant semantics](SCALAR-COMPATIBILITY.md).
 - [Source debugger](DEBUGGER.md), [extended debugger contracts](DEBUGGER-COMPATIBILITY.md),
   [native break lifecycle](NATIVE-DEBUGGER-BREAK-LIFECYCLE.md) and
@@ -27,6 +29,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Native project interchange](NATIVE-PROJECTS.md) and
   [workspace, save recovery and interoperability](NATIVE-WORKSPACE-INTEROP.md).
 - [Data sources](DATA-SOURCES.md): providers, binding, credentials and deployment.
+- [Common Automation](COMMON-AUTOMATION.md): HTTP/XML/ADO stream objects, shared data
+  transport, virtual files, recordset binding and deployment examples.
 - [Keyboard/mouse events](INPUT-EVENTS.md) and [optional automatic layout](anchoring-layout.md).
 
 ## IDE, appearance and rendering
@@ -45,6 +49,7 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Windows build targets](WINDOWS-BUILDS.md), [target validation](NATIVE-VALIDATION.md),
   [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
+- [Win32 controls](WIN32-CONTROLS.md): native AOT control coverage, property and stream ownership, layout integration, output dependencies and Windows execution checks.
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),
   [calendar intervals](WIN32-CALENDAR-INTERVALS.md), [arrays](WIN32-ARRAYS.md),

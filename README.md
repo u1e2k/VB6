@@ -12,6 +12,7 @@ A browser-native classic Visual Basic development environment, source runtime an
 - [Controls and data sources](#controls-and-data-sources)
 - [Project files and resources](#project-files-and-resources)
 - [Build targets and reusable SDKs](#build-targets-and-reusable-sdks)
+- [VB.NET / .NET 10 migration](#vbnet--net-10-migration)
 - [Coding agents](#coding-agents)
 - [MCP access for external coding agents](#mcp-access-for-external-coding-agents)
 - [Examples](#examples)
@@ -287,6 +288,25 @@ The launch probe is intentionally separate from inline behavioral validation. Ex
 
 See [Testing and validation](docs/TESTING.md) for reproducible commands, evidence and limits. Packaging tools create a source manifest, independent SDK, browser distribution, examples, visual evidence and optional Git bundle. `tools/verify-release.py` freshly extracts the delivered source ZIP, rebuilds it, reruns tests, and checks SDK loading, history and archive integrity.
 
+## VB.NET / .NET 10 migration
+
+**File → Migrate to VB.NET (.NET 10 ZIP)…** exports editable VB.NET modules,
+classes, WinForms designers, source-distributed compatibility libraries, SDK
+projects, source maps and original project files. The reusable
+`@vb6-studio/vbnet-migration` package also provides a CLI and browser API.
+
+```sh
+node tools/migrate-vbnet.mjs Legacy.vbp --out Legacy-net10.zip
+npm run test:migration
+npm run pack:vbnet-migration
+```
+
+This is **not universal VB6 migration parity**. Known unresolved behavior produces
+source-linked diagnostics; explicit review bundles contain an MSBuild guard rather
+than pretending to be completed applications. The browser never claims to have
+run the .NET compiler. See [VB.NET migration](docs/VBNET-MIGRATION.md) for supported
+transformations, extension contracts, architecture and verification boundaries.
+
 ## Source layout
 
 | Directory | Responsibility |
@@ -295,6 +315,7 @@ See [Testing and validation](docs/TESTING.md) for reproducible commands, evidenc
 | `src/controls`, `src/graphics`, `src/theme` | Browser controls, drawing and shared themes |
 | `src/editor`, `src/ide`, `src/designer` | Editor services, workspace/tool windows and form editing |
 | `src/project`, `src/exporter` | Project/native-text interchange, resource preservation and standalone export |
+| `src/migration`, `packages/vbnet-*` | VB.NET migration, reusable converter, source runtime and .NET 10 project export |
 | `tools`, `tests`, `reports` | Reproducible build/package tools, regression tests and validation evidence |
 | `examples`, `dist`, `docs` | Editable examples, built applications and documentation |
 
@@ -312,6 +333,7 @@ Native MDIForm/UserControl/UserDocument/report designers, type-library/add-in lo
 | [Architecture / SDK embedding](docs/ARCHITECTURE.md) | Source architecture and reusable components |
 | [Compatibility](docs/COMPATIBILITY.md) | Supported behavior and explicit boundaries |
 | [Testing and validation](docs/TESTING.md) | Reproducible checks and validation evidence |
+| [VB.NET / .NET 10 migration](docs/VBNET-MIGRATION.md) | Migration architecture, ZIP export, packages, extensions and boundaries |
 | [Visual validation](docs/VISUAL-AUDIT.md) | Rendering invariants, review procedure and fidelity limits |
 | [Documentation index](docs/README.md) | Build, maintenance and extension guides |
 
