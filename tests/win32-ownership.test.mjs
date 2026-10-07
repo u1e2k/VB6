@@ -29,13 +29,14 @@ test('ByVal String owns a zero-initialized local and frees it on the shared norm
   const {bytes,symbols,offset}=compiledOwnership(),prefix='proc:Ownership:Owned';
   const prologue=bytes.subarray(offset(prefix),offset(prefix+':0'));
   // EBP-52 is the first owned slot after the 48-byte error frame.
-  assert.ok(prologue.includes(Buffer.from('8d85ccffffff89c7b90100000031c0fcf3ab','hex')),'owned parameter is initialized before a fallible BSTR copy');
+  assert.ok(prologue.includes(Buffer.from('8d45cc89c7b90100000031c0fcf3ab','hex')),'owned parameter is initialized before a fallible BSTR copy');
   const cleanup=offset(prefix+':cleanup');
   assert.equal(bytes[cleanup],0x50,'preserve the return value');
   assert.equal(bytes[cleanup+1],0xe8,'release expression temporaries first');
-  assert.deepEqual(bytes.subarray(cleanup+6,cleanup+19),Buffer.from('b801000000508d85ccffffff50','hex'),'free the owned parameter slot, not its borrowed incoming argument');
-  assert.equal(bytes[cleanup+19],0xe8);
-  const target=symbols[prefix+':cleanup']+24+bytes.readInt32LE(cleanup+20);
+  const clearArgs=Buffer.from('b801000000508d45cc50','hex');
+  assert.deepEqual(bytes.subarray(cleanup+6,cleanup+6+clearArgs.length),clearArgs,'free the owned parameter slot, not its borrowed incoming argument');
+  const call=cleanup+6+clearArgs.length;assert.equal(bytes[call],0xe8);
+  const target=symbols[prefix+':cleanup']+(call-cleanup)+5+bytes.readInt32LE(call+1);
   assert.equal(target,symbols['native:string:clear']);
 });
 

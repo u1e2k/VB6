@@ -1,5 +1,6 @@
 import {x86ExtendedMethods} from './x86-extended.js';
-import {x86OperandMethods, X86_CONDITIONS} from './x86-operands.js';
+import {x86StringMethods} from './x86-strings.js';
+import {x86OperandMethods, X86_CONDITIONS, mem32} from './x86-operands.js';
 const checked32=value=>{if(!Number.isInteger(value)||value < -2147483648||value > 4294967295)throw new Error('Invalid x86 immediate');return value;};
 const labelName=name=>{if(typeof name!=='string'||!name)throw new Error('Invalid native label');return name;};
 function argument(value) {
@@ -27,11 +28,11 @@ export class X86 {
     if (typeof value === 'string') return this.emit(0xb8).addr(value);
     if (value.address !== undefined) return this.local(value.address);
     if (value.memory !== undefined) return this.emit(0xa1).addr(value.memory, value.addend ?? 0);
-    return this.emit(0x8b, 0x85).imm(value.argument);
+    return this.mov('eax',mem32({base:'ebp',displacement:value.argument|0}));
   }
   push(value) { if (value === undefined) return this.emit(0x50); this.value(value); return this.emit(0x50); }
   store(label, addend = 0) { labelName(label);checked32(addend);return this.emit(0xa3).addr(label, addend); }
-  local(offset) { checked32(offset);return this.emit(0x8d, 0x85).imm(offset); }
+  local(offset) { checked32(offset);return this.lea('eax',mem32({base:'ebp',displacement:offset|0})); }
   call(label) { labelName(label);this.emit(0xe8); this.s.reference(label, 'rel'); return this; }
   jump(label) { labelName(label);this.emit(0xe9); this.s.reference(label, 'rel'); this.s.fixups.at(-1).branch = 0xeb; return this; }
   branch(condition, label) {
@@ -46,7 +47,7 @@ export class X86 {
   }
   invoke(dll, name) { const label=this.image.import(dll,name);return this.emit(0xff, 0x15).addr(label); }
   test() { return this.emit(0x85, 0xc0); }
-  compare(value) { checked32(value);return this.emit(0x3d).imm(value); }
+  compare(value) { checked32(value);return this.cmp('eax',value); }
   enter(bytes = 0) {
     if (!Number.isInteger(bytes) || bytes < 0 || bytes > 512 * 1024) throw new Error('Invalid x86 stack frame');
     this.emit(0x55, 0x89, 0xe5);
@@ -57,4 +58,4 @@ export class X86 {
   leave(args = 0) { if (!Number.isInteger(args) || args < 0 || args > 65535) throw new Error('Invalid x86 return cleanup'); this.emit(0x5f, 0x5e, 0x5b, 0x89, 0xec, 0x5d); return args ? this.emit(0xc2).emit(args, args >>> 8) : this.emit(0xc3); }
 }
 
-Object.assign(X86.prototype, x86OperandMethods, x86ExtendedMethods);
+Object.assign(X86.prototype, x86OperandMethods, x86ExtendedMethods, x86StringMethods);
