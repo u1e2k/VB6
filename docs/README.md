@@ -50,6 +50,8 @@ These guides describe the implemented system, not complete native VB6 parity.
   [calendar intervals](WIN32-CALENDAR-INTERVALS.md), [arrays](WIN32-ARRAYS.md),
   [calls](WIN32-CALLS.md), [bindings](WIN32-BINDINGS.md),
   [callbacks](WIN32-CALLBACKS.md) and [String interop](WIN32-STRING-INTEROP.md).
+- [COM/OLE services and reusable packages](COM-OLE.md): portable contracts, VB GetObject,
+  native data/storage services, ownership, explicit permissions and support boundaries.
 - Native Automation: [startup/deadlines](NATIVE-AUTOMATION-STARTUP.md),
   [typed scalars](NATIVE-SCALAR-INTEROP.md) and [DATE transport](NATIVE-DATE-TRANSPORT.md).
 - OCX: [setup and support](OCX-SUPPORT.md), [container contracts](OCX-CONTAINER-CONTRACTS.md),
@@ -70,6 +72,9 @@ These guides describe the implemented system, not complete native VB6 parity.
 Package READMEs own their API, installation and compatibility details:
 [automatic layout](../packages/auto-layout/README.md),
 [Win32 browser compatibility](../packages/win32-browser/README.md),
+[portable COM/OLE](../packages/com-ole/README.md),
+[Automation values and adapters](../packages/automation/README.md),
+[native COM/OLE companion](../packages/native-automation/README.md),
 [native debugger](../packages/native-debugger/README.md) and
 [optional compute compiler/runtime](../packages/vb6-compute/README.md).
 
