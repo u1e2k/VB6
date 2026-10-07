@@ -277,10 +277,31 @@ End Function`),['42']]
  }
 });
 
+// The approved modernization targets actual .NET Decimal behavior, not the
+// CLR storage size or the old Currency formatter. Compile an independent program
+// and compare exact outputs as well as explicit expected values.
+let decimalBaselineOutput;
+function decimalBaseline(t) {
+  if (!decimalBaselineOutput) {
+    const baseline = fs.readFileSync(path.join(root,'tests/fixtures/migration-decimal-baseline.vb'),'utf8');
+    const h = harness(t,'decimal-framework-baseline',project('Public Sub Main()\nEnd Sub'),{
+      codeStyle:'native',runtime:'none',strict:true,
+      patch(directory) { fs.writeFileSync(path.join(directory,'Application/Module1.vb'),baseline); }
+    });
+    decimalBaselineOutput = h.run();
+    assert.deepEqual(decimalBaselineOutput,['1.23456','1','1.5','2.0','1.23456','1','1.23','8','14','truth','16']);
+    assert.deepEqual(h.result.report.runtime.features,[]);
+  }
+  return decimalBaselineOutput;
+}
+
 test('approved Decimal modernization compiles without Currency support',{skip,timeout:150000},t=>{
  const input=project('Public Sub Main()\nDim c As Currency\nc=1.23456@\nDebug.Print CStr(c)\nFor c=1 To 2 Step .5\nDebug.Print c\nNext\nEnd Sub');
  const h=harness(t,'native-decimal',input,{codeStyle:'native',runtime:'none',semanticPolicy:'modernize',acceptedRules:['currency-decimal'],strict:true,patch:invariantCulture});
- assert.deepEqual(h.run(),['1.23456','1','1.5','2']);assert.deepEqual(h.result.report.runtime.features,[]);
+ const actual=h.run();
+ assert.deepEqual(actual,['1.23456','1','1.5','2.0']);
+ assert.deepEqual(actual,decimalBaseline(t).slice(0,4));
+ assert.deepEqual(h.result.report.runtime.features,[]);
 });
 
 test('minimal Currency project compiles under a nonempty root namespace',{skip,timeout:150000},t=>{
@@ -321,7 +342,10 @@ End Module
 test('approved Decimal intrinsics retain the selected native representation',{skip,timeout:150000},t=>{
  const input=project('Public Sub Main()\nDim c As Currency\nc=CCur(1.23456)\nDebug.Print CStr(Abs(c))\nDebug.Print Sgn(c)\nDebug.Print Round(c,2)\nDebug.Print Len(c)\nDebug.Print VarType(c)\nIf c Then Debug.Print "truth"\nEnd Sub');
  const h=harness(t,'native-decimal-intrinsics',input,{codeStyle:'native',runtime:'none',semanticPolicy:'modernize',acceptedRules:['currency-decimal'],strict:true,patch:invariantCulture});
- assert.deepEqual(h.run(),['1.23456','1','1.23','16','14','truth']);assert.deepEqual(h.result.report.runtime.features,[]);
+ const actual=h.run();
+ assert.deepEqual(actual,['1.23456','1','1.23','8','14','truth']);
+ assert.deepEqual(actual,decimalBaseline(t).slice(4,10));
+ assert.deepEqual(h.result.report.runtime.features,[]);
 });
 
 
