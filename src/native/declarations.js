@@ -23,8 +23,8 @@ export function lowerNativeDeclarations(module){
       fail('Unsupported native DLL import: use a DLL basename and an ASCII entry name or ordinal 1 through 65535');
     const params=proc.params.map(p=>({...p,type:p.storageType||p.type})),returnType=proc.storageReturnType||proc.returnType;
     if(params.reduce((sum,p)=>sum+nativeParameterBytes(p),0)>65532)fail('Native Declare argument area exceeds the x86 stdcall return limit');
-    if(params.some(p=>!scalar(p.type)||p.bounds!==null||p.optional||p.paramArray)||proc.kind==='function'&&!scalar(returnType))
-      fail('Native Declare supports scalar Byte/Integer/Long/Boolean/Single/Double/Currency/Date/String parameters and returns; arrays and records require separate ABI support');
+    if(params.some(p=>(!scalar(p.type)&&(!p.byRef||['object','variant','decimal'].includes(lower(p.type))))||p.bounds!==null||p.optional||p.paramArray)||proc.kind==='function'&&!scalar(returnType))
+      fail('Native Declare supports scalar Byte/Integer/Long/Boolean/Single/Double/Currency/Date/String parameters and returns; ByRef POD records and As Any are supported; arrays and managed records require separate ABI support');
     declarations.set(lower(proc.name),{name:proc.name,kind:proc.kind,scope:proc.scope,params,returnType,dll,symbol,line:proc.line});
   }
   return declarations;
