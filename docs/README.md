@@ -29,6 +29,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Native project interchange](NATIVE-PROJECTS.md) and
   [workspace, save recovery and interoperability](NATIVE-WORKSPACE-INTEROP.md).
 - [Data sources](DATA-SOURCES.md): providers, binding, credentials and deployment.
+- [Common Automation](COMMON-AUTOMATION.md): HTTP/XML/ADO stream objects, shared data
+  transport, virtual files, recordset binding and deployment examples.
 - [Keyboard/mouse events](INPUT-EVENTS.md) and [optional automatic layout](anchoring-layout.md).
 
 ## IDE, appearance and rendering

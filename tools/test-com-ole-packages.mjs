@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {DispatchObject,ComByRef,ComError,HRESULT,IID,OleDataObject,StgMedium,MemoryStream,OleClipboard} from '@vb6/com-ole';
-import {AutomationRegistry,registerComClass,automationInvoke,VBArray,Cell,tagScalar,scalarType,VBError,MISSING} from '@vb6/automation';
+import {AutomationRegistry,registerComClass,automationInvoke,VBArray,Cell,tagScalar,scalarType,VBError,MISSING,CommonAutomation,VirtualFileSystem,unbox} from '@vb6/automation';
 import {NativeAutomationClient,NativeComOleClient} from '@vb6/native-automation';
 const checks=[],check=(name,fn)=>{fn();checks.push(name);};
 let object;
@@ -44,6 +44,17 @@ const loader=await fs.readFile(new URL('tools/interop/automation-host.ps1',nativ
 const sources=[...loader.matchAll(/'([A-Za-z][A-Za-z0-9]*\.cs)'/g)].map(m=>m[1]);
 assert(sources.length>=11);for(const name of sources)await fs.access(new URL('tools/interop/'+name,nativeRoot));checks.push('every production companion source is included');
 const autoRoot=new URL('./',import.meta.resolve('@vb6/automation'));assert(!fileURLToPath(autoRoot).startsWith(process.env.VB6_SOURCE_ROOT));checks.push('consumer resolves outside source checkout');
+const virtualFiles=new VirtualFileSystem(),requests=[];
+const httpTransport=new CommonAutomation.HttpTransport({fetch:async(url,options)=>{requests.push({url,options});return new Response('Package Żółć',{headers:{'Content-Type':'text/plain; charset=utf-8'}});}});
+const common=CommonAutomation.createCommonAutomationRegistry({transport:httpTransport,fs:virtualFiles}).createSession();
+try{
+  const http=await common.create('MSXML2.ServerXMLHTTP.6.0');await automationInvoke(http,'open',1,['GET','https://package.invalid/data',false]);await automationInvoke(http,'send',1);
+  assert.equal(unbox(await automationInvoke(http,'responseText',2)),'Package Żółć');assert.equal(scalarType(await automationInvoke(http,'status',2)),'long');checks.push('installed common HTTP uses canonical typed Automation values');
+  const bytes=await automationInvoke(http,'responseBody',2);assert(bytes instanceof VBArray);assert.equal(bytes.type.toLowerCase(),'byte');
+  const stream=await common.create('ADODB.Stream');await automationInvoke(stream,'Type',4,[1]);await automationInvoke(stream,'Open',1);await automationInvoke(stream,'Write',1,[bytes]);await automationInvoke(stream,'SaveToFile',1,['/download.txt',2]);assert.equal(new TextDecoder().decode(virtualFiles.readBytes('/download.txt')),'Package Żółć');checks.push('installed HTTP Byte arrays and ADO streams share the virtual filesystem');
+  assert.equal(requests[0].options.credentials,'omit');assert.equal(requests[0].options.redirect,'error');checks.push('installed transport retains credential and redirect policy');
+  assert(CommonAutomation.COMMON_XML_CLASSES.includes('MSXML2.DOMDocument.6.0'));assert.equal(typeof CommonAutomation.xmlDocumentAdapter,'function');checks.push('installed package exports XML DOM adapter without requiring a DOM at import time');
+}finally{await common.close();httpTransport.close();}
 let nativeExecuted=false;
 if(process.platform==='win32'){
   const client=new NativeComOleClient({allowed:[],allowNativeCode:true,architecture:process.env.VB6_COM_ARCH||'x86'});
