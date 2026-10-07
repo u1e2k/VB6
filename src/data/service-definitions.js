@@ -1,10 +1,11 @@
 /** Canonical HTTP connection/command contract shared by IDE, MCP and execution.
  * Aliases accepted from existing projects are normalized, never silently ignored. */
+import {httpHeader} from '../automation/http-transport.js';
 import {VBError} from '../language/errors.js';
 const fail=(message,number=3001)=>{throw new VBError(message,number,'VB6.Data');};
 const NETWORK=new Set(['rest','odata','graphql','gateway']);
 const TYPES=Object.freeze({byte:17,integer:3,long:3,number:5,double:5,single:4,string:202,text:202,boolean:11,date:7,decimal:14,currency:6,variant:12,binary:204});
-export const HTTP_COMMAND_KEYS=Object.freeze(['method','rowsPath','fields','pagination','query','body','response','valueField']);
+export const HTTP_COMMAND_KEYS=Object.freeze(['headers','method','rowsPath','fields','pagination','query','body','response','valueField']);
 function alias(value,canonical,alternate){
   if(value[alternate]===undefined)return;
   if(value[canonical]!==undefined&&value[canonical]!==value[alternate])fail(`Conflicting ${canonical} and ${alternate}`);
@@ -17,6 +18,7 @@ function endpoint(value,base){
   return url;
 }
 function mapping(config){
+  if(config.headers!==undefined){if(!config.headers||typeof config.headers!=='object'||Array.isArray(config.headers)||Object.keys(config.headers).length>128)fail('Invalid HTTP headers');for(const [name,value]of Object.entries(config.headers)){if(typeof value!=='string')fail('HTTP header values must be strings');httpHeader(name,value);}}
   if(config.response!==undefined&&config.response!=='json')fail('HTTP data commands return JSON recordsets; response must be json');
   if(config.method!==undefined){config.method=String(config.method).toUpperCase();if(!['GET','POST'].includes(config.method))fail('Read commands support GET or POST');}
   if(config.valueField!==undefined&&(typeof config.valueField!=='string'||!config.valueField.length||['__proto__','prototype','constructor'].includes(config.valueField)))fail('Invalid scalar value column');
@@ -24,7 +26,7 @@ function mapping(config){
     if(!Array.isArray(config.fields)||config.fields.length>1024)fail('Invalid field mapping');const seen=new Set();
     for(const field of config.fields){if(!field||typeof field.name!=='string'||!field.name||seen.has(field.name.toLowerCase()))fail('Duplicate or empty field mapping');seen.add(field.name.toLowerCase());
       const parts=String(field.path||field.name).replace(/^\$\.?/,'').split('.');if(parts.some(p=>!p||['__proto__','prototype','constructor'].includes(p)))fail('Invalid JSON field path');
-      if(typeof field.type==='string'){const type=TYPES[field.type.toLowerCase()];if(type===undefined)fail('Unknown field type: '+field.type);field.type=type;}
+      if(typeof field.type==='string'){const key=field.type.toLowerCase(),type=Object.hasOwn(TYPES,key)?TYPES[key]:undefined;if(type===undefined)fail('Unknown field type: '+field.type);field.type=type;}
     }
   }
 }
@@ -32,6 +34,7 @@ export function normalizeServiceDefinitions(data){
   for(const connection of data.connections){
     if(!NETWORK.has(String(connection.provider).toLowerCase()))continue;
     alias(connection,'url','baseUrl');if(typeof connection.url!=='string'||!connection.url.trim())fail('An absolute HTTP data-source URL is required');endpoint(connection.url);
+    if(connection.auth!==undefined&&(!connection.auth||connection.auth.type!=='none'||Object.keys(connection.auth).length!==1))fail('Use a runtime credentialRef; stored auth providers are not supported',70);
     mapping(connection);
   }
   for(const command of data.commands){
@@ -44,7 +47,7 @@ export function normalizeServiceDefinitions(data){
       if(connection.provider.toLowerCase()==='graphql'&&command.method&&command.method!=='POST')fail('GraphQL commands require POST');
     }
     for(const parameter of command.parameters||[]){
-      if(typeof parameter.type==='string'){const type=TYPES[parameter.type.toLowerCase()];if(type===undefined)fail('Unknown parameter type: '+parameter.type);parameter.type=type;}
+      if(typeof parameter.type==='string'){const key=parameter.type.toLowerCase(),type=Object.hasOwn(TYPES,key)?TYPES[key]:undefined;if(type===undefined)fail('Unknown parameter type: '+parameter.type);parameter.type=type;}
       if(parameter.required!==undefined&&typeof parameter.required!=='boolean')fail('Parameter required must be Boolean');
     }
   }

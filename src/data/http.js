@@ -1,3 +1,4 @@
+import {abortable} from '../automation/http-transport.js';
 import {encodeCell,decodeResult} from './wire.js';
 import {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue} from './common.js';
 
@@ -27,7 +28,7 @@ export class HTTPProvider {
     const timeout=Math.max(1,Math.min(600,Number(this.timeout||this.config.timeout||30)))*1000;
     const timer=setTimeout(()=>controller.abort(),timeout);
     try{
-      const auth=this.config.credentialRef?await this.context.credential(this.config.credentialRef):{};
+      const auth=this.config.credentialRef?await abortable(this.context.credential(this.config.credentialRef,{closing}),controller.signal):{};
       assertData(!controller.signal.aborted,'Data request was cancelled or timed out',-2147467260);
       const combined=new Headers({Accept:'application/json',...this.config.headers,...this.headers,...(typeof auth==='string'?{Authorization:'Bearer '+auth}:auth?.headers),...headers});
       if(body!==undefined)combined.set('Content-Type','application/json');
@@ -61,7 +62,7 @@ export class HTTPProvider {
         url.searchParams.set(page.sizeParameter||'limit',String(pageSize));
       }
       assertData(!seen.has(url.href),'Cyclic pagination link',3001);seen.add(url.href);
-      const response=await this.request(url.href,{method,body,limit:remaining});remaining-=response.bytes;
+      const response=await this.request(url.href,{method,body,headers:config.headers,limit:remaining});remaining-=response.bytes;
       if(graphql&&response.data?.errors?.length)throw dataError('GraphQL returned errors; the result was not accepted',3001);
       const extracted=pathValue(response.data,config.rowsPath||(config.provider?.toLowerCase()==='odata'?'value':''));
       let batch=Array.isArray(extracted)?extracted:extracted&&typeof extracted==='object'?[extracted]:extracted===null?[]:null;

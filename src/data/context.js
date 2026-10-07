@@ -1,3 +1,4 @@
+import {MISSING} from '../runtime/values.js';
 import {createCommonAutomationRegistry} from '../automation/common-objects.js';
 import {HttpTransport} from '../automation/http-transport.js';
 import {httpCommandOptions} from './service-definitions.js';
@@ -21,13 +22,15 @@ export class DataContext {
   }
   connection(){return new ADOConnection(this);}
   command(){return new ADOCommand(this);}
-  async credential(name){
-    assertData(!this.closed,'Data context is closed',3704);
+  async credential(name,{closing=false}={}){
+    // Cleanup may reuse a credential already granted to this transaction, never acquire a new one.
+    assertData(!this.closed||closing&&this.credentials.has(name),'Data context is closed',3704);
     if(this.credentials.has(name))return this.credentials.get(name);
     const value=await this.credentialProvider?.(name);assertData(!this.closed,'Data context is closed',3704);assertData(value,'A runtime credential is required: '+name,70);this.credentials.set(name,value);return value;
   }
-  isObjectType(name){return /^(?:ADODB\.(?:Connection|Command|Recordset|Parameter)|DAO\.(?:DBEngine|Workspace|Database|Recordset|QueryDef|TableDef|Index|Field|Parameter)|(?:RDO\.)?rdo(?:Engine|Connection|Environment|Query|Resultset|Parameter|Column|Table)|VB6\.Data\.(?:Connection|Command))$/i.test(String(name));}
+  isObjectType(name){if(this.commonAutomation?.has(name))return true;return /^(?:ADODB\.(?:Connection|Command|Recordset|Parameter)|DAO\.(?:DBEngine|Workspace|Database|Recordset|QueryDef|TableDef|Index|Field|Parameter)|(?:RDO\.)?rdo(?:Engine|Connection|Environment|Query|Resultset|Parameter|Column|Table)|VB6\.Data\.(?:Connection|Command))$/i.test(String(name));}
   createObject(name){
+    assertData(!this.closed,'Data context is closed',3704);
     if(this.commonAutomation?.has(name))return this.commonAutomation.create(name);
     switch(String(name).toLowerCase()){
       case 'rdo.rdoengine':case 'rdoengine':return new RDOEngine(this);
@@ -42,20 +45,28 @@ export class DataContext {
   }
   environment(){
     const environment={__type:'DataEnvironment',Connections:new DataCollection(),Commands:new DataCollection()};
-    environment.SetCredential=(name,value)=>{assertData(typeof name==='string'&&name,'A credential reference is required');this.credentials.set(name,value);};
+    environment.SetCredential=(name,value)=>{assertData(!this.closed,'Data context is closed',3704);assertData(typeof name==='string'&&name,'A credential reference is required');this.credentials.set(name,value);};
     environment.ClearCredentials=()=>this.credentials.clear();
     for(const definition of this.config.connections){const cn=this.connection();cn.Name=definition.name;cn.ConnectionString=definition.name;environment[definition.name]=cn;environment.Connections.items.push(cn);}
     for(const definition of this.config.commands){
       const cmd=this.command();cmd.Name=definition.name;cmd.CommandText=definition.text||'';cmd.CommandType=definition.type||1;cmd._requestOptions=httpCommandOptions(definition);cmd.ActiveConnection=environment.Connections.Item(definition.connection);
       for(const p of definition.parameters||[])cmd.Parameters.Append(cmd.CreateParameter(p.name,p.type||202,1,p.size||0,p.value??null));
       environment.Commands.items.push(cmd);environment['rs'+definition.name]=new ConnectedRecordset(this);
+      let executing=false;
       environment[definition.name]=async(...args)=>{
+        assertData(!this.closed,'Data context is closed',3704);
+        assertData(!executing,'This DataEnvironment command is already executing',3711);
         assertData(args.length<=cmd.Parameters.Count,'Too many command parameters',450);
-        for(const [i,p]of (definition.parameters||[]).entries()){assertData(p.required!==true||i<args.length&&args[i]!==undefined,'Argument not optional: '+p.name,449);cmd.Parameters.Item(i).Value=i<args.length?args[i]:(p.value??null);}
-        if(cmd.ActiveConnection.State===0)await cmd.ActiveConnection.Open();
-        const previous=environment['rs'+definition.name];if(previous.State)await previous.Close();
-        return cmd.execute(undefined,undefined,cmd.CommandType,previous);
+        const values=(definition.parameters||[]).map((p,i)=>{const missing=i>=args.length||args[i]===MISSING;assertData(p.required!==true||!missing,'Argument not optional: '+p.name,449);return missing?(p.value??null):args[i];});
+        executing=true;
+        try{
+          values.forEach((value,i)=>cmd.Parameters.Item(i).Value=value);
+          if(cmd.ActiveConnection.State===0)await cmd.ActiveConnection.Open();
+          const previous=environment['rs'+definition.name];if(previous.State)await previous.Close();
+          return await cmd.execute(undefined,undefined,cmd.CommandType,previous);
+        }finally{executing=false;}
       };
+      environment[definition.name].vbPreserveMissing=true;
       environment[definition.name].vbParams=(definition.parameters||[]).map(p=>({name:p.name,optional:p.required!==true}));
     }
     return environment;
