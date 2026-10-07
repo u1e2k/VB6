@@ -20,6 +20,9 @@ Module RuntimeChecks
         End Try
         Throw New Exception("Expected error: " & label)
     End Sub
+    Private Function OptionalMissing(<Global.System.Runtime.InteropServices.Optional> ByVal value As Object) As Boolean
+        Return value Is Type.Missing
+    End Function
     Public Sub Main()
         Assert(VbRuntime.ToInt16(2.5R) = 2S, "banker rounding down")
         Assert(VbRuntime.ToInt16(3.5R) = 4S, "banker rounding up")
@@ -41,6 +44,8 @@ Module RuntimeChecks
         Assert(VbRuntime.VarType(1S) = 2S AndAlso VbRuntime.VarType(1) = 3S, "VB6 integral subtype ids")
         Assert(VbRuntime.TypeName(1S) = "Integer" AndAlso VbRuntime.TypeName(1) = "Long", "VB6 type names")
         Assert(VbRuntime.IsMissing(Type.Missing), "Missing sentinel")
+        Assert(OptionalMissing(), "Optional interop metadata supplies Missing")
+        Assert(Not OptionalMissing(Nothing), "Explicit Empty is not Missing")
         Assert(VbRuntime.IsError(VbRuntime.ErrorValue(7)), "CVErr sentinel")
         Assert(VbRuntime.FixedString("abcdef", 3) = "abc", "fixed string truncate")
         Assert(VbRuntime.FixedString("a", 3) = "a  ", "fixed string pad")

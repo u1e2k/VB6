@@ -60,21 +60,22 @@ Namespace Global.Vb6Migration.Runtime
             If fixed Then VbRuntime.RaiseError(10, "This array is fixed or temporarily locked")
             Allocate(lower, upper, preserve)
         End Sub
-        Private Function Offset(indices As Integer()) As Integer
-            If Not allocated OrElse indices.Length <> lows.Length Then VbRuntime.RaiseError(9)
+        Private Function Offset(first As Integer, rest As Integer()) As Integer
+            If Not allocated OrElse rest.Length + 1 <> lows.Length Then VbRuntime.RaiseError(9)
             Dim result As Long = 0
-            For dimension As Integer = 0 To indices.Length - 1
-                If indices(dimension) < lows(dimension) OrElse indices(dimension) > highs(dimension) Then VbRuntime.RaiseError(9)
-                result += (CLng(indices(dimension)) - lows(dimension)) * strides(dimension)
+            For dimension As Integer = 0 To lows.Length - 1
+                Dim index As Integer = If(dimension = 0, first, rest(dimension - 1))
+                If index < lows(dimension) OrElse index > highs(dimension) Then VbRuntime.RaiseError(9)
+                result += (CLng(index) - lows(dimension)) * strides(dimension)
             Next
             Return CInt(result)
         End Function
-        Default Public Property Item(ParamArray indices() As Integer) As T
+        Default Public Property Item(first As Integer, ParamArray rest() As Integer) As T
             Get
-                Return items(Offset(indices))
+                Return items(Offset(first, rest))
             End Get
             Set(value As T)
-                items(Offset(indices)) = value
+                items(Offset(first, rest)) = value
             End Set
         End Property
         Public Function LowerBound(dimension As Integer) As Integer Implements IVbArray.LowerBound
