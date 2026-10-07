@@ -1,3 +1,4 @@
+import {NATIVE_GRID_TYPES} from './control-grid-contract.js';
 import {NATIVE_CONTROL_CATALOG} from './control-catalog.js';
 const edit = new Set(['TextBox','RichTextBox']);
 export const NATIVE_SCROLL_CONTROLS = new Set(['HScrollBar','VScrollBar']);
@@ -31,7 +32,7 @@ export function nativeControlStyle(type,p) {
   if(type==='Slider') {style|=1;if(p.Orientation===1)style|=2;if(p.TickStyle===1)style|=4;if(p.TickStyle===2)style|=8;if(p.TickStyle===3)style=style&~1|16;}
   if(type==='UpDown') {style|=0x20;if(p.Wrap)style|=1;if(p.Orientation===1)style|=0x40;}
   if(type==='TreeView') {ex=0x200;style|=1|2|0x20;if(p.LineStyle)style|=4;}
-  if(type==='ListView') {ex=0x200;style|=({0:0,1:2,2:3,3:1})[Number(p.View??3)]??1;style|=8;}
+  if(type==='ListView') {ex=0x200;style|=({0:0,1:2,2:3,3:1})[Number(p.View??3)]??1;style|=8|0x40;} // LVS_SHAREIMAGELISTS: the ImageList object, not the view, owns its handle.
   if(type==='StatusBar')style=style&~0x10000|0x80|0x40|8; // CCS_NORESIZE, NOPARENTALIGN, NODIVIDER: layout owns bounds.
   if(type==='Toolbar')style|=0x80|0x40|8|0x800|0x1000;
   if(NATIVE_TAB_CONTROLS.has(type)) {style|=0x02000000;if(p.TabOrientation===1)style|=2;if(p.TabOrientation===2)style|=0x80;if(p.TabOrientation===3)style|=0x82;if(p.MultiRow)style|=0x200;}
@@ -39,6 +40,8 @@ export function nativeControlStyle(type,p) {
   if(type==='MonthView')style|=p.ShowWeekNumbers?4:0;
   if(NATIVE_DRAW_CONTROLS.has(type)) {style=style&~0x10000|0x10d;if(type==='PictureBox'){style|=0x02000000;if(p.BorderStyle!==0)ex=0x200;}}
   if(NATIVE_CONTROL_CATALOG[type].container)ex|=0x10000; // WS_EX_CONTROLPARENT: nested dialog-key navigation.
+  if(type==='MSChart')style|=0x100;
+  if(NATIVE_GRID_TYPES.has(type)){style|=0x100|0x02000000;ex|=0x200;if((p.ScrollBars??3)&1)style|=0x100000;if((p.ScrollBars??3)&2)style|=0x200000;}
   return {style:style>>>0,ex};
 }
 export function nativeCommandEvents(type) {
@@ -46,11 +49,12 @@ export function nativeCommandEvents(type) {
   if(type==='ComboBox'||type==='DriveListBox')return [[1,'Click'],[5,'Change']];
   if(['ListBox','FileListBox','DirListBox'].includes(type))return [[1,'Click'],[2,'DblClick']];
   if(['CommandButton','CheckBox','OptionButton'].includes(type))return [[0,'Click'],[5,'DblClick']];
-  if(['Label','PictureBox','Image','Shape','Line'].includes(type))return [[0,'Click'],[1,'DblClick']];
+  if(['Label','PictureBox','Image','Shape','Line','MSChart'].includes(type))return [[0,'Click'],[1,'DblClick']];
   return [];
 }
 export function nativeControlEvents(type) {
   if(type==='Timer')return ['timer'];
+  if(type==='CommonDialog'||type==='ImageList')return [];
   const events=[...NATIVE_INPUT_EVENTS,...nativeCommandEvents(type).map(([,name])=>name.toLowerCase())];
   if(NATIVE_SCROLL_CONTROLS.has(type)||type==='Slider')events.push('change','scroll');
   if(type==='UpDown')events.push('change');
@@ -58,6 +62,7 @@ export function nativeControlEvents(type) {
   if(NATIVE_DATE_CONTROLS.has(type))events.push('change');
   if(NATIVE_TAB_CONTROLS.has(type))events.push('click');
   if(['TreeView','ListView','StatusBar'].includes(type))events.push('click','dblclick');
+  if(NATIVE_GRID_TYPES.has(type))events.push('rowcolchange','selchange','scroll','click','dblclick','beforecolupdate','aftercolupdate','validate');
   return [...new Set(events)];
 }
 /** Resolve parent identity, including children of an indexed container; reject
