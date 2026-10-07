@@ -114,20 +114,20 @@ Namespace VB6.Compatibility
             If dimension < 1 OrElse dimension > Rank Then Throw New IndexOutOfRangeException("Subscript out of range")
         End Sub
 
-        Default Public Property Item(ParamArray indices As Integer()) As T
+        Default Public Property Item(first As Integer, ParamArray remaining As Integer()) As T
             Get
-                Return _data(Offset(indices))
+                Return _data(Offset(first, remaining))
             End Get
             Set(value As T)
-                _data(Offset(indices)) = value
+                _data(Offset(first, remaining)) = value
             End Set
         End Property
 
-        Private Function Offset(indices As Integer()) As Integer
-            If indices Is Nothing OrElse indices.Length <> Rank OrElse Rank = 0 Then Throw New IndexOutOfRangeException("Subscript out of range")
+        Private Function Offset(first As Integer, remaining As Integer()) As Integer
+            If remaining Is Nothing OrElse remaining.Length + 1 <> Rank Then Throw New IndexOutOfRangeException("Subscript out of range")
             Dim result As Long = 0
-            For i = 0 To indices.Length - 1
-                Dim index = CLng(indices(i)) - _lower(i)
+            For i = 0 To Rank - 1
+                Dim index = CLng(If(i = 0, first, remaining(i - 1))) - _lower(i)
                 If index < 0 OrElse index >= _length(i) Then Throw New IndexOutOfRangeException("Subscript out of range")
                 result += index * _stride(i)
             Next

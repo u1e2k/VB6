@@ -56,3 +56,6 @@ packages/vbnet-runtime-windows/bin/
 packages/vbnet-runtime-windows/obj/
 
 /artifacts/vbnet-migration/
+
+# Authored .vb runtime sources are embedded deterministically during build.
+/src/migration/runtime-sources.js
