@@ -22,3 +22,24 @@ never resolves unregistered file paths, URLs, scripts, COM classes or OS moniker
 `registerComClass(registry, progId, factory)` consumes one owned COM interface from
 the factory. The bridge retains canonical `IUnknown` identity per VM session and
 preserves tagged numeric values, typed array bounds, ByRef cells and enumeration.
+
+## Common HTTP, XML and stream components
+
+The root API also exports `CommonAutomation`, `HttpTransport`, `HttpRequest`,
+`AdoStream`, `createCommonAutomationRegistry`, `xmlDocumentAdapter` and
+`VirtualFileSystem`. These components use this package's canonical registry and
+VB values, not a second object model. Supply a host HTTP transport and optional
+virtual filesystem to the registry factory. Importing does not perform I/O.
+
+MSXML XMLHTTP/ServerXMLHTTP and WinHTTP aliases support browser-compatible HTTP;
+ADODB.Stream supports binary/text data, charset conversion and virtual files.
+MSXML DOMDocument aliases provide XML parsing/editing, XPath and typed binary
+values through opaque Automation nodes. XML activation requires a standards DOM:
+browsers supply it, while Node hosts inject DOMParser/XMLSerializer through
+`xmlEnvironment` (and XPath evaluation on the returned document).
+
+The complete runtime installs these factories with its existing DataContext.
+Shared HTTP cancellation, explicit host policy, CORS/CSP, omitted ambient cookies
+and rejected redirects still apply. Native operating-system services and binary
+COM activation are not implied. See `docs/COMMON-AUTOMATION.md` in the repository
+for aliases, examples, saved data-definition integration and precise limits.

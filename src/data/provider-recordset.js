@@ -97,7 +97,7 @@ export class ProviderRecordset extends DisconnectedRecordset {
     if(this._updatePromise)await this._updatePromise;
     this.guard();this.requireOpen();assertData(this.ActiveConnection,'Disconnected Recordset cannot requery',3251);await this.Update();
     const source=this.Source,cn=this.ActiveConnection,lock=this.LockType;this._busy=true;
-    try{const result=await cn.query(source,this._parameters,this._options);assertData(cn.State===1,'Connection closed during requery',3704);this.load(result,lock);}finally{this._busy=false;}
+    try{const result=await cn.query(source,this._parameters,this._options,cn.CommandTimeout,'native',this._requestOptions);assertData(cn.State===1,'Connection closed during requery',3704);this.load(result,lock);}finally{this._busy=false;}
   }
   async Close(){
     if(this._updatePromise)await this._updatePromise;

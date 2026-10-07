@@ -1,17 +1,7 @@
+import {abortable} from '../automation/http-transport.js';
 import {encodeCell,decodeResult} from './wire.js';
 import {assertData,dataError,DATA_LIMITS,safeHttpURL,pathValue,resultFromRows,sqlValue} from './common.js';
 
-async function boundedBody(response,limit){
-  const advertised=Number(response.headers?.get('content-length')||0);
-  assertData(advertised<=limit,'HTTP response exceeds the data limit',7);
-  if(!response.body?.getReader){const text=await response.text();assertData(new TextEncoder().encode(text).length<=limit,'HTTP response exceeds the data limit',7);return text;}
-  const reader=response.body.getReader(),parts=[];let size=0;
-  try{
-    while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw dataError('HTTP response exceeds the data limit',7);}parts.push(value);}
-  }finally{reader.releaseLock();}
-  const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.byteLength;}
-  return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
-}
 function parameterObject(parameters){return Array.isArray(parameters)?Object.fromEntries(parameters.map((v,i)=>[String(i),v])):{...parameters};}
 function mappedBody(row,fields){
   const body=Object.create(null);
@@ -38,29 +28,30 @@ export class HTTPProvider {
     const timeout=Math.max(1,Math.min(600,Number(this.timeout||this.config.timeout||30)))*1000;
     const timer=setTimeout(()=>controller.abort(),timeout);
     try{
-      const auth=this.config.credentialRef?await this.context.credential(this.config.credentialRef):{};
+      const auth=this.config.credentialRef?await abortable(this.context.credential(this.config.credentialRef,{closing}),controller.signal):{};
       assertData(!controller.signal.aborted,'Data request was cancelled or timed out',-2147467260);
       const combined=new Headers({Accept:'application/json',...this.config.headers,...this.headers,...(typeof auth==='string'?{Authorization:'Bearer '+auth}:auth?.headers),...headers});
       if(body!==undefined)combined.set('Content-Type','application/json');
-      const response=await this.context.fetch(url.href,{method,headers:combined,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,redirect:'error',credentials:'omit',cache:'no-store'});
+      const {response,bytes}=await this.context.transport.request(url.href,{method,headers:combined,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,timeout:0,limit});
       assertData(response.ok,'HTTP data request failed ('+response.status+')',response.status===409||response.status===412?3197:-2147217900);
-      const text=await boundedBody(response,limit);
+      let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw dataError('Data source returned invalid UTF-8',13);}
       let data=null;if(text.trim()){try{data=JSON.parse(text);}catch{throw dataError('Data source returned invalid JSON',13);}}
-      return {data,etag:response.headers?.get('etag'),bytes:new TextEncoder().encode(text).length};
+      return {data,etag:response.headers?.get('etag'),bytes:bytes.length};
     }catch(error){
       if(error.number)throw error;
       if(controller.signal.aborted)throw dataError('Data request was cancelled or timed out',-2147467260);
       throw dataError('HTTP data request failed. Check the connection, CORS policy, and credentials.',-2147467259);
     }finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);this.requests.delete(controller);}
   }
-  async execute(text='',parameters={}){
-    const params=parameterObject(parameters),graphql=this.config.provider?.toLowerCase()==='graphql';
+  async execute(text='',parameters={},requestOptions={}){
+    const config={...this.config,...requestOptions};
+    const params=parameterObject(parameters),graphql=config.provider?.toLowerCase()==='graphql';
     let url=this.sameOriginURL(graphql?this.base.href:String(text||this.base.href).replace(/\{([A-Za-z0-9_]+)\}/g,(_,key)=>{assertData(Object.hasOwn(params,key),'Missing URL parameter: '+key);const value=encodeURIComponent(params[key]);delete params[key];return value;}));
-    const method=graphql?'POST':String(this.config.method||'GET').toUpperCase();
+    const method=graphql?'POST':String(config.method||'GET').toUpperCase();
     assertData(['GET','POST'].includes(method),'Read commands support GET or POST',3251);
-    if(method==='GET')for(const [key,value]of Object.entries({...this.config.query,...params}))if(value!=null)url.searchParams.set(key,String(value));
-    const body=graphql?{query:String(text||this.config.queryText||''),variables:params}:method==='POST'?{...this.config.body,...params}:undefined;
-    const page=this.config.pagination||{},seen=new Set(),rows=[],etags=new WeakMap();let remaining=DATA_LIMITS.bytes;
+    if(method==='GET')for(const [key,value]of Object.entries({...config.query,...params}))if(value!=null)url.searchParams.set(key,String(value));
+    const body=graphql?{query:String(text||config.queryText||''),variables:params}:method==='POST'?{...config.body,...params}:undefined;
+    const page=config.pagination||{},seen=new Set(),rows=[],etags=new WeakMap();let remaining=DATA_LIMITS.bytes;
     const pageLimit=Math.min(DATA_LIMITS.pages,Math.max(1,Number(page.maxPages||DATA_LIMITS.pages)));
     let number=Number(page.start??(page.mode==='offset'?0:1));
     const pageSize=Math.max(1,Math.min(10000,Number(page.size||100)));
@@ -71,19 +62,20 @@ export class HTTPProvider {
         url.searchParams.set(page.sizeParameter||'limit',String(pageSize));
       }
       assertData(!seen.has(url.href),'Cyclic pagination link',3001);seen.add(url.href);
-      const response=await this.request(url.href,{method,body,limit:remaining});remaining-=response.bytes;
+      const response=await this.request(url.href,{method,body,headers:config.headers,limit:remaining});remaining-=response.bytes;
       if(graphql&&response.data?.errors?.length)throw dataError('GraphQL returned errors; the result was not accepted',3001);
-      const extracted=pathValue(response.data,this.config.rowsPath||(this.config.provider?.toLowerCase()==='odata'?'value':''));
-      const batch=Array.isArray(extracted)?extracted:extracted&&typeof extracted==='object'?[extracted]:null;
+      const extracted=pathValue(response.data,config.rowsPath||(config.provider?.toLowerCase()==='odata'?'value':''));
+      let batch=Array.isArray(extracted)?extracted:extracted&&typeof extracted==='object'?[extracted]:extracted===null?[]:null;
+      if((config.response==='json'||config.valueField)&&Array.isArray(batch)&&batch.every(v=>v===null||typeof v!=='object'))batch=batch.map(value=>({[config.valueField||'Value']:value}));
       assertData(batch,'Response does not contain records at the configured Rows Path',13);
       assertData(rows.length+batch.length<=DATA_LIMITS.rows,'Row limit exceeded',7);for(const row of batch)rows.push(row);
       // Collection ETags are not item ETags. Only explicit per-item tags are used for writeback.
       for(const row of batch)if(row&&typeof row==='object'){
-        const tag=this.config.etagField?pathValue(row,this.config.etagField):this.config.provider?.toLowerCase()==='odata'?row['@odata.etag']:undefined;
+        const tag=config.etagField?pathValue(row,config.etagField):config.provider?.toLowerCase()==='odata'?row['@odata.etag']:undefined;
         if(tag)etags.set(row,String(tag));
       }
       let next;
-      if(page.mode==='next'||this.config.provider?.toLowerCase()==='odata')next=pathValue(response.data,page.nextPath||'@odata.nextLink');
+      if(page.mode==='next'||config.provider?.toLowerCase()==='odata')next=pathValue(response.data,page.nextPath||'@odata.nextLink');
       else if(['page','offset'].includes(page.mode)){
         const more=page.hasMorePath?Boolean(pathValue(response.data,page.hasMorePath)):batch.length===pageSize;
         if(more){number+=page.mode==='offset'?pageSize:1;next=url.href;}
@@ -91,24 +83,25 @@ export class HTTPProvider {
       if(!next)break;
       url=this.sameOriginURL(next);
     }
-    const result=resultFromRows(rows,this.config.fields);
-    if(this.config.write&&!this.config.readOnly){
+    const fields=config.fields?.length?config.fields:!rows.length&&(config.response==='json'||config.valueField)?[{name:config.valueField||'Value',type:12}]:undefined;
+    const result=resultFromRows(rows,fields);
+    if(config.write&&!config.readOnly){
       const tags=new WeakMap();
       result.onLoad=loaded=>loaded.forEach((row,i)=>tags.set(row,etags.get(rows[i])));
       result.write=async(kind,row,before)=>{
-        const operation=this.config.write[kind];assertData(operation,'Data source does not support '+kind,3251);
-        const key=this.config.keyField;assertData(kind==='insert'||key&&before?.[key]!=null,'A key field is required for writeback',3251);
+        const operation=config.write[kind];assertData(operation,'Data source does not support '+kind,3251);
+        const key=config.keyField;assertData(kind==='insert'||key&&before?.[key]!=null,'A key field is required for writeback',3251);
         const endpoint=String(operation.url||this.base.href).replace(/\{([A-Za-z0-9_]+)\}/g,(_,name)=>{
           const value=(kind==='insert'?row:before)?.[name];assertData(value!=null,'Missing write URL key: '+name);return encodeURIComponent(String(value));
         });
         const tag=tags.get(row),headers=tag?{'If-Match':tag}:{};
-        assertData(!this.config.requireETag||kind==='insert'||tag,'An item ETag is required for optimistic writeback',3197);
-        const response=await this.request(endpoint,{method:operation.method||({insert:'POST',update:'PATCH',delete:'DELETE'})[kind],headers,body:kind==='delete'?undefined:mappedBody(row,this.config.fields?.length?this.config.fields:result.columns.map(c=>({name:c.Name,type:c.Type})))});
+        assertData(!config.requireETag||kind==='insert'||tag,'An item ETag is required for optimistic writeback',3197);
+        const response=await this.request(endpoint,{method:operation.method||({insert:'POST',update:'PATCH',delete:'DELETE'})[kind],headers,body:kind==='delete'?undefined:mappedBody(row,config.fields?.length?config.fields:result.columns.map(c=>({name:c.Name,type:c.Type})))});
         if(response.etag)tags.set(row,response.etag);
         if(kind!=='delete'&&response.data){
           const data=pathValue(response.data,operation.rowsPath||'');
           if(data&&typeof data==='object'&&!Array.isArray(data)){
-            const changed=resultFromRows([data],this.config.fields?.length?this.config.fields:result.columns.map(c=>({name:c.Name,type:c.Type})));
+            const changed=resultFromRows([data],config.fields?.length?config.fields:result.columns.map(c=>({name:c.Name,type:c.Type})));
             changed.columns.forEach((c,i)=>{if(pathValue(data,c.path)!==undefined)row[c.Name]=changed.values[0][i];});
           }
         }
