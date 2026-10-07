@@ -1,6 +1,8 @@
 /** Persisted common-control content and collection-wide native operations. Item
  * objects are not silently approximated as HWNDs: unlowered member calls fail. */
 const mem=memory=>({memory}),key=s=>String(s).toLowerCase();
+// Allocate strings before writing .rdata records: string() appends to the same
+// section and would otherwise insert a BSTR header inside a native pointer field.
 const collections={TreeView:['nodes'],ListView:['listitems','columnheaders'],StatusBar:['panels'],Toolbar:['buttons'],TabStrip:['tabs'],SSTab:['tabs']};
 export function nativeTreePlan(nodes){
   if(!Array.isArray(nodes)||nodes.length>10000)throw new TypeError('Native TreeView requires at most 10000 saved nodes');
@@ -44,16 +46,16 @@ export const nativeControlCollectionMethods={
     if(type==='ListView'){
       const columns=control.columns.length?control.columns:[{Text:'Name',Width:p.Width}];
       for(const [index,column]of columns.entries()){
-        const data='list-column:'+module.name+':'+control.key+':'+index;
-        this.ro.align(4).label(data).u32(15).u32(Number(column.Alignment)||0).u32(this.pixels(column.Width??1440)).reference(this.string(column.Text??'')).u32(0).u32(index);
+        const data='list-column:'+module.name+':'+control.key+':'+index,caption=this.string(column.Text??'');
+        this.ro.align(4).label(data).u32(15).u32(Number(column.Alignment)||0).u32(this.pixels(column.Width??1440)).reference(caption).u32(0).u32(index);
         send(0x1061,index,data);x.compare(-1).branch('e','error:7');
       }
       for(const [index,item]of control.items.entries()){
-        const data='list-item:'+module.name+':'+control.key+':'+index;
-        this.ro.align(4).label(data).u32(1).u32(index).u32(0).u32(0).u32(0).reference(this.string(item.Text??'')).u32(0).u32(-1).u32(0).u32(0);
+        const data='list-item:'+module.name+':'+control.key+':'+index,caption=this.string(item.Text??'');
+        this.ro.align(4).label(data).u32(1).u32(index).u32(0).u32(0).u32(0).reference(caption).u32(0).u32(-1).u32(0).u32(0);
         send(0x104d,0,data);x.compare(-1).branch('e','error:7');
         for(const [subIndex,text]of (item.SubItems||item.subItems||[]).entries()){
-          const sub=data+':'+subIndex;this.ro.align(4).label(sub).u32(1).u32(index).u32(subIndex+1).u32(0).u32(0).reference(this.string(text)).u32(0).u32(0).u32(0).u32(0);
+          const sub=data+':'+subIndex,caption=this.string(text);this.ro.align(4).label(sub).u32(1).u32(index).u32(subIndex+1).u32(0).u32(0).reference(caption).u32(0).u32(0).u32(0).u32(0);
           send(0x1074,index,sub);x.test().branch('e','error:5');
         }
       }
@@ -65,9 +67,11 @@ export const nativeControlCollectionMethods={
       for(const [index,panel]of p.Panels.entries())send(0x40b,index,this.string((panel.Alignment===1?'\t\t':panel.Alignment===2?'\t':'')+(panel.Text||'')));
     }
     if(type==='Toolbar'&&p.Buttons?.length){
+      // Intern every caption before starting the contiguous TBBUTTON array.
+      const captions=p.Buttons.map(button=>this.string(button.Caption||button.Key||''));
       const data='toolbar-buttons:'+module.name+':'+control.key;this.ro.align(4).label(data);
       module.nextToolbarId ||= 20001;
-      for(const button of p.Buttons){if(module.nextToolbarId>60000)this.fail('Native toolbar command ID limit exceeded',module);this.ro.u32(button.Style===3?8:-2).u32(module.nextToolbarId++).emit((button.Enabled===0?0:4)|(button.Visible===0?8:0)|(button.Value?1:0),button.Style===3?1:16|(button.Style===1?2:button.Style===2?6:0),0,0).u32(0).reference(this.string(button.Caption||button.Key||''));}
+      for(const [index,button] of p.Buttons.entries()){if(module.nextToolbarId>60000)this.fail('Native toolbar command ID limit exceeded',module);this.ro.u32(button.Style===3?8:-2).u32(module.nextToolbarId++).emit((button.Enabled===0?0:4)|(button.Visible===0?8:0)|(button.Value?1:0),button.Style===3?1:16|(button.Style===1?2:button.Style===2?6:0),0,0).u32(0).reference(captions[index]);}
       send(0x444,p.Buttons.length,data);x.test().branch('e','error:7'); // TB_ADDBUTTONSW
     }
   },

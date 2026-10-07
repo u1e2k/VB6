@@ -99,7 +99,7 @@ export const nativeControlMethods={
       if(type==='StatusBar'){send(0x409,1);send(0x40b,255,this.string(p.SimpleText??''));}
       if(type==='Toolbar')send(0x41e,20);
       if(NATIVE_TAB_CONTROLS.has(type)) {
-        for(const [index,tab]of control.tabs.entries()){const data='control-tab:'+module.name+':'+control.key+':'+index;this.ro.align(4).label(data).u32(1).u32(0).u32(0).reference(this.string(tab.Caption??'')).u32(0).u32(-1).u32(0);send(0x133e,index,data);}
+        for(const [index,tab]of control.tabs.entries()){const data='control-tab:'+module.name+':'+control.key+':'+index,caption=this.string(tab.Caption??'');this.ro.align(4).label(data).u32(1).u32(0).u32(0).reference(caption).u32(0).u32(-1).u32(0);send(0x133e,index,data);}
         send(0x130c,Number(p.Tab??0));
       }
       if(NATIVE_DATE_CONTROLS.has(type)){send(type==='DTPicker'?0x1002:0x1002,0,control.dateSeed);if(type==='DTPicker'&&p.CustomFormat)send(0x1032,0,this.string(p.CustomFormat));}
