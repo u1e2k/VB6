@@ -1,0 +1,11 @@
+{
+  "name": "@vb6-studio/macos-native",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "description": "Experimental VB6 to Apple Silicon native compiler and AppKit runtime",
+  "license": "MIT",
+  "engines": {"node": ">=22"},
+  "exports": {".": "./dist/index.js", "./builder": "./src/build-driver.mjs", "./node": "./src/node.mjs"},
+  "bin": {"vb6-macos": "./bin/vb6-macos.mjs"},
+  "files": ["dist", "native", "src/build-driver.mjs", "src/target.js", "src/mach-o.js", "src/node.mjs", "bin", "README.md", "LICENSE"]
+}

@@ -17,7 +17,8 @@ const run=async(executable,args,options={})=>{console.log('RUN',path.basename(ex
 const compiler=process.platform==='darwin'?await run('/usr/bin/xcrun',['--find','clang++']):execFileSync('/bin/sh',['-c','command -v clang++'],{encoding:'utf8'}).trim();
 try {
   report.compiler=await run(compiler,['--version']);
-  const flags=['-std=c++17','-O0','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',native];
+  const platformFlags=process.platform==='darwin'?['-arch','arm64','-isysroot',await run('/usr/bin/xcrun',['--sdk','macosx','--show-sdk-path'])]:[];
+  const flags=[...platformFlags,'-std=c++17','-O0','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',native];
   const values=path.join(work,'values');
   await run(compiler,[...flags,path.join(sdk,'tests/values.cpp'),...['values.cpp','object.cpp','calendar.cpp'].map(n=>path.join(native,n)),'-o',values]);
   assert.match(await run(values,[]),/native value contracts passed/);report.checks.push('sanitized-values');
