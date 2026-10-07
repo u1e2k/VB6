@@ -1,3 +1,4 @@
+import {nativeIntegerFits,nativeIntegerLiteral,nativeSignedIntegerLiteral,nativeIntegerUnaryType,nativeIntegerBinaryType} from './integers.js';
 /** Conservative native optimization. Only assembler-tagged branches are resized;
  * raw bytes are never disassembled heuristically. All addressable labels survive.
  */
@@ -6,48 +7,39 @@ export function nativeOptimizationLevel(value=1) {
   if(!Number.isInteger(value)||value<0||value>2)throw new Error('Native optimization must be 0, 1 or 2');
   return value;
 }
-const signed32=n=>Number.isInteger(n)&&n>=-2147483648&&n<=2147483647;
-/** Fold only pure signed integer trees. A null result means emit the original
- * operation, including any overflow, divide-by-zero or unsupported-type error.
- * No reassociation, floating fast-math, eager Boolean short-circuiting, or
- * elimination of a potentially effectful operand is permitted.
+/** Return null for any typed overflow or effectful expression. Successful folding
+ * preserves every intermediate Byte/Integer/Long boundary, not just the result.
  */
-export function foldNativeInteger(node, resolve=()=>null) {
-  if(!node)return null;
-  if(node.kind==='group')return foldNativeInteger(node.expr,resolve);
-  if(node.kind==='literal') {
-    if(node.valueType&&!['byte','integer','long','boolean'].includes(node.valueType))return null;
-    const value=typeof node.value==='boolean'?(node.value?-1:0):node.value;
-    return signed32(value)?{value}:null;
+export function foldNativeInteger(node,resolve=()=>null) {
+  function evaluate(node) {
+    if(!node)return null;
+    if(node.kind==='group')return evaluate(node.expr);
+    const signed=nativeSignedIntegerLiteral(node);if(signed)return signed;
+    const literal=nativeIntegerLiteral(node);if(literal)return nativeIntegerFits(literal.value,literal.type)?literal:null;
+    if(node.kind==='id'||node.kind==='member'){
+      const bound=resolve(node);return bound&&nativeIntegerFits(bound.value,bound.type)?bound:null;
+    }
+    if(node.kind==='unary'){
+      const a=evaluate(node.expr);if(!a)return null;const op=String(node.op).toLowerCase(),type=nativeIntegerUnaryType(op,a.type);if(!type)return null;
+      let value=op==='-'?-a.value:op==='+'?a.value:~a.value;if(op==='not'&&type==='byte')value&=255;
+      return nativeIntegerFits(value,type)?{value,type}:null;
+    }
+    if(node.kind!=='binary')return null;
+    const left=evaluate(node.left),right=evaluate(node.right);if(!left||!right)return null;
+    const a=left.value,b=right.value,op=String(node.op).toLowerCase(),type=nativeIntegerBinaryType(op,left.type,right.type);if(!type)return null;let value;
+    switch(op){
+      case '+':value=a+b;break;case '-':value=a-b;break;
+      case '*':{const n=BigInt(a)*BigInt(b);if(n < -2147483648n||n > 2147483647n)return null;value=Number(n);break;}
+      case '\\':case 'mod':if(b===0||op==='\\'&&a===-2147483648&&b===-1)return null;value=op==='mod'?a%b:Math.trunc(a/b);break;
+      case 'and':value=a&b;break;case 'or':value=a|b;break;case 'xor':value=a^b;break;
+      case 'eqv':value=~(a^b);if(type==='byte')value&=255;break;case 'imp':value=(~a)|b;if(type==='byte')value&=255;break;
+      case '=':value=a===b?-1:0;break;case '<>':value=a!==b?-1:0;break;
+      case '<':value=a<b?-1:0;break;case '<=':value=a<=b?-1:0;break;case '>':value=a>b?-1:0;break;case '>=':value=a>=b?-1:0;break;
+      default:return null;
+    }
+    return nativeIntegerFits(value,type)?{value:Object.is(value,-0)?0:value,type}:null;
   }
-  if(node.kind==='id'||node.kind==='member') {
-    const bound=resolve(node);
-    return bound&&['byte','integer','long','boolean'].includes(bound.type)&&signed32(bound.value)?{value:bound.value}:null;
-  }
-  if(node.kind==='unary') {
-    // The parser represents the one asymmetric Long endpoint as unary minus.
-    if(node.op==='-'&&node.expr?.kind==='literal'&&node.expr.value===2147483648&&(!node.expr.valueType||node.expr.valueType==='long'))return {value:-2147483648};
-    const a=foldNativeInteger(node.expr,resolve);if(!a)return null;
-    const value=node.op==='-'?-a.value:node.op==='+'?a.value:String(node.op).toLowerCase()==='not'?~a.value:null;
-    return signed32(value)?{value}:null;
-  }
-  if(node.kind!=='binary')return null;
-  const left=foldNativeInteger(node.left,resolve),right=foldNativeInteger(node.right,resolve);
-  if(!left||!right)return null;
-  const a=left.value,b=right.value,op=String(node.op).toLowerCase();let value;
-  switch(op){
-    case '+':value=a+b;break;
-    case '-':value=a-b;break;
-    case '*':{const n=BigInt(a)*BigInt(b);if(n < -2147483648n||n > 2147483647n)return null;value=Number(n);break;}
-    case '\\':case 'mod':if(b===0||a===-2147483648&&b===-1)return null;value=op==='mod'?a%b:Math.trunc(a/b);break;
-    case 'and':value=a&b;break;case 'or':value=a|b;break;case 'xor':value=a^b;break;
-    case 'eqv':value=~(a^b);break;case 'imp':value=(~a)|b;break;
-    case '=':value=a===b?-1:0;break;case '<>':value=a!==b?-1:0;break;
-    case '<':value=a<b?-1:0;break;case '<=':value=a<=b?-1:0;break;
-    case '>':value=a>b?-1:0;break;case '>=':value=a>=b?-1:0;break;
-    default:return null;
-  }
-  return signed32(value)?{value:Object.is(value,-0)?0:value}:null;
+  const value=evaluate(node);return value?{value:value.value}:null;
 }
 
 function branchPlan(section,fixup) {
@@ -122,6 +114,7 @@ export function optimizeNativeSections(sections,level=1) {
         else fixups.push({...f,offset:map(f.offset)});
       }
       section.labels=new Map([...labels].map(([label,offset])=>[label,map(offset)]));
+      if(section.codeUnits)section.codeUnits=section.codeUnits.map(u=>({...u,start:map(u.start),end:map(u.end)}));
       stats.bytesSaved+=section.length-bytes.length;stats.passes++;
       stats.branchesShortened+=edits.filter(e=>e.newSize===2).length;
       stats.fallthroughBranchesRemoved+=edits.filter(e=>e.newSize===0).length;
