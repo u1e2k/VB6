@@ -2,12 +2,12 @@
   "version": 2,
   "files": {
     "dist/studio.js": {
-      "bytes": 6489278,
-      "sha256": "241033d1203fafbe15dce5fe858f904d238fb9175058f5ed508df458dfa420ce"
+      "bytes": 6534259,
+      "sha256": "c4f4716f9e57e83ddd0f7fee971042cb096bdc1963d65e13e23501cdbe9ace62"
     },
     "dist/VB6-Studio-Web.html": {
-      "bytes": 6811548,
-      "sha256": "fbfa1b2972bf9a0de544613c90618fbb770209f6867678866dce085f1282d302"
+      "bytes": 6856529,
+      "sha256": "63c7e35ada8c54e2286e8c0a0998bfafbf78b237b2446233102e35425a6f1c31"
     },
     "dist/win32-browser.js": {
       "bytes": 212919,
