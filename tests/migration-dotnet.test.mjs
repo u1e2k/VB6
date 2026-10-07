@@ -7,6 +7,8 @@ import {spawnSync} from 'node:child_process';
 import {convertVbNetProject} from '../src/migration/index.js';
 import {CORE_FIXTURE,CORE_EXPECTED,project,formProject} from './migration-fixtures.mjs';
 
+import {VARIANT_ARRAY_FIXTURE,VARIANT_ARRAY_EXPECTED,CURRENCY_LOOP_FIXTURE,CURRENCY_LOOP_EXPECTED,SELECT_CASE_FIXTURE,SELECT_CASE_EXPECTED,ARRAY_RUNTIME_SOURCE} from './migration-semantics-fixtures.mjs';
+
 const root=path.resolve(import.meta.dirname,'..'),reportRoot=path.join(root,'reports/vbnet-migration/dotnet');
 const probe=spawnSync('dotnet',['--list-sdks'],{encoding:'utf8',timeout:15000});
 const sdkAvailable=probe.status===0&&/^10\.\d+\.\d+/m.test(probe.stdout);
@@ -159,4 +161,23 @@ End Module
 `);
   }});
   assert.deepEqual(h.run(),['winforms-ok']);
+});
+
+for (const [name, input, expected] of [
+  ['variant-arrays', VARIANT_ARRAY_FIXTURE, VARIANT_ARRAY_EXPECTED],
+  ['currency-loops', CURRENCY_LOOP_FIXTURE, CURRENCY_LOOP_EXPECTED],
+  ['select-case', SELECT_CASE_FIXTURE, SELECT_CASE_EXPECTED]
+]) test('generated .NET executes '+name+' with observed values and side effects',{skip,timeout:150000},t=>{
+  const h=harness(t,name,input,{patch(directory){
+    const file=path.join(directory,'Application/__vbEntry.vb');
+    fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('Public Sub Main()','Public Sub Main()\n        Global.System.Globalization.CultureInfo.CurrentCulture = Global.System.Globalization.CultureInfo.InvariantCulture'));
+  }});
+  assert.deepEqual(h.run(),expected);
+});
+
+test('Variant storage executes type, bounds, ownership and CLR array interop contracts',{skip,timeout:150000},t=>{
+  const h=harness(t,'array-runtime',project('Public Sub Main()\nEnd Sub'),{patch(directory){
+    fs.writeFileSync(path.join(directory,'Application/Module1.vb'),ARRAY_RUNTIME_SOURCE);
+  }});
+  assert.deepEqual(h.run(),['arrays-runtime-ok']);
 });

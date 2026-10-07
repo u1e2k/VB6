@@ -59,6 +59,7 @@ export function createContext(state, module, proc=null) {
       if(callee?.controlArray)return {...callee,controlArray:false};
       if(callee?.bounds!==undefined&&callee.bounds!==null)return {...callee,bounds:null,arrayElement:true};
       if(callee?.procedure)return {type:callee.returnType,owner:callee.owner};
+      if(callee&&['variant','object'].includes(key(callee.type)))return {type:'Variant',arrayElement:true,variantIndex:true};
     }
     return null;
   };

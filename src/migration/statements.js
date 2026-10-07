@@ -2,29 +2,26 @@ import {parseLeafStatement} from '../language/compiler.js';
 import {parseExpression} from '../language/expression.js';
 import {parseForHeader, parseLabel, parseComputedBranch} from '../language/statement-headers.js';
 import {parseIfHeader, inlineElse} from '../language/statement-syntax.js';
-import {statementParts, findKeyword} from '../language/source-scanner.js';
+import {statementParts} from '../language/source-scanner.js';
 import {splitTop} from '../language/lexer.js';
 import {key, identifier, vbString} from './names.js';
-import {expression, condition, assignment, boundsArguments} from './expressions.js';
+import {expression, condition, assignment} from './expressions.js';
+import {emitArrayStatement} from './array-statements.js';
+import {planSelections, emitCaseClause, emitForHeader} from './control-flow.js';
 
 const label=name=>/^\d+$/.test(name)?String(Number(name)):identifier(name);
 const fs='Global.Microsoft.VisualBasic.FileSystem.';
 /** Structured source emission shares leaf IR with the execution compiler. */
 export function emitStatements(writer,context) {
-  const {proc}=context,gosubs=[],withStack=[],blocks=[];
+  const {proc}=context,gosubs=[],withStack=[],blocks=[],selections=[];
+  const selectionPlans=planSelections(context);
+  let currentStatement;
   const e=n=>expression(n,context),c=n=>condition(n,context),parse=parseExpression;
   const line=text=>writer.line(text,context);
   const open=(text,kind)=>{writer.open(text,context);if(kind)blocks.push(kind);};
   const close=(text,kind)=>{writer.close(text,context);if(kind)blocks.pop();};
   const result=()=>proc.kind==='function'||proc.accessor==='get'?'Return __vbResult':'Return';
   const gosub=name=>{const index=gosubs.length+1;gosubs.push(index);line('__vbReturns.Push('+index+')');line('GoTo '+label(name));line('__vbContinue'+index+':');};
-  const clause=text=>{
-    if(/^Else$/i.test(text))return 'Else';
-    return splitTop(text).map(part=>{
-      const to=findKeyword(part,'to'),compare=/^Is\s*(<=|>=|<>|=|<|>)\s*(.+)$/i.exec(part);
-      return to?e(parse(part.slice(0,to.start)))+' To '+e(parse(part.slice(to.end))):compare?'Is '+compare[1]+' '+e(parse(compare[2])):e(parse(part));
-    }).join(', ');
-  };
   const emit=text=>{
     const replaced=context.hook('statement',{text,procedure:proc});if(replaced!==undefined){line(replaced);return;}
     let m;text=text.trim();if(!text||/^Rem\b/i.test(text))return;
@@ -41,9 +38,7 @@ export function emitStatements(writer,context) {
     if(/^Else$/i.test(text)){writer.close('Else',context);writer.indent++;return;}
     if(/^End\s*If$/i.test(text)){close('End If','if');return;}
     if(/^For\s/i.test(text)){
-      const h=parseForHeader(text),name=e(parse(h.name));
-      open(h.kind==='each'?'For Each '+name+' In '+e(h.expr):'For '+name+' = '+e(h.start)+' To '+e(h.end)+' Step '+e(h.step),'for');
-      if(key(context.type(parse(h.name)))==='currency')context.add('MIG_CURRENCY_FOR','Currency For loops require scaled-integer loop lowering.');
+      open(emitForHeader(parseForHeader(text),context),'for');
       return;
     }
     if((m=/^Next(?:\s+(.+))?$/i.exec(text))){for(const name of m[1]?splitTop(m[1]):[''])close('Next'+(name?' '+e(parse(name)):''),'for');return;}
@@ -52,11 +47,13 @@ export function emitStatements(writer,context) {
     if((m=/^While\s+(.+)$/i.exec(text))){open('While '+c(parse(m[1])),'while');return;}
     if(/^Wend$/i.test(text)){close('End While','while');return;}
     if((m=/^Select\s+Case\s+(.+)$/i.exec(text))){
-      if(['object','variant'].includes(key(context.type(parse(m[1])))))context.add('MIG_VARIANT_SELECT','Variant Select Case uses .NET comparison semantics; Null and subtype-dependent comparisons require review.');
-      open('Select Case '+e(parse(m[1])),'select');return;
+      const plan=selectionPlans.get(currentStatement)||{selector:parse(m[1]),variant:true};
+      const selection={...plan,name:'__vbSelect'+context.temp++};selections.push(selection);
+      if(selection.variant)line('Dim '+selection.name+' As Object = '+e(plan.selector));
+      open('Select Case '+(selection.variant?'True':e(plan.selector)),'select');return;
     }
-    if((m=/^Case\s+(.+)$/i.exec(text))){if(blocks.at(-1)==='case'){writer.indent--;blocks.pop();}open('Case '+clause(m[1]),'case');return;}
-    if(/^End\s+Select$/i.test(text)){if(blocks.at(-1)==='case'){writer.indent--;blocks.pop();}close('End Select','select');return;}
+    if((m=/^Case\s+(.+)$/i.exec(text))){if(blocks.at(-1)==='case'){writer.indent--;blocks.pop();}open('Case '+emitCaseClause(m[1],selections.at(-1),context),'case');return;}
+    if(/^End\s+Select$/i.test(text)){if(blocks.at(-1)==='case'){writer.indent--;blocks.pop();}close('End Select','select');selections.pop();return;}
     if((m=/^With\s+(.+)$/i.exec(text))){
       const node=parse(m[1]),symbol=context.resolve(node),record=[...context.compiled.modules.values()].some(mod=>Object.keys(mod.types).some(t=>key(t)===key(context.type(node))));
       withStack.push([context.withReceiver,context.withSymbol,record]);
@@ -82,13 +79,11 @@ export function emitStatements(writer,context) {
     for(const op of parseLeafStatement(text,context.module,proc,context.line))emitLeaf(op);
   };
   const emitLeaf=op=>{
+    if(emitArrayStatement(op,context,line))return;
     switch(op.op){
       case 'dim': return; // Hoisted to procedure entry, matching VB6 procedure scope.
       case 'assign': line(assignment(op.target,op.expr,context,{objectSet:op.objectSet}));return;
       case 'expr': line(e(op.expr));return;
-      case 'redim':
-        for(const d of op.decls){const symbol=context.find(d.name);if(symbol?.bounds===null)context.add('MIG_REDIM_VARIANT','ReDim of a scalar Variant requires a dynamic-array boxing adapter.');line(context.name(d.name)+'.Resize('+boundsArguments(d.bounds,context)+', '+(op.preserve?'True':'False')+')');}return;
-      case 'erase':for(const node of op.exprs)line(e(node)+'.Erase()');return;
       case 'print':{
         if(op.exprs.length>1)context.add('MIG_PRINT_ZONES','Debug.Print multiple-value spacing is not reproduced by Console output.','warning');
         const value=op.exprs.length?'String.Concat(New Object() {'+op.exprs.map(e).join(', ')+'})':'""';
@@ -127,7 +122,7 @@ export function emitStatements(writer,context) {
     }
   };
   for(const item of proc.statements||[]){
-    context.line=item.line;
+    context.line=item.line;currentStatement=item;
     try{if(item.label)line(label(item.text)+':');else emit(item.text);}
     catch(error){context.add('MIG_STATEMENT_PARSE',error.message);line("' MIGRATION ERROR: "+item.text.replace(/[\r\n]/g,' '));}
   }

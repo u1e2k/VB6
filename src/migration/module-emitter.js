@@ -45,6 +45,13 @@ function inferredLocals(context) {
 }
 function procedureBody(writer,context) {
   const {proc}=context;inferredLocals(context);
+  for(const param of proc.params)if(!param.byRef&&!param.paramArray){
+    const record=[...context.compiled.modules.values()].some(module=>Object.keys(module.types).some(type=>key(type)===key(param.type)));
+    if(key(param.type)==='variant'||record){
+      const name=context.name(param.name),copy='VbRuntime.CopyValue('+name+')';
+      writer.line(name+' = '+(record?'CType('+copy+', '+context.netType(param.type)+')':copy),context);
+    }
+  }
   if(proc.kind==='function'||proc.accessor==='get'){
     context.aliases.set(key(proc.name),'__vbResult');
     writer.line('Dim __vbResult As '+context.netType(proc.returnType)+' = '+defaultValue({type:proc.returnType,bounds:null},context));

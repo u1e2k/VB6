@@ -1,3 +1,4 @@
+import {VARIANT_ARRAY_FIXTURE,CURRENCY_LOOP_FIXTURE,SELECT_CASE_FIXTURE} from './migration-semantics-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {convertVbNetProject} from '../src/migration/index.js';
@@ -10,9 +11,9 @@ function converted(input) {
 }
 
 test('Currency For uses the native overloaded loop with explicit Currency bounds and step', () => {
-  const code = converted(procedure('Dim c As Currency\nFor c = 1 To 3 Step .25\nDebug.Print CStr(c)\nNext c'));
-  assert.match(code, /For c = VbCurrency\.FromObject\(1S\) To VbCurrency\.FromObject\(3S\) Step VbCurrency\.FromObject\(/);
-  assert.match(code, /Next c/);
+  const code = converted(procedure('Dim c As Currency\nFor \[c\] = 1 To 3 Step .25\nDebug.Print CStr(c)\nNext c'));
+  assert.match(code, /For \[c\] = VbCurrency\.FromObject\(1S\) To VbCurrency\.FromObject\(3S\) Step VbCurrency\.FromObject\(/);
+  assert.match(code, /Next \[c\]/);
   assert.doesNotMatch(code, /While|__vbFor/);
 });
 
@@ -31,12 +32,14 @@ Public Sub Main()
         Debug.Print "else"
     End Select
 End Sub`));
-  assert.match(code, /Dim __vbSelect\d+ As Object = Pick\(\)/);
+  assert.match(code, /Dim __vbSelect\d+ As Object = \[Pick\]\(\)/);
   assert.match(code, /Select Case True/);
   assert.match(code, /VbVariant\.Truth\(VbVariant\.Binary\("="/);
   assert.match(code, /VbVariant\.Binary\(">="/);
   assert.match(code, /VbVariant\.Binary\("<="/);
-  assert.equal((code.match(/= Pick\(\)/g) || []).length, 1);
+  assert.match(code, /\) And VbVariant\.Truth/);
+  assert.doesNotMatch(code, /AndAlso/);
+  assert.equal((code.match(/= \[Pick\]\(\)/g) || []).length, 1);
 });
 
 test('Variant array ReDim and Erase are explicit runtime operations, not late calls on Nothing', () => {
@@ -46,16 +49,16 @@ a(-1) = 7
 ReDim Preserve a(-1 To 3)
 Debug.Print a(-1)
 Erase a`));
-  assert.match(code, /a = VbArrays\.ResizeVariant\(a,/);
+  assert.match(code, /\[a\] = VbArrays\.ResizeVariant\(\[a\],/);
   assert.match(code, /GetType\(Integer\)/);
-  assert.match(code, /VbArrays\.Element\(a, New Object\(\) \{/);
-  assert.match(code, /a = VbArrays\.EraseVariant\(a\)/);
-  assert.doesNotMatch(code, /a\.Resize\(/);
+  assert.match(code, /VbArrays\.Element\(\[a\], New Object\(\) \{/);
+  assert.match(code, /\[a\] = VbArrays\.EraseVariant\(\[a\]\)/);
+  assert.doesNotMatch(code, /\[a\]\.Resize\(/);
 });
 
 test('ByVal Variant entry copies array values rather than sharing the caller storage', () => {
   const code = converted(project('Public Sub Main()\nEnd Sub\nPublic Sub Edit(ByVal a As Variant)\na(0) = 9\nEnd Sub'));
-  assert.match(code, /a = VbRuntime\.CopyValue\(a\)/);
+  assert.match(code, /\[a\] = VbRuntime\.CopyValue\(\[a\]\)/);
 });
 
 test('typed arrays cannot silently change element type or redimension fixed storage', () => {
@@ -65,3 +68,11 @@ test('typed arrays cannot silently change element type or redimension fixed stor
     assert.ok(result.diagnostics.some(d => d.code.startsWith('MIG_REDIM_')), JSON.stringify(result.diagnostics));
   }
 });
+
+// Compile every execution fixture in SDK-less development environments as well.
+for (const [name, fixture] of Object.entries({VARIANT_ARRAY_FIXTURE, CURRENCY_LOOP_FIXTURE, SELECT_CASE_FIXTURE})) {
+  test('execution fixture has no migration blockers: ' + name, () => {
+    const code = converted(fixture);
+    assert.ok(code.includes('End Module'));
+  });
+}
