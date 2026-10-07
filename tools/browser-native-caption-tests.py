@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import threading
 import unittest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
 ROOT=Path(__file__).resolve().parents[1]
 ENGINE=os.environ.get('VB6_BROWSER','chromium')
 MEMORY=os.environ.get('VB6_TEST_TRANSPORT')=='memory'
@@ -70,6 +70,15 @@ class NativeCaptions(unittest.TestCase):
     commands:window.nativeBridge?.commands,body:document.body.innerText.slice(-1200)
    })'''),flush=True)
    raise
+ def close_with_button(self,popup,name):
+  # Firefox can report TargetClosed after the click handler successfully closes
+  # its own native popup. Accept only that exact close, then assert the owner's
+  # result in the caller; timeouts, crashes and an open popup remain failures.
+  with popup.expect_event('close'):
+   try:popup.get_by_role('button',name=name,exact=True).click()
+   except PlaywrightError as error:
+    if 'Target page, context or browser has been closed' not in str(error) or not popup.is_closed() or self.page.is_closed():raise
+  self.assertTrue(popup.is_closed())
  def native(self,theme='macos26',system=False,legacy=False):
   popup=self.gesture_popup('''async([theme,system,legacy])=>{
    const api=VB6Runtime.RuntimeAPI,p=structuredClone(vb6Application.project);vb6Application.dispose();
@@ -163,7 +172,7 @@ class NativeCaptions(unittest.TestCase):
    self.page.evaluate('t=>nativeApp.setTheme(t)',theme);self.assertEqual(dialog.locator('html').get_attribute('data-vb-theme'),theme)
    self.assertTrue(dialog.locator('.vb-form-title').is_visible());self.assertEqual(field.input_value(),'Edited in popup')
   dialog.keyboard.press('Tab');self.assertTrue(dialog.locator('.vb-dialog').evaluate('e=>e.contains(e.ownerDocument.activeElement)'))
-  dialog.get_by_role('button',name='OK',exact=True).click();self.page.wait_for_function('window.dialogResult==="Edited in popup"')
+  self.close_with_button(dialog,'OK');self.page.wait_for_function('window.dialogResult==="Edited in popup"')
   self.record(dialogThemeChanges=True,popupFocus=True,inputResult=True)
  def test_native_dialog_without_cancel_rejects_os_close_and_escape(self):
   self.native('macos26')
@@ -173,7 +182,7 @@ class NativeCaptions(unittest.TestCase):
   popup.keyboard.press('Escape');self.assertIsNone(self.page.evaluate('window.choiceResult??null'))
   self.page.evaluate('()=>{const [id]=[...nativeBridge.records].at(-1);nativeBridge.emit({id,type:"close-request"});}')
   self.page.wait_for_function('nativeBridge.commands.at(-1)[1]==="cancel-close"')
-  popup.get_by_role('button',name='No',exact=True).click();self.page.wait_for_function('window.choiceResult===7')
+  self.close_with_button(popup,'No');self.page.wait_for_function('window.choiceResult===7')
   self.record(nonCancelableDialog=True,returnValue=7)
  def test_caption_title_is_centered_and_does_not_overlap_controls(self):
   popup,_=self.native('macos26')

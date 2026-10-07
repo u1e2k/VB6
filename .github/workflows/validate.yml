@@ -175,7 +175,7 @@ jobs:
         with:
           node-version: 22
       - name: Classic compiler bridge, source and archive contracts (synthetic compiler)
-        run: node --test tests/classic-runtime-export.test.mjs tests/classic-compiler-bridge.test.mjs tests/native-classic.test.mjs
+        run: npm run test:classic
       - name: Validate existing native layout exports against Windows Forms and HWND bounds
         shell: pwsh
         run: |
