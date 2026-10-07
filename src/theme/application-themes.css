@@ -2,7 +2,7 @@
  * has the original classic fallback and resets at nested theme boundaries.
  * Authored geometry, RGB/pictures, VB fonts and runtime input semantics stay put. */
 .vb-form,.vb-dialog {border-radius:var(--app-window-radius,0);}
-.vb-form-title {font-family:var(--app-font,inherit);font-weight:var(--app-caption-weight,bold);background:var(--app-caption-background,linear-gradient(90deg,var(--vb-title),var(--vb-title-end)));}
+.vb-form-title {font-family:var(--app-font,var(--vb-font));font-weight:var(--app-caption-weight,bold);background:var(--app-caption-background,linear-gradient(90deg,var(--vb-title),var(--vb-title-end)));}
 .vb-inactive>.vb-form-title {background:linear-gradient(90deg,var(--vb-inactive),var(--vb-inactive-end));color:var(--vb-inactive-text);}
 .vb-form-menu,.vb-dialog {font-family:var(--app-font,var(--vb-font));}
 .vb-form-menu button,.vb-tab-button,.vb-toolbar button,.vb-data button,.vb-month button {border-radius:var(--app-radius,0)!important;}

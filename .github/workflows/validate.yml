@@ -119,6 +119,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:application-themes:browser
+      - name: Application caption popups, OS-state bridge and themed dialog focus
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-native-caption-tests.py
       - name: Download every sample from the IDE and reopen exact HTML bytes
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -143,7 +147,7 @@ jobs:
           retention-days: 7
   win32-system-contracts:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -156,6 +160,31 @@ jobs:
           powershell -NoProfile -File tools/test-winforms-anchors.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tools/test-win32-layout.ps1
+      - name: Build actual Electron hosts with application and operating-system captions
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix desktop ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/native-fixtures.mjs
+          node tools/build-windows.mjs --project validation/NativeSmoke.vb6web --name CaptionSmoke --graphics canvas2d --stage-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-native-host.mjs .native-build/captionsmoke-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import fs from 'node:fs';const f='validation/NativeSmoke.vb6web',p=JSON.parse(fs.readFileSync(f));p.settings.themeOptions={systemCaption:true};fs.writeFileSync(f,JSON.stringify(p));"
+          node tools/build-windows.mjs --project validation/NativeSmoke.vb6web --name OSCaptionSmoke --graphics canvas2d --stage-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-native-host.mjs .native-build/oscaptionsmoke-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: application-native-caption-hosts
+          path: |
+            validation/*captionsmoke-x64.host.json*
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Record installed Windows calendar and formatting contracts
         shell: pwsh
         run: ./tools/win32-system-oracle.ps1
