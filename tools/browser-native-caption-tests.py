@@ -44,7 +44,8 @@ class NativeCaptions(unittest.TestCase):
   self.page.evaluate('()=>window.nativeApp?.dispose()');self.context.close();self.assertEqual(self.errors,[])
  def record(self,**values):self.results.append({'test':self._testMethodName,'ipc':'simulated','transport':'memory' if MEMORY else 'http','engine':ENGINE,**values})
  def native(self,theme='macos26',system=False,legacy=False):
-  self.page.evaluate('''async([theme,system,legacy])=>{
+  with self.page.expect_popup() as opened:
+   self.page.evaluate('''async([theme,system,legacy])=>{
    const api=VB6Runtime.RuntimeAPI,p=structuredClone(vb6Application.project);vb6Application.dispose();
    p.settings.theme=theme;p.settings.themeOptions={systemCaption:system};
    const f=p.modules[0].form;Object.assign(f.properties,{ClientWidth:6000,ClientHeight:3000,Caption:'Themed desktop app',FontSize:18,FontName:'Courier New'});
@@ -61,13 +62,27 @@ class NativeCaptions(unittest.TestCase):
    const root=document.querySelector('#app');root.replaceChildren();window.nativeApp=new api.ApplicationHost(p,root,{persist:false,nativeWindows:false});
    api.installNativeHost(nativeApp,bridge);await nativeApp.start();window.originalVM=nativeApp.vm;
   }''',[theme,system,legacy])
-  popup=self.context.pages[-1];popup.wait_for_selector('.vb-form[data-native-window]')
+  popup=opened.value;popup.wait_for_selector('.vb-form[data-native-window]')
   options=self.page.evaluate('[...nativeBridge.records.values()][0].options')
   popup.set_viewport_size({'width':int(options['width']),'height':int(options['height'])})
   self.emit(0,True)
   return popup,options
  def emit(self,state,focused):
   self.page.evaluate('''([state,focused])=>{const [id,r]=[...nativeBridge.records][0];nativeBridge.emit({id,type:'state',state,focused,visible:true,bounds:{x:r.options.x,y:r.options.y},contentBounds:{width:r.options.width,height:r.options.height}});}''',[state,focused])
+ def test_popup_document_remains_the_live_form_owner_after_load(self):
+  popup,_=self.native('fluent-dark')
+  popup.wait_for_load_state('load')
+  popup.wait_for_timeout(100)
+  self.assertNotEqual(popup,self.page)
+  self.assertEqual(popup.url,'about:blank')
+  self.assertEqual(popup.evaluate('document.compatMode'),'CSS1Compat')
+  self.assertTrue(self.page.evaluate('''()=>{const f=nativeApp.forms[0],r=f.nativeWindow;
+   return f.node.isConnected && f.node.ownerDocument===r.doc && r.doc===r.win.document && r.doc.defaultView.opener===window;
+  }'''))
+  self.assertEqual(popup.locator('html').get_attribute('data-vb-theme'),'fluent-dark')
+  popup.locator('[data-control="TextBox1"] input').fill('Still connected after navigation')
+  self.assertEqual(self.page.evaluate('nativeApp.forms[0].controls.find(c=>c.model.name==="TextBox1").Text'),'Still connected after navigation')
+  self.record(stableDocumentAfterLoad=True,quirksMode=False,liveControlEvents=True)
  def test_theme_captions_and_native_client_dimensions(self):
   popup,options=self.native();self.assertEqual(options['captionMode'],'application')
   self.assertEqual(options['width'],408);self.assertEqual(options['height'],226)
@@ -109,8 +124,9 @@ class NativeCaptions(unittest.TestCase):
   self.record(queryUnloadCancel=True,finalQuit=True)
  def test_native_inputbox_uses_theme_and_own_document_keyboard_focus(self):
   self.native('fluent-dark')
-  self.page.evaluate('()=>{void nativeApp.inputBox("Type a value","Native input","Initial").then(v=>window.dialogResult=v);}')
-  dialog=self.context.pages[-1];field=dialog.get_by_role('textbox');field.wait_for();field.fill('Edited in popup')
+  with self.page.expect_popup() as opened:
+   self.page.evaluate('()=>{void nativeApp.inputBox("Type a value","Native input","Initial").then(v=>window.dialogResult=v);}')
+  dialog=opened.value;field=dialog.get_by_role('textbox');field.wait_for();field.fill('Edited in popup')
   self.assertTrue(field.evaluate('e=>e.ownerDocument.activeElement===e'))
   for theme in ['macos26-dark','x11','classic']:
    self.page.evaluate('t=>nativeApp.setTheme(t)',theme);self.assertEqual(dialog.locator('html').get_attribute('data-vb-theme'),theme)
@@ -120,8 +136,9 @@ class NativeCaptions(unittest.TestCase):
   self.record(dialogThemeChanges=True,popupFocus=True,inputResult=True)
  def test_native_dialog_without_cancel_rejects_os_close_and_escape(self):
   self.native('macos26')
-  self.page.evaluate('()=>{void nativeApp.msgBox("Choose","4","Native choice").then(v=>window.choiceResult=v);}')
-  popup=self.context.pages[-1];popup.get_by_role('button',name='Yes',exact=True).wait_for()
+  with self.page.expect_popup() as opened:
+   self.page.evaluate('()=>{void nativeApp.msgBox("Choose","4","Native choice").then(v=>window.choiceResult=v);}')
+  popup=opened.value;popup.get_by_role('button',name='Yes',exact=True).wait_for()
   self.assertTrue(popup.get_by_role('button',name='Close dialog').is_disabled())
   popup.keyboard.press('Escape');self.assertIsNone(self.page.evaluate('window.choiceResult??null'))
   self.page.evaluate('()=>{const [id]=[...nativeBridge.records].at(-1);nativeBridge.emit({id,type:"close-request"});}')

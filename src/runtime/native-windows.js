@@ -24,6 +24,14 @@ export function installNativeHost(host, bridge = globalThis.vb6Native) {
     const win = browser.open('about:blank', id, 'popup');
     if (!win) { command(id,'cancel-reservation'); throw new Error('Native window creation was denied'); }
     const doc = win.document;
+    // Complete the blank document before adopting live nodes. Firefox can still
+    // commit the explicit about:blank navigation after open() returns, discarding
+    // an uninitialised document. Only constant markup is written; titles, themes
+    // and app content are installed with DOM APIs below. The inherited origin/CSP
+    // and root-owned native bridge remain unchanged.
+    doc.open();
+    doc.write('<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>');
+    doc.close();
     doc.documentElement.setAttribute('data-native-caption',options.captionMode||'system');
     doc.title=options.title??'';
     if(browser.vb6NativeGPUUnavailable)win.vb6NativeGPUUnavailable=browser.vb6NativeGPUUnavailable;
