@@ -1,8 +1,26 @@
 # VB6 native macOS compiler
 
-Experimental native C++17/Apple Clang backend for Apple Silicon. Uses the shared VB6 parser and IR and an independent C++ runtime with Objective-C++ AppKit controls. The generated application does not embed JavaScript, Electron, a browser, Wine or MSVBVM60.DLL.
+Experimental VB6-to-Apple-Silicon compiler, native runtime and AppKit host. The shared VB6 parser and intermediate representation are lowered to C++17, then Apple Clang emits an arm64 Mach-O executable. The generated application does not embed JavaScript, Electron, a browser, Wine or MSVBVM60.DLL.
 
-## Build and use
+## Export from the IDE
+
+Choose **File → Make Project.app (macOS Apple Silicon)…**. This is independent of Windows AOT, Microsoft VB6 runtime, VB.NET and HTML export.
+
+**Download Source Build Kit** works without a Mac connection. Extract the ZIP on macOS and run `node build.mjs`. The kit contains generated native source, the runtime SDK and build scripts; it is not an executable.
+
+**Build .app ZIP** uses an explicitly approved local Mac compiler. In a terminal on the Mac, with Node.js 22+ and Xcode Command Line Tools installed:
+
+```sh
+npm run macos:bridge -- --origin https://wieslawsoltes.github.io
+# For the local development server instead:
+npm run macos:bridge -- --origin http://127.0.0.1:8080
+```
+
+Use the exact origin of the IDE. Paste the printed bridge URL and session token into the dialog, then approve the individual build by typing `YES` in the terminal. A standalone `file:` IDE requires explicit `--allow-file-origin`, which permits opaque file origins rather than identifying one particular file. Prefer an exact HTTP(S) origin when available. Browser local-network restrictions may require using the locally served IDE or the source-kit path.
+
+The token is not saved in the project or settings. Closing the dialog cancels the request; project changes prevent stale downloads. A visible **Save ZIP** link supports manual retry. Neither the bridge nor the IDE executes the generated application.
+
+## Command-line and reusable package
 
 From the repository:
 
@@ -13,25 +31,46 @@ node tools/build-macos.mjs MyProject.vb6web --source-only --out ProjectSource
 node tools/build-macos.mjs MyProject.vbp --out NativeOutput
 ```
 
-The source-only destination must be new. Executable builds produce a signed `.app`, `.app.zip` and JSON build report. No generated application is executed by the exporter. Node.js 22+ is required to compile; the finished application uses native system frameworks.
+The source-only destination must be new. Executable builds produce a signed `.app`, `.app.zip` and JSON build report. Node.js is a build-time requirement, not an application dependency.
 
-Package with `npm pack ./packages/macos-native` after building. The packed compiler is independently usable; it does not import repository-relative files. It is not automatically published to npm.
+Build first, then package with `npm pack ./packages/macos-native`. The packed compiler is independently usable and has no repository-relative imports. This command does not publish it to npm.
 
 ```js
 import {createMacOSBuildKit} from '@vb6-studio/macos-native';
 import {buildMacOSProject} from '@vb6-studio/macos-native/node';
-const kit = createMacOSBuildKit(project, {optimization: 2});
-const report = await buildMacOSProject(project, {out: '/path/to/new-output'});
+import {createMacOSBridge} from '@vb6-studio/macos-native/bridge';
+
+const kit = createMacOSBuildKit(project, {
+  name: 'MyApplication',
+  bundleIdentifier: 'org.example.myapplication',
+  minimumVersion: '11.0',
+  optimization: 2
+});
+const report = await buildMacOSProject(project, {
+  compiler: kit.options,
+  out: '/path/to/native-output',
+  jobs: 4
+});
+// createMacOSBridge requires an application-supplied authorization callback.
+// Its default callback denies compilation. Never blindly approve untrusted input.
 ```
 
-## Contracts
+## Runtime and platform contracts
 
-VB6 Integer, Boolean, Long and Currency retain classic widths on the LP64 host. Native objects use generation-checked handles, not truncated pointers. Native source and resources are staged in a private directory. Apple Clang is resolved through the installed Xcode SDK; tool arguments are not shell-interpolated. The runtime cache is keyed by source and toolchain. The resulting Mach-O architecture, segment protections, system-library dependencies and code signature are checked before publication.
+VB6 Integer/Boolean are 16-bit, Long is 32-bit, Currency is a scaled 64-bit value, and strings are counted UTF-16. These widths do not change with the LP64 host. Native objects use typed, generation-checked handles rather than truncated Cocoa pointers. File records are serialized explicitly instead of using host struct layout.
 
-Default signing is ad-hoc. A verified ad-hoc signature is **not** notarization, Gatekeeper approval, or Developer ID signing. Distribution requires the developer's own signing identity and notarization process. No credentials are read or uploaded by this package.
+Project-defined `Implements` contracts support private method implementations, named and optional arguments, default/indexed properties, get/let/set, checked interface casts and ByRef aliases. Canonical object identity is retained across interface views; their reverse cache is weak. These are source-level VB contracts, not a Windows COM ABI.
 
-## Validation and boundaries
+The local compiler resolves Apple Clang through the installed Xcode SDK. It stages source privately, invokes tools without shell interpolation, caches runtime objects by source/toolchain, verifies the arm64 image and code signature, and preserves executable modes and original signed ZIP bytes. The browser checks archive structure and hashes, not the cryptographic code signature.
 
-`node tools/test-macos-native.mjs` compiles and executes sanitized value and generated-program tests. On Apple Silicon it additionally builds/runs the signed application and actual AppKit controls/events/API tests. A Linux pass is never recorded as macOS acceptance.
+Default signing is ad-hoc. **Ad-hoc signing is not notarization, Gatekeeper approval or Developer ID signing.** Configure a signing identity on the trusted local builder, never through project data. Distribution requires the developer's own signing and notarization process. Native programs are not sandboxed by this compiler.
 
-This backend does not certify full VB6 semantics or universal Win32 compatibility. Windows DLL/OCX binaries and arbitrary COM objects are not loaded. Supported Declare calls are source-level adapters and unsupported declarations fail with diagnostics. Full Class_Terminate lifetime semantics, Implements interface dispatch, design-time FRX/resource fidelity, all control members/events, locale behavior, native database/COM integration, and GUI visual parity still require further implementation and conformance evidence. Do not deploy an unqualified migration solely because it compiles.
+## Validation and remaining boundaries
+
+`npm run test:macos` tests compiler contracts, archive validation, bridge denial/cancellation, offline package extraction and cross-platform source determinism. `npm run test:macos:browser` tests IDE downloads, cancellation and stale-project protection over HTTP and file origins.
+
+`node tools/test-macos-native.mjs` executes sanitized native values, generated programs, interface dispatch and view-lifetime tests. On Apple Silicon it additionally compiles, signs and executes the native app; creates 33 AppKit control types with selected event/API assertions; verifies a real bridge download; and checks runtime-cache reuse and durable reusable-API output. Linux execution and synthetic browser protocol fixtures are never labelled as macOS acceptance.
+
+This backend does **not** certify full VB6 semantics or universal Win32 compatibility. Windows DLL/OCX binaries and arbitrary COM objects are not loaded. Full `Class_Terminate` semantics, design-time FRX/resource fidelity, all control members/events, locale behavior, native database/COM integration and GUI visual parity remain unfinished or unqualified. Unknown native declarations produce diagnostics; a successful compilation alone is not proof that every runtime path is supported.
+
+See [the repository export guide](../../docs/MACOS-EXPORT.md) for architecture, security, verification and compatibility details.
