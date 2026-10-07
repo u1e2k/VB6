@@ -232,6 +232,9 @@ jobs:
       - name: Real system Automation and typed VARIANT regression
         if: ${{ !cancelled() }}
         run: node tools/interop/test-native.mjs
+      - name: Native and portable common HTTP and ADO Stream differential recipes
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-automation.mjs
       - name: Native COM identity, OLE data, advisories and compound files
         if: ${{ !cancelled() }}
         run: node tools/interop/test-com-ole.mjs
