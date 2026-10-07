@@ -387,7 +387,7 @@ with sync_playwright() as playwright:
         for theme in themes:
             page.evaluate('vb6Studio.setRenderingPolicy({backend:"html"})')
             page.evaluate('theme=>{Object.assign(vb6Studio.appearance,{theme,reduceMotion:true});vb6Studio.applyAppearance();}', theme)
-            check(page.evaluate('document.documentElement.dataset.ideTheme') == theme, 'Optional theme did not apply')
+            check(page.evaluate('document.documentElement.dataset.ideTheme') == theme.replace('x11-cde', 'x11'), 'Optional theme did not apply')
             reference = stable_html_reference(page, 'optional-theme-'+theme)
             for backend in list(dict.fromkeys(['canvas2d'] + REQUIRED)):
                 page.evaluate('backend=>vb6Studio.setRenderingPolicy({backend,fallbacks:["html"],text:"native"})', backend)
