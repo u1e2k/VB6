@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
 import {prepareClassicProject} from '../src/exporter/classic-project.js';
-import {bytesOf} from '../src/project/native-text.js';
+import {bytesOf, decodeNativeText} from '../src/project/native-text.js';
 import {CLASSIC_LIMITS} from '../src/exporter/classic-options.js';
 import {verifyClassicExecutable} from './pe.mjs';
 import {compilerArguments} from './build-classic.mjs';
@@ -38,7 +38,7 @@ export async function compileClassicProject(prepared, {compiler, timeout = 12000
     // Bounded compiler output is useful in the IDE, unlike an inaccessible temp path.
     try {
       const handle = await fs.open(log, 'r');
-      try {const buffer = Buffer.alloc(65536), {bytesRead} = await handle.read(buffer, 0, buffer.length, 0); error.compilerLog = buffer.subarray(0, bytesRead).toString('utf8');}
+      try {const buffer = Buffer.alloc(65536), {bytesRead} = await handle.read(buffer, 0, buffer.length, 0); error.compilerLog = decodeNativeText(buffer.subarray(0, bytesRead), {encoding: prepared.manifest.encoding || 'windows-1252'}).text;}
       finally {await handle.close();}
     } catch {}
     throw error;
