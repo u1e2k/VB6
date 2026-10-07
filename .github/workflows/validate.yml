@@ -31,7 +31,9 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Verify checked IA-32 encodings against GNU assembler
-        run: node tools/verify-x86-encodings.mjs
+        run: |
+          node tools/verify-x86-encodings.mjs
+          node tools/test-x86-cpu.mjs
       - name: Independently installed COM and Automation packages
         run: node tools/test-com-ole-packages.mjs
       - uses: actions/upload-artifact@v4

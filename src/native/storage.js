@@ -86,6 +86,7 @@ export const nativeStorageMethods = {
     if(key(variable.type)==='date')this.dateExpression(node);else if(key(variable.type)==='currency')this.currencyExpression(node);else if (key(variable.type) === 'string') {if(this.type(node)==='string')this.expression(node);else this.textExpression(node);} else if(['single','double'].includes(key(variable.type))){this.floatExpression(node,key(variable.type)==='single');}else if(key(variable.type)==='boolean')this.truth(node);else this.numeric(node);
   },
   rawStorageAddress(variable) {
+    this.withGuard(variable.nativeWithActive);
     if(variable.recordOf)return this.recordAddress(variable);
     if (variable.owner?.form) this.x.call(variable.owner.initialize);
     if (variable.label) this.x.value(variable.label);

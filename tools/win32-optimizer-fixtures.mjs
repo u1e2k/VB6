@@ -4,6 +4,9 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {nativeLanguageFixture} from '../tests/fixtures/native-language.mjs';
+import {nativeLanguageFixture as continuationLanguageFixture} from './win32-language-fixtures.mjs';
+import {nativeStringLibraryFixture} from './win32-string-library-fixtures.mjs';
+import {nativeWithControlsFixture} from './win32-with-controls-fixtures.mjs';
 import {newProject} from '../src/project/model.js';
 import {compileWin32} from '../src/native/compiler.js';
 import {win32Fixtures} from './win32-fixtures.mjs';
@@ -17,6 +20,7 @@ export function optimizerFixture() {
   check('16777217! = 16777216!', 'Single literals round before comparison at every optimization level');
   check('16777217# <> 16777216#', 'Double literals are not narrowed to Single by optimization');
   check('(3 + 4) * (11 - 2) = 63','pure integer expression folding');
+  add('n = (3 + 4) * (11 - 2)');check('n = 63','constant-folded assignment preserves its typed value independently of branch folding');
   check('-7 \\ 3 = -2 And -7 Mod 3 = -1','signed division and remainder');
   check('(2 Eqv 3) = -2 And (2 Imp 3) = -1','eager bitwise Eqv and Imp');
   add('n = 7\nn = n * 9 + 128 - 127');
@@ -125,6 +129,8 @@ export function assemblerFixture(optimization=1) {
   for(let i=0;i<4;i++){x.mov('eax',mem32({label:'result',displacement:i*4}));equal((i+1)*2,'SSE2 packed lane '+i);}
   x.sse('pxor','xmm4','xmm4').sse('paddd','xmm4',mem128({label:'packed-aligned'})).sse('movdqu',mem128({label:'result'}),'xmm4');
   for(let i=0;i<4;i++){x.mov('eax',mem32({label:'result',displacement:i*4}));equal(i+1,'aligned SSE2 memory lane '+i);}
+  x.sse('pxor','xmm6','xmm6').sseUnaligned('paddd','xmm6',mem128({label:'packed'}),'xmm7').sse('movdqu',mem128({label:'result'}),'xmm6');
+  for(let i=0;i<4;i++){x.mov('eax',mem32({label:'result',displacement:i*4}));equal(i+1,'explicit unaligned SSE2 helper lane '+i);}
   x.mov('eax',4).mov('ecx',9).atomic('cmpxchg',mem32({label:'counter'}),'ecx');check('locked CMPXCHG success flag');
   x.mov('eax',3).atomic('xadd',mem32({label:'counter'}),'eax');equal(9,'locked XADD returns old value');x.mov('eax',mem32({label:'counter'}));equal(12,'locked XADD writes sum');
   x.mov('eax',1).mov('edx',2).mov('ebx',3).mov('ecx',4).cmpxchg8b(mem64({label:'pair'}));check('locked CMPXCHG8B success flag');
@@ -142,12 +148,19 @@ export function writeOptimizerFixtures(directory='reports/native-optimizer') {
   fs.mkdirSync(directory,{recursive:true});const reports=[],fixture=optimizerFixture();
   const arithmetic=win32Fixtures()[0];
   // The existing arithmetic fixture is an independent regression, not an optimizer oracle.
-  const fixtures=[fixture,nativeLanguageFixture(),{project:arithmetic,checks:['existing AOT arithmetic/recursion/scalar/Declare regression']}];
+  const continuation=continuationLanguageFixture(),strings=nativeStringLibraryFixture();
+  const fixtures=[fixture,nativeLanguageFixture(),continuation,strings,nativeWithControlsFixture(),{project:arithmetic,checks:['existing AOT arithmetic/recursion/scalar/Declare regression']}];
   for(const {project,checks}of fixtures)for(const optimization of [0,1,2]) {
     const result=compileWin32(project,{optimization}),name=project.name+'-O'+optimization;
     const report={name,optimization,checks,sha256:createHash('sha256').update(result.bytes).digest('hex'),...result.report};
     fs.writeFileSync(path.join(directory,name+'.exe'),result.bytes);
     fs.writeFileSync(path.join(directory,name+'.build.json'),JSON.stringify(report,null,2)+'\n');reports.push(report);
+  }
+  for(const {project,checks}of [continuation,strings]){
+    const result=compileWin32(project,{optimization:2,pruneUnusedProcedures:true}),name=project.name+'-O2-pruned';
+    if(!result.report.optimization.removedProcedures.includes('proc:Entry:NeverCalled'))throw new Error('Unreachable fixture procedure was not pruned');
+    const report={name,checks,sha256:createHash('sha256').update(result.bytes).digest('hex'),...result.report};
+    fs.writeFileSync(path.join(directory,name+'.exe'),result.bytes);fs.writeFileSync(path.join(directory,name+'.build.json'),JSON.stringify(report,null,2)+'\n');reports.push(report);
   }
   for(const optimization of [0,1,2]){const result=assemblerFixture(optimization),name='AotAssembler-O'+optimization,report={name,checks:result.checks,sha256:createHash('sha256').update(result.bytes).digest('hex'),...result.report};fs.writeFileSync(path.join(directory,name+'.exe'),result.bytes);fs.writeFileSync(path.join(directory,name+'.build.json'),JSON.stringify(report,null,2)+'\n');reports.push(report);}
   fs.writeFileSync(path.join(directory,'builds.json'),JSON.stringify(reports,null,2)+'\n');return reports;
