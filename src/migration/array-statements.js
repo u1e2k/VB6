@@ -6,6 +6,11 @@ const isVariant = symbol => key(symbol?.type || '') === 'variant' && !isArray(sy
 
 /** A single emitted statement retains On Error Resume Next's statement boundary. */
 export function emitArrayStatement(op, context, line) {
+  if (['redim', 'erase'].includes(op.op) && (op.decls || op.exprs).length > 1 &&
+      context.proc.code.some(instruction => ['onError', 'resume'].includes(instruction.op))) {
+    context.add('MIG_ARRAY_ERROR_BOUNDARY', 'Multi-target ReDim/Erase with resumable error handling requires a single-statement execution adapter.');
+    return true;
+  }
   if (op.op === 'redim') {
     for (const declaration of op.decls) {
       const node = {kind: 'id', name: declaration.name};
@@ -43,6 +48,10 @@ export function emitArrayStatement(op, context, line) {
     for (const node of op.exprs) {
       const symbol = context.resolve(node);
       const target = expression(node, context, {assignment: true});
+      if (symbol?.paramArray || isVariant(symbol) && node.kind !== 'id') {
+        context.add('MIG_ERASE_TARGET', 'Erase of ParamArray or a complex Variant location requires an explicit lifetime/address adapter.');
+        continue;
+      }
       if (isVariant(symbol)) line(target + ' = VbArrays.EraseVariant(' + expression(node, context, {reference: true}) + ')');
       else if (isArray(symbol)) line(target + '.Erase()');
       else context.add('MIG_ERASE_TARGET', 'Erase requires an array or Variant variable.');

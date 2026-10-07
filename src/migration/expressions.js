@@ -1,3 +1,4 @@
+import {validateCallSemantics} from './call-semantics.js';
 import {key, identifier, qualified, vbString} from './names.js';
 import {INTRINSICS, INTRINSIC_CONSTANTS, BUILTIN_NAMES, SIMPLE_MEMBERS} from './registry.js';
 
@@ -97,6 +98,7 @@ export function expression(node, context, usage={}) {
     }
     case 'call': {
       const symbol=context.resolve(node.callee),k=node.callee.kind==='id'?key(node.callee.name):'';
+      validateCallSemantics(node,symbol,context);
       if(symbol?.bounds!==undefined&&symbol.bounds!==null&&node.args.length===0)return e(node.callee);
       if(symbol&&!symbol.procedure&&!symbol.module&&!symbol.control&&!symbol.paramArray&&symbol.bounds==null&&VARIANT_TYPES.has(key(symbol.type)))return 'VbArrays.Element('+e(node.callee,{reference:true,receiver:true})+', New Object() {'+node.args.map(n=>e(n)).join(', ')+'}).Value';
       if(k==='array'&&!symbol)return 'VbArray(Of Object).FromValues(New Object() {'+node.args.map(n=>e(n)).join(', ')+'}, '+context.module.optionBase+')';

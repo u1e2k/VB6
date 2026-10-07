@@ -11,7 +11,7 @@ function converted(input) {
 }
 
 test('Currency For uses the native overloaded loop with explicit Currency bounds and step', () => {
-  const code = converted(procedure('Dim c As Currency\nFor \[c\] = 1 To 3 Step .25\nDebug.Print CStr(c)\nNext c'));
+  const code = converted(procedure('Dim c As Currency\nFor c = 1 To 3 Step .25\nDebug.Print CStr(c)\nNext c'));
   assert.match(code, /For \[c\] = VbCurrency\.FromObject\(1S\) To VbCurrency\.FromObject\(3S\) Step VbCurrency\.FromObject\(/);
   assert.match(code, /Next \[c\]/);
   assert.doesNotMatch(code, /While|__vbFor/);
@@ -69,10 +69,38 @@ test('typed arrays cannot silently change element type or redimension fixed stor
   }
 });
 
-// Compile every execution fixture in SDK-less development environments as well.
+// Convert every execution fixture even when the .NET SDK is absent.
 for (const [name, fixture] of Object.entries({VARIANT_ARRAY_FIXTURE, CURRENCY_LOOP_FIXTURE, SELECT_CASE_FIXTURE})) {
   test('execution fixture has no migration blockers: ' + name, () => {
     const code = converted(fixture);
     assert.ok(code.includes('End Module'));
   });
 }
+
+
+test('live array-element ByRef aliasing is diagnosed rather than silently copied back', () => {
+  for (const declaration of ['Dim a As Variant\nReDim a(1)', 'Dim a(1) As Long']) {
+    for (const argument of ['a(0)', 'value:=a(0)']) {
+      const source = project('Public Sub Main()\n'+declaration+'\nMutate '+argument+'\nEnd Sub\nPublic Sub Mutate(ByRef value As Variant)\nvalue = 9\nEnd Sub');
+      const result = convertVbNetProject(source, {platform:'AnyCPU'});
+      assert.ok(result.diagnostics.some(d => d.code === 'MIG_ARRAY_ELEMENT_BYREF'), JSON.stringify(result.diagnostics));
+      assert.equal(result.success, false);
+    }
+  }
+});
+
+test('ambiguous late index arguments never produce a build-ready archive', () => {
+  for (const argumentsText of ['index:=1', ', 1']) {
+    const result = convertVbNetProject(procedure('Dim a As Variant\nDebug.Print a('+argumentsText+')'));
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some(d => d.code === 'MIG_INDEX_ARGUMENT'), JSON.stringify(result.diagnostics));
+  }
+});
+
+test('multi-target array errors cannot resume into a different source statement boundary', () => {
+  for (const statement of ['ReDim a(1), b(1)', 'Erase a, b']) {
+    const result = convertVbNetProject(procedure('Dim a As Variant, b As Variant\nOn Error Resume Next\n'+statement));
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some(d => d.code === 'MIG_ARRAY_ERROR_BOUNDARY'));
+  }
+});
