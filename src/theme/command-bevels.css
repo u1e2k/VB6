@@ -8,6 +8,9 @@
  * Layer order: https://www.w3.org/TR/css-backgrounds-3/#layering
  * The complete 98.css MIT notice is retained in bevels.css and LICENSES/98.css.txt.
  *
+ * Runtime BackColor uses an inline background shorthand. Edge-only longhands
+ * must survive that reset; the authored background color is never overridden.
+ *
  * Reset at EVERY application theme boundary; an embedded classic form must not
  * inherit its modern parent's material treatment (or vice versa).
  */
@@ -21,21 +24,21 @@
 }
 @media(forced-colors:none) {
  .vb-command {
-   background-image:var(--command-edge-image);
-   background-origin:border-box;background-clip:border-box;background-repeat:no-repeat;
-   background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px;
-   background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top;
+   background-image:var(--command-edge-image)!important;
+   background-origin:border-box!important;background-clip:border-box!important;background-repeat:no-repeat!important;
+   background-size:1px 100%,100% 1px,1px 100%,100% 1px,2px 100%,100% 2px,2px 100%,100% 2px!important;
+   background-position:right top,left bottom,left top,left top,right top,left bottom,left top,left top!important;
    box-shadow:var(--app-control-shadow,none);
  }
  .vb-command:hover:not(.disabled):not(:disabled):not([aria-disabled=true]) {
    box-shadow:var(--app-hover-shadow,none);
  }
  .vb-command:active:not(.disabled):not(:disabled):not([aria-disabled=true]) {
-   background-image:var(--command-down-image);
+   background-image:var(--command-down-image)!important;
    box-shadow:var(--app-pressed-shadow,none);
  }
  .vb-command:is(.disabled,:disabled,[aria-disabled=true]) {
-   background-image:var(--command-edge-image);
+   background-image:var(--command-edge-image)!important;
    box-shadow:var(--app-disabled-shadow,none);
  }
 }

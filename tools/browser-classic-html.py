@@ -160,7 +160,7 @@ with sync_playwright() as pw:
         p.screenshot(path=OUT/'ide.png');check(not p.errors,str(p.errors));return {'startup':True,'optionsCancel':True}
     case('standalone IDE startup and classic Options interaction',ide_smoke)
     def command_theme_layers():
-        p=page(dpr=1.25,html='<div data-vb-theme="fluent"><button id="modern" class="vb-command">Modern</button><div data-vb-theme="classic"><button id="classic" class="vb-command" style="background-color:rgb(120,140,160)">Classic</button><div data-vb-theme="macos26-dark"><button id="nested" class="vb-command">Nested</button></div></div></div>')
+        p=page(dpr=1.25,html='<div data-vb-theme="fluent"><button id="modern" class="vb-command">Modern</button><div data-vb-theme="classic"><button id="classic" class="vb-command" style="background:rgb(120,140,160)">Classic</button><div data-vb-theme="macos26-dark"><button id="nested" class="vb-command">Nested</button></div></div></div>')
         state="n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect();return {image:s.backgroundImage,shadow:s.boxShadow,color:s.backgroundColor,box:[r.x,r.y,r.width,r.height]}}"
         c=p.locator('#classic');normal=c.evaluate(state)
         check(normal['shadow']=='none' and 'linear-gradient' in normal['image'],'Classic command did not use filled edges')
