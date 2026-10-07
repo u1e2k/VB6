@@ -1,6 +1,7 @@
 /** VB-aware front-end to the native optimizer. Checked arithmetic stays checked. */
 import {foldNativeInteger} from './optimizer.js';
 import {propagateNativeConstants} from './dataflow.js';
+import {emitNativePowerOfTwoDivision,emitNativeIntegerIdentity,nativePowerOfTwoDivisor} from './strength-reduction.js';
 const integerTypes=new Set(['byte','integer','long','boolean']);
 const conditions={'=':['e','ne'],'<>':['ne','e'],'<':['l','ge'],'<=':['le','g'],'>':['g','le'],'>=':['ge','l']};
 export const nativeOptimizationMethods={
@@ -33,10 +34,17 @@ export const nativeOptimizationMethods={
     if(folded){this.x.value(folded.value);this.optimizationStats.constantsFolded++;return true;}
     if(node.kind!=='binary'||!integerTypes.has(this.type(node.left))||!integerTypes.has(this.type(node.right)))return false;
     const right=foldNativeInteger(node.right,resolve),op=String(node.op).toLowerCase();
-    if(!right||!['+','-','*','and','or','xor','=','<>','<','<=','>','>='].includes(op))return false;
+    if(!right||!['+','-','*','and','or','xor','eqv','imp','=','<>','<','<=','>','>=','\\','mod'].includes(op))return false;
+    if(['\\','mod'].includes(op)&&!nativePowerOfTwoDivisor(right.value))return false;
     this.numeric(node.left);
     const x=this.x,operation={'+':'add','-':'sub','*':'imul','and':'and','or':'or','xor':'xor'}[op];
-    if(operation){if(operation==='imul')x.imul('eax','eax',right.value);else x[operation]('eax',right.value);if(['+','-','*'].includes(op))x.branch('o','error:6');const type=this.type(node);if(type==='byte'||type==='integer')this.check(type);}
+    if(emitNativePowerOfTwoDivision(x,op,right.value)||emitNativeIntegerIdentity(x,op,right.value)){
+      this.optimizationStats.strengthReductions=(this.optimizationStats.strengthReductions||0)+1;
+      const type=this.type(node);if(type==='byte'||type==='integer')this.check(type);
+    }else if(op==='eqv'||op==='imp'){
+      if(op==='eqv')x.xor('eax',right.value).not('eax');else x.not('eax').or('eax',right.value);
+      if(this.type(node)==='byte')x.and('eax',255);
+    }else if(operation){if(operation==='imul')x.imul('eax','eax',right.value);else x[operation]('eax',right.value);if(['+','-','*'].includes(op))x.branch('o','error:6');const type=this.type(node);if(type==='byte'||type==='integer')this.check(type);}
     else{x.cmp('eax',right.value);this.boolean(op);}
     this.optimizationStats.immediateOperations++;return true;
   }
