@@ -82,7 +82,12 @@
     "test:classic": "node --test tests/classic-*.test.mjs tests/native-classic.test.mjs",
     "test:classic:browser": "python tools/browser-classic-export-tests.py",
     "pretest:classic": "npm run build",
-    "pretest:classic:browser": "npm run build"
+    "pretest:classic:browser": "npm run build",
+    "migrate:vbnet": "node tools/migrate-vbnet.mjs",
+    "build:vbnet-migration": "node tools/build-vbnet-migration.mjs",
+    "test:migration": "node --test tests/migration-*.test.mjs",
+    "test:migration:browser": "python tools/browser-migration-tests.py",
+    "pack:vbnet-migration": "node tools/pack-vbnet-migration.mjs"
   },
   "engines": {
     "node": ">=22"
