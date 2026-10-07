@@ -36,7 +36,7 @@ void writeBytes(const Arg&arg,const Bytes&bytes){
 void writeLong(const Arg&arg,int64_t value){if(!arg.reference||!arg.nativeByRef)fail(13,"API output must be ByRef");arg.reference.set(Value::integer(value));}
 void write64(const Arg&arg,uint64_t value){Bytes bytes(8);for(size_t i=0;i<8;i++)bytes[i]=uint8_t(value>>(8*i));writeBytes(arg,bytes);}
 std::vector<int32_t>readInts(const Arg&arg,size_t count){auto bytes=rawBytes(arg);if(bytes.size()<count*4)fail(5,"API record is too small");std::vector<int32_t>values;for(size_t i=0;i<count;i++){uint32_t n=0;for(size_t j=0;j<4;j++)n|=uint32_t(bytes[i*4+j])<<(8*j);values.push_back(int32_t(n<=INT32_MAX?int64_t(n):int64_t(n)-4294967296LL));}return values;}
-void writeInts(const Arg&arg,const std::vector<int32_t>&values){Bytes bytes(values.size()*4);for(size_t i=0;i<values.size();i++)for(size_t j=0;j<4;j++)bytes[i*4+j]=uint8_t(uint32_t(values[i])<<(0)>>(8*j));writeBytes(arg,bytes);}
+void writeInts(const Arg&arg,const std::vector<int32_t>&values){Bytes bytes(values.size()*4);for(size_t i=0;i<values.size();i++)for(size_t j=0;j<4;j++)bytes[i*4+j]=uint8_t(uint32_t(values[i])>>(8*j));writeBytes(arg,bytes);}
 Text readText(const Arg&arg,bool wide,bool terminated=true,int64_t count=-1){
   Text result;const auto&value=arg.value;
   if(value.type==Type::String){result=value.string();if(!wide){auto bytes=encodeANSI(result);if(count>=0){if(uint64_t(count)>bytes.size())fail(5,"API input length exceeds String capacity");bytes.resize(size_t(count));}result=decodeANSI(bytes);}}
@@ -196,11 +196,12 @@ Value MacHost::api(Runtime&rt,const std::string&raw,Args args){
     }
     if(name=="GetCursorPos"){auto point=NSEvent.mouseLocation;writeInts(a(0),{int32_t(bankers(point.x)),int32_t(bankers(NSMaxY(NSScreen.mainScreen.frame)-point.y))});return Value::integer(1);}
     if(name=="SetCursorPos"){auto error=CGWarpMouseCursorPosition(CGPointMake(n(0),n(1)));return error==kCGErrorSuccess?Value::integer(1):bad(rt,5);}
-    if(name=="GetFocus"||name=="GetActiveWindow"){
+    if(name=="GetFocus"||name=="GetActiveWindow"||name=="GetForegroundWindow"){
+      if(name=="GetForegroundWindow"&&!NSRunningApplication.currentApplication.active)return Value::integer(0);
       if(name=="GetFocus"){id responder=NSApp.keyWindow.firstResponder;auto c=[responder isKindOfClass:NSView.class]?controlForView((NSView*)responder):nullptr;return Value::integer(c?c->handle:0);}for(auto&entry:forms)if(entry.second->window==NSApp.keyWindow)return Value::integer(entry.second->surface->handle);return Value::integer(0);
     }
     if(name=="FindWindow"||name=="FindWindowEx"){
-      int32_t parent=name=="FindWindowEx"?i32(a(0).value):0,after=name=="FindWindowEx"?i32(a(1).value):0;size_t offset=name=="FindWindowEx"?2:0;auto className=lower(toUTF8(readText(a(offset),wide))),title=readText(a(offset+1),wide);bool ready=after==0;
+      int32_t parent=name=="FindWindowEx"?i32(a(0).value):0,after=name=="FindWindowEx"?i32(a(1).value):0;size_t offset=name=="FindWindowEx"?2:0;auto className=lower(toUTF8(readText(a(offset),wide)));auto title=readText(a(offset+1),wide);bool ready=after==0;
       for(auto&entry:forms){std::vector<std::shared_ptr<MacControl>>candidates;if(parent==0)candidates.push_back(entry.second->surface);else for(auto&item:entry.second->owner->controls){if(auto c=std::dynamic_pointer_cast<MacControl>(item.second))candidates.push_back(c);else if(auto array=std::dynamic_pointer_cast<MacControlArray>(item.second))for(auto&child:array->elements)candidates.push_back(child.second);}
         for(auto&c:candidates){if(!ready){if(c->handle==after)ready=true;continue;}if(parent){auto p=controlForView(c->view.superview);if(!p||p->handle!=parent)continue;}bool matches=className.empty()||className==lower(c->spec.type)||className=="thunderrt6formdc"&&(c->spec.type=="Form"||c->spec.type=="MDIForm");if(matches&&(title.empty()||compareText(windowText(*this,c),title,true)==0))return Value::integer(c->handle);}
       }return Value::integer(0);
@@ -223,7 +224,7 @@ Value MacHost::api(Runtime&rt,const std::string&raw,Args args){
       bool formWindow=c->spec.type=="Form"||c->spec.type=="MDIForm",visible=formWindow?c->form()->window.visible:c->view&&!c->view.hidden;auto command=n(1);if(formWindow){formCall(c->owner.lock(),command==0?"hide":"show",{});if(command==2||command==6||command==7||command==11)formSet(c->owner.lock(),"windowstate",Value::integer(1,Type::Integer));else if(command==3)formSet(c->owner.lock(),"windowstate",Value::integer(2,Type::Integer));else if(command==1||command==9)formSet(c->owner.lock(),"windowstate",Value::integer(0,Type::Integer));}else c->set(rt,"visible",Value::boolean(command!=0));return result(visible);
     }
     if(name=="SetFocus"){auto previous=api(rt,"user32.GetFocus",{});if(!c->view||![c->view.window makeFirstResponder:c->widget])return bad(rt,87);return previous;}
-    if(name=="SetActiveWindow"){auto previous=api(rt,"user32.GetActiveWindow",{});[c->view.window makeKeyAndOrderFront:nil];return previous;}
+    if(name=="SetActiveWindow"||name=="SetForegroundWindow"){if(!c->view.window)return bad(rt,1400);auto previous=api(rt,"user32.GetActiveWindow",{});[c->view.window makeKeyAndOrderFront:nil];if(name=="SetForegroundWindow")return result([NSRunningApplication.currentApplication activateWithOptions:NSApplicationActivateIgnoringOtherApps]);return previous;}
     if(name=="SetWindowText"){setWindowText(*this,c,readText(a(1),wide));return Value::integer(1);}
     if(name=="GetWindowTextLength")return Value::integer(textUnits(windowText(*this,c),wide));
     if(name=="GetWindowText"){auto capacity=n(2);if(capacity<0)return bad(rt,87);return Value::integer(writeText(a(1),windowText(*this,c),wide,size_t(capacity)));}
