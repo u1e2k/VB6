@@ -1,3 +1,4 @@
+import {validateCallSemantics} from './call-semantics.js';
 import {key, identifier, qualified, vbString} from './names.js';
 import {INTRINSICS, INTRINSIC_CONSTANTS, BUILTIN_NAMES, SIMPLE_MEMBERS} from './registry.js';
 
@@ -97,7 +98,9 @@ export function expression(node, context, usage={}) {
     }
     case 'call': {
       const symbol=context.resolve(node.callee),k=node.callee.kind==='id'?key(node.callee.name):'';
+      validateCallSemantics(node,symbol,context);
       if(symbol?.bounds!==undefined&&symbol.bounds!==null&&node.args.length===0)return e(node.callee);
+      if(symbol&&!symbol.procedure&&!symbol.module&&!symbol.control&&!symbol.paramArray&&symbol.bounds==null&&VARIANT_TYPES.has(key(symbol.type)))return 'VbArrays.Element('+e(node.callee,{reference:true,receiver:true})+', New Object() {'+node.args.map(n=>e(n)).join(', ')+'}).Value';
       if(k==='array'&&!symbol)return 'VbArray(Of Object).FromValues(New Object() {'+node.args.map(n=>e(n)).join(', ')+'}, '+context.module.optionBase+')';
       if(['strptr','varptr','objptr'].includes(k))context.add('MIG_MANAGED_POINTER','Raw VB6 pointer intrinsic requires an explicit interop mapping.');
       if(['createobject','getobject'].includes(k)&&!symbol)context.add('MIG_COM_ACTIVATION','COM activation requires the original installed component, compatible bitness, and deployment verification.','warning');
@@ -139,9 +142,10 @@ export function defaultValue(decl,context) {
   if(decl.bounds!==null&&decl.bounds!==undefined){
     const type=context.netType(decl.type),dims=decl.bounds;
     const record=[...context.compiled.modules.values()].some(m=>Object.keys(m.types).some(t=>key(t)===key(decl.type)));
+    const objectElements=key(decl.type)==='object';
     const factory=decl.fixedLength?'Function() New String(" "c, '+decl.fixedLength+')':record?'AddressOf '+type+'.Create':'';
-    if(!dims.length)return 'New VbArray(Of '+type+')('+factory+')';
-    return 'New VbArray(Of '+type+')('+boundsArguments(dims,context)+', True'+(factory?', '+factory:'')+')';
+    if(!dims.length)return 'New VbArray(Of '+type+')('+factory+(objectElements?(factory?', ':'')+'objectElements:=True':'')+')';
+    return 'New VbArray(Of '+type+')('+boundsArguments(dims,context)+', True'+(factory?', '+factory:'')+(objectElements?', objectElements:=True':'')+')';
   }
   if(decl.fixedLength)return 'New String(" "c, '+decl.fixedLength+')';
   if(decl.autoNew)return 'Nothing';

@@ -18,7 +18,7 @@ export function nativeLayoutSeed(project) {
       for(let k=0;k<4;k++)r[6+k]=r[k];
       for(const [k,col]of [[10,'anchor'],[11,'dock'],[12,'mode'],[13,'minW'],[14,'minH'],[15,'maxW'],[16,'maxH'],[17,'pl'],[18,'ml'],[19,'gap'],[20,'grow'],[21,'shrink'],[22,'align'],[23,'justify']])r[k]=Number.isFinite(d[col][i])?d[col][i]:0;
       if(r[22]<0)r[22]=5;
-      r[24]=engine.visible[i]?-1:0;r[25]=id(parent);r[26]=root;r[29]=engine.participant[i]?(model.type==='ComboBox'&&model.properties.Style!==1?2:1):-1;
+      r[24]=engine.visible[i]?-1:0;r[25]=id(parent);r[26]=root;r[29]=engine.participant[i]?(model.type==='DriveListBox'||model.type==='ComboBox'&&model.properties.Style!==1?2:1):-1;
     }
     for(const parent of [engine.count,...engine.order]){const siblings=engine.children[parent];rows[id(parent)][27]=siblings.length?id(siblings[0]):0;for(let j=0;j<siblings.length;j++)rows[id(siblings[j])][28]=j+1<siblings.length?id(siblings[j+1]):0;}
     forms.set(module.name.toLowerCase(),{root,last:rows.length-1,controls:map});

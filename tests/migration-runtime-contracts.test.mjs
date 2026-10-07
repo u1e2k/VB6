@@ -6,8 +6,8 @@ import {RUNTIME_FILES} from '../src/migration/runtime-sources.js';
 test('array default indexer has a required first subscript and retains arbitrary rank',()=>{
   const source=RUNTIME_FILES['VB6.Compatibility/src/VbArray.vb'];
   assert.match(source,/Default Public Property Item\(first As Integer, ParamArray remaining As Integer\(\)\)/);
-  assert.match(source,/remaining.Length \+ 1 <> Rank/);
-  assert.match(source,/If\(i = 0, first, remaining\(i - 1\)\)/);
+  assert.match(source,/remaining.Length - start \+ 1 <> Rank/);
+  assert.match(source,/If\(i = 0, first, remaining\(i - 1 \+ start\)\)/);
 });
 test('generated runtime payload contains the exact authored source and license files',()=>{
   for(const [directory,name] of [['vbnet-runtime','VB6.Compatibility'],['vbnet-runtime-windows','VB6.Compatibility.Windows']]){
