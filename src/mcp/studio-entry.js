@@ -1,11 +1,13 @@
 import {VB6Studio, StudioAPI} from '../ide/main.js';
 import {installClassicExport} from '../ide/classic-build.js';
 import {installApplicationExport} from '../ide/application-export.js';
+import {installVbNetExport} from '../ide/vbnet-export.js';
 import {installMcp} from './studio.js';
 import {installAutoLayout} from '../ide/auto-layout.js';
 import {installCodingAgents} from '../agents/studio.js';
 if (globalThis.vb6Studio) installClassicExport(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installApplicationExport(globalThis.vb6Studio, StudioAPI);
+if (globalThis.vb6Studio) installVbNetExport(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installMcp(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installCodingAgents(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installAutoLayout(globalThis.vb6Studio);
