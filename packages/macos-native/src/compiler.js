@@ -1,0 +1,225 @@
+/** Shared VB6 IR -> C++17 native procedure lowering. No VM/bytecode interpreter. */
+import {compileProject} from '../../../src/language/compiler.js';
+import {normalizeProject} from '../../../src/project/model.js';
+import {defaultIdentifierType} from '../../../src/language/default-types.js';
+import {parseExpression} from '../../../src/language/expression.js';
+import {literalScalar,signedLiteralScalar,VBScalar,NOTHING,MISSING} from '../../../src/runtime/values.js';
+import {dateToSerial} from '../../../src/runtime/calendar.js';
+import {VB_CONSTANTS} from '../../../src/runtime/constants.js';
+import {BUILTIN_SIGNATURES} from '../../../src/runtime/signatures.js';
+import {MACOS_TARGET,MacOSCompileError,macOSOptions,macOSInfoPlist} from './target.js';
+import {resolveMacOSDeclaration,macOSControlReport} from './catalog.js';
+
+const lower=value=>String(value).toLowerCase();
+const q=value=>JSON.stringify(String(value)).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+// An explicit counted UTF-16 initializer preserves embedded NUL/unpaired UTF-16
+// units and cannot break out into C++ tokens (unlike concatenating quoted code).
+export function cppText(value){const text=String(value);return 'Text{'+Array.from({length:text.length},(_,i)=>'char16_t(0x'+text.charCodeAt(i).toString(16)+')').join(',')+'}';}
+const bool=value=>value?'true':'false';
+const typeTitle=type=>({empty:'Empty',null:'Null',integer:'Integer',long:'Long',single:'Single',double:'Double',currency:'Currency',date:'Date',string:'String',error:'Error',boolean:'Boolean',decimal:'Decimal',byte:'Byte'}[lower(type)]);
+function cppScalar(input){
+  if(input===NOTHING||input?.__nothing)return 'Value::object(nullptr)';
+  if(input===MISSING||input?.__missing)return 'Value::missing()';
+  if(input===undefined)return 'Value{}';if(input===null)return 'Value::null()';
+  const scalar=input instanceof VBScalar?input:null,value=scalar?scalar.value:input;
+  const type=scalar?.type||(typeof value==='boolean'?'boolean':typeof value==='string'?'string':typeof value==='number'?(Number.isInteger(value)&&value>=-32768&&value<=32767?'integer':Number.isInteger(value)&&value>=-2147483648&&value<=2147483647?'long':'double'):value instanceof Date?'date':null);
+  const variant=bool(scalar?.variant);
+  if(type==='empty')return 'Value{}';if(type==='null')return 'Value::null()';
+  if(type==='string')return `Value::string(${cppText(value)},${variant})`;
+  if(type==='currency')return `Value::currency(${cppText(value.toString())})`;
+  if(type==='decimal')return `Value::decimal(Decimal::parse(${cppText(value.toString())}))`;
+  if(type==='date')return `Value::real(${dateToSerial(value)},Type::Date,${variant})`;
+  if(type==='boolean')return `Value::integer(${value?-1:0},Type::Boolean,${variant})`;
+  if(type==='error')return value===MISSING?'Value::missing()':`Value::integer(${value.number},Type::Error,${variant})`;
+  if(typeof value==='number'&&Number.isFinite(value)){
+    const number=Object.is(value,-0)?'-0.0':String(value);
+    return ['byte','integer','long'].includes(type)?`Value::integer(${number},Type::${typeTitle(type)},${variant})`:`Value::real(${number},Type::${typeTitle(type)||'Double'},${variant})`;
+  }
+  throw new MacOSCompileError('Constant cannot be represented in the native ABI');
+}
+function wrapped(body){return `([&](){${body}}())`;}
+const statementOps=new Set(['dim','assign','expr','print','assert','branch','jump','computedJump','raiseError','temp','case','forInit','forNext','eachInit','eachNext','redim','erase','withPush','withPop','withUnwind','onError','resume','gosub','gosubReturn','return','stop','end','lineNumber','form','fileOpen','fileRecord','fileSeek','fileLock','fileCopy','fileRename','fileClose','filePrint','fileInput','graphics','raiseEvent','stringAlign','stringMid']);
+class Lowering {
+  constructor(program,options){this.program=program;this.options=options;this.module=null;this.procedure=null;this.instruction=null;this.external=[];this.sourceMap=[];this.procedures=0;this.instructions=0;this.usedOps=new Set();this.usedBuiltins=new Set();}
+  fail(message,code='MAC100'){throw new MacOSCompileError(message,this.module?.name,this.instruction?.line||this.procedure?.line||1,code);}
+  constant(node){
+    if(node.kind==='id'){
+      const name=lower(node.name),p=this.procedure,m=this.module;
+      if(p?.constantScalars?.has(name))return p.constantScalars.get(name);
+      if(p&&(p.params.some(v=>lower(v.name)===name)||p.code.some(i=>i.op==='dim'&&i.decls.some(v=>lower(v.name)===name))))return null;
+      if(m.constantScalars.has(name))return m.constantScalars.get(name);
+      const imported=m.importedConstantBindings.get(name);if(imported&&!imported.ambiguous)return imported.scalar;
+      const key=Object.keys(VB_CONSTANTS).find(key=>lower(key)===name);if(key!==undefined)return {nativeValue:VB_CONSTANTS[key]};
+    }
+    if(node.kind==='member'&&node.object.kind==='id'){
+      const owner=lower(node.object.name),name=lower(node.name);
+      const enumeration=this.module.enumBindings.get(owner)||this.module.globalEnumMembers.get(owner);
+      if(enumeration?.values&&Object.hasOwn(enumeration.values,name))return {nativeValue:enumeration.values[name]};
+      const module=this.program.modules.get(owner);if(module?.constantScalars.has(name))return module.constantScalars.get(name);
+    }
+    return null;
+  }
+  expression(node){
+    if(!node)return 'Value::missing()';
+    const constant=this.constant(node);if(constant)return cppScalar(Object.hasOwn(constant,'nativeValue')?constant.nativeValue:constant);
+    switch(node.kind){
+      case 'literal':case 'currency':case 'date':return cppScalar(literalScalar(node));
+      case 'empty':return 'Value{}';case 'nothing':return 'Value::object(nullptr)';case 'missing':return 'Value::missing()';
+      case 'group':case 'byval':return this.expression(node.expr);
+      case 'id':return `f.get(${q(node.name)})`;
+      case 'with':return 'f.with()';
+      case 'new':return `f.create(${q(node.name)})`;
+      case 'member':return `getMember(f.runtime,${this.expression(node.object)},${q(node.name)})`;
+      case 'call':return this.call(node);
+      case 'unary':{const literal=signedLiteralScalar(node);return literal?cppScalar(literal):`unary(${q(node.op)},scalar(f.runtime,${this.expression(node.expr)}))`;}
+      case 'binary':return wrapped(`auto a=${this.expression(node.left)};auto b=${this.expression(node.right)};return binary(${q(node.op)},${node.op==='is'?'a,b':'scalar(f.runtime,a),scalar(f.runtime,b)'},f.module.textCompare);`);
+      case 'typeof':return wrapped(`auto v=${this.expression(node.expr)};if(v.type!=Type::Object)fail(13);auto object=std::get<ObjectPtr>(v.payload);return Value::boolean(object&&object->supports(${q(node.name)}));`);
+      case 'addressOf':{
+        const parts=node.name.split('.'),name=lower(parts.pop());let owners;
+        if(parts.length)owners=[this.program.modules.get(lower(parts.join('.')))];
+        else if(this.module.procedures.has(name))owners=[this.module];
+        else owners=[...this.program.modules.values()].filter(m=>m.kind==='module'&&m.procedures.has(name)&&m.procedures.get(name).scope!=='private');
+        owners=owners.filter(Boolean);if(owners.length!==1||owners[0].kind!=='module')this.fail('AddressOf must resolve one standard-module procedure','MAC230');
+        const procedure=owners[0].procedures.get(name);if(!procedure||procedure.external||procedure.params.some(p=>p.optional||p.paramArray||p.byRef||p.bounds!==null&&p.bounds!==undefined))this.fail('Native callbacks require fixed ByVal scalar parameters','MAC230');
+        return `f.callback(${q(owners[0].name)},${q(procedure.name)})`;
+      }
+      default:this.fail('Unsupported native expression '+node.kind);
+    }
+  }
+  reference(node){
+    if(node.kind==='id')return `f.ref(${q(node.name)})`;
+    if(node.kind==='member')return `memberRef(f.runtime,${this.expression(node.object)},${q(node.name)})`;
+    if(node.kind==='call'){
+      if(node.args.length===0&&node.callee.kind==='id'&&this.canReference(node))return this.reference(node.callee);
+      if(node.callee.kind==='member')return wrapped(`auto receiver=${this.expression(node.callee.object)};auto args=${this.arguments(node.args)};return objectReference(f.runtime,receiver,${q(node.callee.name)},args);`);
+      if(node.callee.kind==='id'&&(this.module.procedures.has(lower(node.callee.name)+':get')||this.module.procedures.has(lower(node.callee.name)+':let')||this.module.procedures.has(lower(node.callee.name)+':set')))return `f.propertyRef(${q(node.callee.name)},${this.arguments(node.args)})`;
+      return wrapped(`auto receiver=${this.expression(node.callee)};std::vector<Value> indices{${node.args.map(a=>this.expression(a.kind==='named'?a.expr:a)).join(',')}};return indexedRef(f.runtime,receiver,indices);`);
+    }
+    this.fail('Native assignment target is not a variable, member, or indexed reference');
+  }
+  canReference(node){
+    if(node.kind==='id'){
+      if(this.constant(node))return false;const key=lower(node.name),p=this.procedure;
+      const variables=[...(p?.params||[]),...this.module.declarations,...(p?.code||[]).flatMap(i=>i.decls||[])];
+      if(variables.some(v=>lower(v.name)===key)||p&&lower(p.name)===key&&(p.kind==='function'||p.accessor==='get'))return true;
+      if([...this.program.modules.values()].some(m=>m.kind==='module'&&(m.procedures.has(key)||m.procedures.has(key+':get'))))return false;
+      if(this.module.procedures.has(key)||this.module.procedures.has(key+':get')||this.program.modules.has(key))return false;
+      if(this.module.form?.controls.some(c=>lower(c.name)===key))return false;
+      if(Object.keys(BUILTIN_SIGNATURES).some(n=>lower(n)===key.replace(/\$$/,''))||['me','err','app','screen','clipboard','forms','printer','printers','array','choose','switch','callbyname'].includes(key))return false;
+      return true;
+    }
+    if(node.kind==='member')return !this.constant(node);
+    if(node.kind==='call'&&node.callee.kind==='id'){
+      const name=lower(node.callee.name),variables=[...(this.procedure?.params||[]),...this.module.declarations,...(this.procedure?.code||[]).flatMap(i=>i.decls||[])];
+      return variables.some(v=>lower(v.name)===name&&v.bounds!==null&&v.bounds!==undefined);
+    }
+    return false;
+  }
+  arguments(nodes){return `Args{${nodes.map(node=>{
+    const name=node.kind==='named'?node.name:'';if(node.kind==='named')node=node.expr;
+    return `Arg(${this.canReference(node)?this.reference(node):this.expression(node)},${q(name)})`;
+  }).join(',')}}`;}
+  call(node){
+    const callee=node.callee,args=this.arguments(node.args);
+    if(callee.kind==='id')return `f.call(${q(callee.name)},${args})`;
+    if(callee.kind==='member')return wrapped(`auto receiver=${this.expression(callee.object)};auto args=${args};return callMember(f.runtime,receiver,${q(callee.name)},args);`);
+    return wrapped(`auto receiver=${this.expression(callee)};auto args=${args};return callValue(f.runtime,receiver,args);`);
+  }
+  bounds(decl){return `Bounds{${(decl.bounds||[]).map(pair=>`{static_cast<int32_t>(coerce(scalar(f.runtime,${pair[0]?this.expression(pair[0]):`Value::integer(${this.module.optionBase})`}),"long").integral()),static_cast<int32_t>(coerce(scalar(f.runtime,${this.expression(pair[1])}),"long").integral())}`).join(',')}}`;}
+  declaration(decl,global=false,isStatic=false){
+    const name=q(decl.name),type=q(decl.storageType||decl.type),kind=decl.bounds===null||decl.bounds===undefined?0:decl.bounds.length?2:1;
+    const args=`${name},${type},${this.bounds(decl)},${kind},${Number(decl.fixedLength)||0},${bool(decl.constant)},${global?`${bool(decl.autoNew)},${bool(decl.withEvents)}`:`${bool(isStatic)},${bool(decl.autoNew)}`}`;
+    let out=`f.${global?'global':'declare'}(${args});`;
+    if(decl.constant){const scalar=(this.procedure||this.module).constantScalars.get(lower(decl.name));if(!scalar)this.fail('Missing bound constant '+decl.name);out+=`f.initial(${name},${cppScalar(scalar)});`;}
+    return out;
+  }
+  instructionCode(ins,index){
+    this.instruction=ins;this.usedOps.add(ins.op);if(!statementOps.has(ins.op))this.fail('Unsupported native instruction '+ins.op);
+    const e=node=>this.expression(node),s=node=>`scalar(f.runtime,${e(node)})`,r=node=>this.reference(node),values=nodes=>`std::vector<Value>{${nodes.map(s).join(',')}}`,go=target=>{if(!Number.isInteger(target)||target<0||target>this.procedure.code.length)this.fail('Invalid branch target');return `goto L${target};`;};
+    switch(ins.op){
+      case 'dim':return ''; // Procedure-scoped storage is initialized before the first statement.
+      case 'assign':return `auto target=${r(ins.target)};auto value=${e(ins.expr)};assign(f.runtime,target,value,${bool(ins.objectSet)});`;
+      case 'expr':return `(void)${e(ins.expr)};`;
+      case 'print':return `auto values=${values(ins.exprs)};Text output;for(size_t i=0;i<values.size();++i){if(i)output+=u' ';output+=printValue(values[i]);}f.runtime.host->log(output,${bool(ins.newline)});`;
+      case 'assert':return `if(!${s(ins.expr)}.truth())fail(5,"Debug.Assert failed");`;
+      case 'branch':return `if(${ins.invert?'':'!'}${s(ins.test)}.truth()){${go(ins.target)}}`;
+      case 'jump':return go(ins.target);
+      case 'computedJump':return `auto selector=coerce(${s(ins.expr)},"integer").integral();if(selector<0)fail(5);switch(selector){${ins.targets.map((t,i)=>`case ${i+1}:${ins.gosub?`f.gosubs.push_back(${index+1});`:''}${go(t)}`).join('')}default:break;}`;
+      case 'raiseError':return `auto number=coerce(${s(ins.expr)},"long").integral();if(number<1||number>65535)fail(5);fail(static_cast<int32_t>(number));`;
+      case 'temp':return `f.temps[${q(ins.id)}]=${s(ins.expr)};`;
+      case 'case':return `auto value=f.temps.at(${q(ins.id)});bool matched=false;${ins.cases.map(c=>c.kind==='range'?`if(!matched){auto a=${s(c.low)};auto b=${s(c.high)};matched=binary(">=",value,a,f.module.textCompare).truth()&&binary("<=",value,b,f.module.textCompare).truth();}`:`if(!matched)matched=binary(${q(c.op||'=')},value,${s(c.expr)},f.module.textCompare).truth();`).join('')}if(!matched){${go(ins.target)}}`;
+      case 'forInit':return `auto variable=${r(parseExpression(ins.name))};auto start=${s(ins.start)};auto end=${s(ins.end)};auto step=${s(ins.step)};if(!f.forStart(${q(ins.id)},variable,start,end,step)){${go(ins.target)}}`;
+      case 'forNext':return `if(f.forNext(${q(ins.id)})){${go(ins.target)}}`;
+      case 'eachInit':return `auto variable=${r(parseExpression(ins.name))};auto iterable=${e(ins.expr)};if(!f.eachStart(${q(ins.id)},variable,iterable)){${go(ins.target)}}`;
+      case 'eachNext':return `if(f.eachNext(${q(ins.id)})){${go(ins.target)}}`;
+      case 'redim':return ins.decls.map(d=>`{auto reference=f.ref(${q(d.name)});auto bounds=${this.bounds(d)};f.redim(reference,bounds,${bool(ins.preserve)},${q(d.explicitType?d.storageType||d.type:'')});}`).join('');
+      case 'erase':return ins.exprs.map(node=>`${e(node)}.asArray()->erase();`).join('');
+      case 'withPush':return `f.withValues.push_back(${e(ins.expr)});`;
+      case 'withPop':return 'if(f.withValues.empty())fail(91);f.withValues.pop_back();';
+      case 'withUnwind':return `if(f.withValues.size()<${ins.count})fail(91);f.withValues.resize(f.withValues.size()-${ins.count});`;
+      case 'onError':return `f.onError(${q(ins.mode)},${ins.target??-1});`;
+      case 'resume':return `f.resume(${q(ins.mode)},${ins.target??-1});goto dispatch;`;
+      case 'gosub':return `if(f.gosubs.size()>=f.runtime.maxCallDepth)fail(28);f.gosubs.push_back(${index+1});${go(ins.target)}`;
+      case 'gosubReturn':return 'if(f.gosubs.empty())fail(3);f.pc=f.gosubs.back();f.gosubs.pop_back();goto dispatch;';
+      case 'return':return 'return f.result();';
+      case 'end':return 'throw EndExecution{};';
+      case 'stop':return 'throw EndExecution{};';
+      case 'lineNumber':return `f.labelLine=${ins.number};`;
+      case 'form':return ins.expr.kind==='call'?`auto controls=${e(ins.expr.callee)};auto args=${this.arguments(ins.expr.args)};controls.asObject()->invoke(f.runtime,${q(ins.action)},args);`:`auto object=std::dynamic_pointer_cast<Instance>(${e(ins.expr)}.asObject());if(!object)fail(424);f.runtime.${ins.action}(object);`;
+      case 'fileOpen':return `auto path=${s(ins.path)};auto number=${s(ins.handle)};auto length=${ins.recordLength?s(ins.recordLength):'Value::integer(128)'};fileOpen(f,path,${q(ins.mode)},number,length,${q(ins.access||'')},${q(ins.sharing||'')});`;
+      case 'fileClose':return `fileClose(f,${values(ins.handles)});`;
+      case 'fileSeek':return `auto number=${s(ins.handle)};auto position=${s(ins.position)};fileSeek(f,number,position);`;
+      case 'fileRecord':return `auto number=${s(ins.handle)};auto position=${e(ins.position)};auto reference=${r(ins.target)};fileGetPut(f,number,position,reference,${bool(ins.action==='put')});`;
+      case 'fileLock':return `auto number=${s(ins.handle)};auto start=${e(ins.start)};auto end=${e(ins.end)};fileLock(f,number,start,end,${bool(ins.unlock)});`;
+      case 'fileCopy':case 'fileRename':return `auto source=${s(ins.sourcePath)};auto destination=${s(ins.destination)};fileMoveCopy(source,destination,${bool(ins.op==='fileRename')});`;
+      case 'filePrint':return `auto number=${s(ins.handle)};auto values=${values(ins.exprs)};filePrint(f,number,values,${bool(ins.csv)},${bool(ins.newline)});`;
+      case 'fileInput':return `auto number=${s(ins.handle)};std::vector<Ref>refs{${ins.targets.map(r).join(',')}};fileInput(f,number,refs,${bool(ins.whole)});`;
+      case 'graphics':return `auto receiver=${ins.object?e(ins.object):'Value::object(f.self)'};auto coordinates=${values(ins.coords)};auto color=${e(ins.color)};f.runtime.host->graphics(f,receiver,${q(ins.kind)},coordinates,color,${bool(ins.fill)});`;
+      case 'raiseEvent':if(ins.expr.kind!=='call'||ins.expr.callee.kind!=='id')this.fail('Invalid RaiseEvent');return `f.runtime.raiseEvent(f.self,${q(ins.expr.callee.name)},${this.arguments(ins.expr.args)});`;
+      case 'stringAlign':return `auto target=${r(ins.target)};auto value=target.get();if(value.type!=Type::String)fail(13);auto current=value.string();auto text=${s(ins.expr)}.string().substr(0,current.size());text=${ins.right?'Text(current.size()-text.size(),u\' \')+text':'text+Text(current.size()-text.size(),u\' \')'};target.set(Value::string(text));`;
+      case 'stringMid':return `auto target=${r(ins.target)};auto value=target.get();if(value.type!=Type::String)fail(13);auto text=value.string();auto start=coerce(${s(ins.start)},"long").integral();auto length=${ins.length?`coerce(${s(ins.length)},"long").integral()`:'static_cast<int64_t>(text.size())'};if(start<1||length<0)fail(5);auto replacement=${s(ins.expr)}.string();if(size_t(start)<=text.size()){auto count=std::min({size_t(length),replacement.size(),text.size()-size_t(start-1)});text.replace(size_t(start-1),count,replacement.substr(0,count));target.set(Value::string(text));}`;
+      default:this.fail('Instruction not lowered: '+ins.op);
+    }
+  }
+  procedureCode(procedure,id){
+    this.procedure=procedure;this.instruction=null;this.procedures++;
+    if(procedure.external){const adapter=resolveMacOSDeclaration(procedure,this.module.name);this.external.push({...adapter,procedure:procedure.name,source:this.module.name});return `static Value p${id}(Frame&f){auto result=f.runtime.host->api(f.runtime,${q(adapter.id)},f.arguments);return ${procedure.kind==='sub'?'Value{}':`coerce(result,${q(procedure.storageReturnType||procedure.returnType)})`};}\n`;}
+    const code=procedure.code;this.instructions+=code.length;
+    const locals=code.filter(ins=>ins.op==='dim').flatMap(ins=>ins.decls.map(d=>this.declaration(d,false,ins.static))).join('\n');
+    const instructions=code.map((ins,i)=>{this.sourceMap.push({function:`p${id}`,instruction:i,module:this.module.name,procedure:procedure.name,line:ins.line,sequencePoint:ins.sequencePoint});return `L${i}:{f.mark(${i},${i+1},${ins.line||procedure.line});${this.instructionCode(ins,i)}}`;});
+    return `static Value p${id}(Frame&f){\n${locals}\ndispatch:\ntry {\nswitch(f.pc){${code.map((_,i)=>`case ${i}:goto L${i};`).join('')}default:goto L${code.length};}\n${instructions.join('\n')}\nL${code.length}:return f.result();\n}catch(const Error&e){if(!f.handle(e))throw;}\ngoto dispatch;\n}\n`;
+  }
+  recordCode(name,fields){
+    return `m.records[${q(lower(name))}]=[](Frame&f){(void)f;auto record=std::make_shared<Record>();record->name=${q(name)};${fields.map(field=>{
+      const type=field.storageType||field.type;const init=field.bounds?.length?`Value::array(std::make_shared<Array>(${q(type)},${this.bounds(field)},false,f.runtime.maxArrayElements,${field.fixedLength||0},[prototype=f.runtime.defaultValue(${q(type)},&f)]{return prototype.copy();}))`:`f.runtime.defaultValue(${q(type)},&f)`;
+      return `record->order.push_back(${q(lower(field.name))});record->fields[${q(lower(field.name))}]=std::make_shared<Cell>(${init},${q(field.bounds?.length?'variant':type)},${field.fixedLength||0});`;
+    }).join('')}return Value::record(record);};`;
+  }
+  spec(control){
+    const properties=Object.entries(control.properties||{}).filter(([name])=>lower(name)!=='name').sort(([a],[b])=>a.localeCompare(b));
+    const value=v=>Array.isArray(v)?`arrayValue(std::vector<Value>{${v.map(value).join(',')}})`:v&&typeof v==='object'?`Value::string(${cppText(JSON.stringify(v))})`:cppScalar(v);
+    return `ControlSpec{${q(control.name)},${q(control.type||'Form')},${q(control.parent||'')},std::vector<Property>{${properties.map(([name,v])=>`Property{${q(lower(name))},${value(v)}}`).join(',')}},${Number.isInteger(Number(control.properties?.Index))&&control.properties?.Index!==undefined?Number(control.properties.Index):-1}}`;
+  }
+  emit(){
+    const functions=[],initialize=[];let id=0;
+    for(const module of this.program.modules.values()){
+      this.module=module;this.procedure=null;this.instruction=null;
+      const registrations=[];
+      for(const [key,proc]of module.procedures){functions.push(this.procedureCode(proc,id));registrations.push(`{Procedure p;p.name=${q(proc.name)};p.scope=${q(proc.scope)};p.returnType=${q(proc.storageReturnType||proc.returnType)};p.accessor=${q(proc.accessor||'')};p.isFunction=${bool(proc.kind==='function'||proc.accessor==='get')};p.isStatic=${bool(proc.static)};p.external=${bool(proc.external)};p.code=&p${id++};p.parameters={${proc.params.map(param=>{
+        const initial=proc.defaultScalars.get(lower(param.name));return `Parameter{${q(param.name)},${q(param.storageType||param.type)},${bool(param.byRef)},${bool(param.optional)},${bool(param.paramArray)},${bool(param.bounds!==null&&param.bounds!==undefined)},${initial?`[](Frame&)->Value{return ${cppScalar(initial)};}`:'{}'}}`;
+      }).join(',')}};m.procedures[${q(key)}]=std::move(p);}`);}
+      this.procedure=null;this.instruction=null;
+      initialize.push(`{Module m;m.name=${q(module.name)};m.kind=${q(module.kind)};m.defaultMember=${q(module.defaultMember||'')};m.optionExplicit=${bool(module.optionExplicit)};m.optionBase=${module.optionBase};m.textCompare=${bool(module.optionCompare==='text')};m.defaultTypes={${Object.entries(module.defaultTypes).map(([k,v])=>`{${q(k)},${q(v)}}`).join(',')}};m.interfaces={${module.interfaces.map(i=>q(i.name)).join(',')}};m.publicFields={${module.declarations.filter(d=>d.scope!=='private').map(d=>q(lower(d.name))).join(',')}};\n${Object.entries(module.types).map(([name,fields])=>this.recordCode(name,fields)).join('\n')}\nm.initialize=[](Frame&f){(void)f;${module.declarations.map(d=>this.declaration(d,true)).join('\n')}};\n${registrations.join('\n')}\n${module.form?`m.form=${this.spec({...module.form,name:module.name})};m.controls={${module.form.controls.map(c=>this.spec(c)).join(',')}};m.menus={${(module.form.menus||[]).map(c=>this.spec({...c,type:'Menu'})).join(',')}};`:''}\nrt.modules[${q(lower(module.name))}]=std::move(m);}`);
+    }
+    return `// Generated VB6 native procedures. No project text is executed as C++ code.\n#include "vb6.hpp"\n#include "library.hpp"\n#include <iostream>\nusing namespace vb6;\n${functions.join('\n')}\nvoid initializeProgram(Runtime&rt){rt.name=${q(this.options.name)};rt.startup=${q(this.program.startup)};rt.maxArrayElements=${this.options.maxArrayElements};rt.maxCallDepth=${this.options.maxCallDepth};\n${initialize.join('\n')}\n}\n#ifndef VB6_NATIVE_NO_MAIN\nint main(int argc,char**argv){try{Runtime rt(makeNativeHost());if(argc>0)rt.executablePath=std::filesystem::absolute(argv[0]);for(int i=1;i<argc;++i)rt.commandLine.emplace_back(argv[i]);initializeProgram(rt);rt.run();return 0;}catch(const vb6::Error&e){std::cerr<<"VB6 error "<<e.number<<": "<<e.what()<<"\\n";return 1;}catch(const std::exception&e){std::cerr<<"Native runtime failure: "<<e.what()<<"\\n";return 2;}}\n#endif\n`;
+  }
+}
+export function compileMacOS(input,options={}){
+  const project=normalizeProject(input);const normalized=macOSOptions({name:project.name,...options});
+  project.settings={...project.settings,conditionalConstants:{...project.settings.conditionalConstants,VBWEB:0,Win32:0,Win64:0,Mac:-1,MacOS:-1,ARM64:-1}};
+  const program=compileProject(project);if(!program.valid){const error=new MacOSCompileError('VB6 frontend rejected the project');error.diagnostics=program.diagnostics;throw error;}
+  const controls=macOSControlReport(project);
+  const lowering=new Lowering(program,normalized),source=lowering.emit();
+  const report={target:MACOS_TARGET.id,architecture:'arm64',format:'Mach-O',artifact:'native-source-build-kit',compiler:'Apple Clang C++17',nativeRuntime:'vb6-native',modules:program.modules.size,procedures:lowering.procedures,instructions:lowering.instructions,operations:[...lowering.usedOps].sort(),controls,imports:lowering.external,optimization:normalized.optimization,minimumVersion:normalized.minimumVersion,sourceBytes:new TextEncoder().encode(source).length,diagnostics:[]};
+  return {target:MACOS_TARGET,options:normalized,project,files:{'main.cpp':source,'Info.plist':macOSInfoPlist(normalized),'source-map.json':JSON.stringify(lowering.sourceMap,null,2)+'\n'},report,diagnostics:[]};
+}
