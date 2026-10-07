@@ -2,13 +2,14 @@
  * return stack separate from ESP, so error unwinding cannot corrupt returns. */
 import {mem32} from './x86-operands.js';
 const slot=v=>mem32({base:'ebp',displacement:v.offset});
+const memory=slot;
 export function nativeGoSubLimit(value=1024) {
-  if(!Number.isInteger(value)||value<1||value>16384)throw new Error('maxGoSubDepth must be an integer from 1 to 16384');
+  if(!Number.isInteger(value)||value<1||value>65536)throw new Error('maxGoSubDepth must be an integer from 1 to 65536');
   return value;
 }
 export const nativeFlowMethods={
   prepareNativeFlow(context) {
-    context.nativeWithStack=[];
+    context.withBindings=[];
     if(context.proc.code.some(ins=>ins.op==='gosub'||ins.op==='gosubReturn'||ins.op==='computedJump'&&ins.gosub)){
       const depth=this.arrayWorkspace(4,'gosub-depth'),returns=this.arrayWorkspace(this.maxGoSubDepth*4,'gosub-returns');
       context.locals.set(depth.name,depth); // Zero the depth at procedure entry, not every GoSub.
@@ -21,14 +22,13 @@ export const nativeFlowMethods={
     x.value(returnLabel).mov(mem32({base:'ebp',index:'ecx',scale:4,displacement:returns.offset}),'eax');
     x.add('ecx',1).mov(slot(depth),'ecx'); // EDX is preserved for computed dispatch.
   },
-  currentNativeWith(context=this.context) {
-    const binding=context?.nativeWithStack?.at(-1);
-    if(!binding)this.fail('Native With reference has no enclosing With block');
-    return binding;
+  withGuard(active) {
+    if(active)this.x.cmp(memory(active),0).branch('e','error:91');
   },
-  loadNativeWithAddress(variable) {
-    this.x.mov('eax',slot(variable.nativeWithAddress)).test().branch('e','error:91');
-    return null;
+  nativeWithBinding() {
+    const binding=this.context?.withBindings?.at(-1);
+    if(!binding)this.fail('Native With member requires an enclosing With block');
+    return binding;
   },
   nativeFlowInstruction(ins,context,index) {
     const x=this.x,next=context.label+':'+(index+1);
@@ -61,22 +61,28 @@ export const nativeFlowMethods={
       return true;
     }
     if(ins.op==='withPush'){
-      const variable=this.variable(ins.expr);
-      if(!variable?.nativeRecord||variable.recordFieldArray)this.fail('Native With currently requires an addressable POD record');
-      const address=this.arrayWorkspace(4,'with-record');context.locals.set(address.name,address);
-      // Capture once before publishing the lexical binding; nested .members use the parent.
-      this.address(variable);x.mov(slot(address),'eax');
-      context.nativeWithStack.push({address,variable:{name:address.name,type:variable.type,nativeRecord:variable.nativeRecord,nativeBytes:variable.nativeRecord.size,nativeWithAddress:address}});
-      return true;
+      const active=this.arrayWorkspace(4,'with-active');context.locals.set(active.name,active);
+      const record=this.variable(ins.expr);let binding;
+      if(record?.nativeRecord&&!record.recordFieldArray){
+        const slot=this.arrayWorkspace(4,'with-record');context.locals.set(slot.name,slot);
+        this.address(record);x.mov(memory(slot),'eax');
+        binding={active,record:{name:slot.name,type:record.type,nativeRecord:record.nativeRecord,offset:slot.offset,parameter:true,byRef:true,nativeWithActive:active}};
+      }else{
+        const object=this.object(ins.expr);
+        if(!object||object.controlArray)this.fail('Native With requires an addressable POD record, form or indexed/scalar intrinsic control');
+        this.ensure(object);
+        // An indexed control is resolved now, not again at every member access.
+        binding={active,object:{...object,...(object.indexed?{indexed:false,boundIndex:true}:{}),nativeWithActive:active}};
+      }
+      x.mov(memory(active),-1);context.withBindings.push(binding);return true;
     }
     if(ins.op==='withPop'){
-      const binding=this.currentNativeWith(context);x.mov(slot(binding.address),0);context.nativeWithStack.pop();return true;
+      const binding=context.withBindings.pop();if(!binding)this.fail('Unbalanced native With block');x.mov(memory(binding.active),0);return true;
     }
     if(ins.op==='withUnwind'){
-      if(!Number.isInteger(ins.count)||ins.count<0||ins.count>context.nativeWithStack.length)this.fail('Invalid native With unwind');
-      if(!ins.count)return true;
-      // This is a runtime exit path, not a lexical End With. Keep compile-time bindings.
-      for(const binding of context.nativeWithStack.slice(-ins.count))x.mov(slot(binding.address),0);
+      if(!Number.isInteger(ins.count)||ins.count<0||ins.count>context.withBindings.length)this.fail('Invalid native With unwind');
+      // A runtime early exit must not pop the compiler's lexical binding stack.
+      for(const binding of ins.count?context.withBindings.slice(-ins.count):[])x.mov(memory(binding.active),0);
       return true;
     }
     return false;

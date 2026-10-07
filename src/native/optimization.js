@@ -36,7 +36,7 @@ export const nativeOptimizationMethods={
     if(!right||!['+','-','*','and','or','xor','=','<>','<','<=','>','>='].includes(op))return false;
     this.numeric(node.left);
     const x=this.x,operation={'+':'add','-':'sub','*':'imul','and':'and','or':'or','xor':'xor'}[op];
-    if(operation){if(operation==='imul')x.imul('eax','eax',right.value);else x[operation]('eax',right.value);if(['+','-','*'].includes(op))x.branch('o','error:6');}
+    if(operation){if(operation==='imul')x.imul('eax','eax',right.value);else x[operation]('eax',right.value);if(['+','-','*'].includes(op))x.branch('o','error:6');const type=this.type(node);if(type==='byte'||type==='integer')this.check(type);}
     else{x.cmp('eax',right.value);this.boolean(op);}
     this.optimizationStats.immediateOperations++;return true;
   }

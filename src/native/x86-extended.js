@@ -73,6 +73,28 @@ export const x86ExtendedMethods={
     }
     return emit(this,opcodes(prefix,opcode),xmmRM(xmm(dst),src,width));
   },
+  /** Packed memory operations may require 16-byte alignment even without MOVDQA.
+   * Use an explicit, distinct scratch register to support any memory alignment.
+   * Validate both plans before emitting either instruction; no hidden clobbers.
+   */
+  sseUnaligned(name,dst,src,scratch) {
+    if(!own(simd,name)||simd[name][2]!==128||simd[name][3]!==undefined)throw new Error('Unaligned SSE helper requires a packed arithmetic/logical instruction');
+    mem(src,[128]);const target=xmm(dst),temporary=xmm(scratch);
+    if(target===temporary)throw new Error('Unaligned SSE scratch must differ from destination');
+    const load=rm(temporary,src,128),operation=xmmRM(target,scratch,128),[prefix,opcode]=simd[name];
+    emit(this,opcodes(0xf3,0x6f),load);
+    return emit(this,opcodes(prefix,opcode),operation);
+  },
+  movd(dst,src) {
+    if(typeof dst==='string'&&/^xmm/.test(dst))return emit(this,[0x66,0x0f,0x6e],rm(xmm(dst),src,32));
+    return emit(this,[0x66,0x0f,0x7e],rm(xmm(src),dst,32));
+  },
+  movq(dst,src) {
+    if(dst?.kind==='memory')return emit(this,[0x66,0x0f,0xd6],rm(xmm(src),dst,64));
+    return emit(this,[0xf3,0x0f,0x7e],xmmRM(xmm(dst),src,64));
+  },
+  ldmxcsr(src){mem(src,[32]);return emit(this,[0x0f,0xae],rm(2,src,32));},
+  stmxcsr(dst){mem(dst,[32]);return emit(this,[0x0f,0xae],rm(3,dst,32));},
   sseCompare(kind,dst,src,predicate) {
     const specs={ss:[0xf3,32],sd:[0xf2,64],ps:[null,128],pd:[0x66,128]};
     if(!own(specs,kind)||!Number.isInteger(predicate)||predicate<0||predicate>7)throw new Error('Invalid legacy SSE comparison');

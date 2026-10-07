@@ -1,4 +1,5 @@
-import {optimizeNativeSections} from './optimizer.js';
+import {pruneNativeProcedures} from './reachability.js';
+import {optimizeNativeSections,nativeOptimizationLevel} from './optimizer.js';
 /** Deterministic PE32 linker. Browser-safe: no Node, native compiler, or binary template. */
 export const PE32_BASE = 0x400000;
 const align = (n, a) => Math.ceil(n / a) * a;
@@ -40,10 +41,13 @@ export class PE32Image {
     for (const byte of body) r.emit(byte);
     this.directories.set(2, { label: 'resource-root', size: r.length });
   }
-  finish(entry, { subsystem = 2, optimization = 0 } = {}) {
+  finish(entry, { subsystem = 2, optimization = 0, pruneUnusedProcedures = false } = {}) {
     if (this.finished) throw new Error('PE image already linked');
     if (!this.imports.size || ![2, 3].includes(subsystem)) throw new Error('Invalid PE executable');
-    const optimizationReport = optimizeNativeSections(this.sections, optimization);
+    if(typeof pruneUnusedProcedures!=='boolean')throw new Error('pruneUnusedProcedures must be Boolean');
+    if(pruneUnusedProcedures&&nativeOptimizationLevel(optimization)!==2)throw new Error('Unused-procedure pruning requires optimization 2');
+    const reachability=pruneUnusedProcedures?pruneNativeProcedures(this.sections,[entry]):{};
+    const optimizationReport = {...optimizeNativeSections(this.sections, optimization),...reachability};
     const idata = this.section('.idata', 0xc0000040), groups = new Map();
     for (const item of this.imports.values()) { if (!groups.has(item.dll)) groups.set(item.dll, []); groups.get(item.dll).push(item); }
     idata.label('imports');
