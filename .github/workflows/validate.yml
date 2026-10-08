@@ -373,6 +373,14 @@ jobs:
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
           xvfb-run -a python tools/browser-rendering-recovery.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
+      - name: Browser-disabled graphics and exact Canvas2D fallback pixels
+        if: matrix.backend == 'webgpu'
+        env:
+          DISPLAY_MODE: ${{ matrix.display }}
+        run: |
+          args=()
+          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          xvfb-run -a python tools/browser-disabled-graphics.py "${args[@]}"
       - name: Require every case and reproducible outputs
         run: |
           python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
