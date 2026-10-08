@@ -6,6 +6,7 @@
  */
 import {mem16,mem32} from './x86-operands.js';
 import {MAX_NATIVE_STRING} from './storage.js';
+import {emitNativeVariantReferences} from './variant-references.js';
 import {emitNativeVariantDivision,NATIVE_VARIANT_DIVIDE_API} from './variant-division.js';
 const P='native:variant:',DLL='oleaut32.dll',arg=argument=>({argument}),addr=address=>({address});
 const m=offset=>mem32({base:'ebp',displacement:offset}),at=(base,displacement=0)=>mem32({base,displacement});
@@ -13,6 +14,7 @@ const w=(base,displacement=0)=>mem16({base,displacement});
 export function emitNativeVariantHelpers(c){
  const used=c.nativeVariantsUsed;if(!used?.size)return;const x=c.x;
  if(used.has('divide'))emitNativeVariantDivision(x);
+ if(used.has('assign'))emitNativeVariantReferences(x);
  const checked=x.unique();x.label(P+'check').test().branch('ns',checked);
  for(const [hr,error]of [[0x8002000a,6],[0x8007000e,7],[0x8002000b,9],[0x8002000d,10],[0x80020012,11],[0x80070057,5],[0x80020004,449]])x.compare(hr).branch('e','error:'+error);
  x.jump('error:13').label(checked).ret();

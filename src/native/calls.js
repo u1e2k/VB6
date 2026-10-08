@@ -4,6 +4,7 @@ export {planNativeArguments,planNativeInStrArguments};
  * order, and never expose a literal/read-only snapshot as writable ByRef storage. */
 import {coerce, defaultValue, scalarType} from '../runtime/values.js';
 import {nativeParameterBytes} from './numeric.js';
+import {nativeVariantReference} from './variant-references.js';
 const key=value=>String(value).toLowerCase().replace(/[$%&!#@]$/, '');
 const scalarTypes=new Set(['byte','integer','long','boolean','single','double','currency','date','string','variant']);
 
@@ -45,6 +46,7 @@ export const nativeCallMethods={
     const forced=omitted||node.kind==='group',variable=this.variable(node);
     if(parameter.nativeRecord)return this.recordReferenceArgument(parameter,node,forced);
     if(key(parameter.type)==='any')return this.anyReferenceArgument(node);
+    if(!forced&&variable&&key(parameter.type)==='variant')return nativeVariantReference(this,variable);
     if(variable?.nativeRecord||variable?.recordFieldArray)this.fail('ByRef native argument must have the exact declared type');
     if(!forced&&variable) {
       if(variable.nativeArray&&!variable.elementOf||key(variable.type)!==key(parameter.type))

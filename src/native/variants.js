@@ -14,7 +14,7 @@ const predicates={isempty:0,isnull:1,iserror:10};
 export const nativeVariantMethods={
   useVariant(name='copy') {
     (this.nativeVariantsUsed ||= new Set()).add(name);
-    if(name==='condition')this.nativeVariantsUsed.add('change');
+    if(name==='condition'||name==='assign')this.nativeVariantsUsed.add('change');
   },
   temporaryVariant() {
     this.useVariant();const v=this.arrayWorkspace(16,'variant-temp');v.type='Variant';
@@ -57,7 +57,7 @@ export const nativeVariantMethods={
     const x=this.x,out=this.temporaryVariant();x.push();this.rawStorageAddress(out);x.push().call(P+'copy');
   },
   loadVariant(v) {const pin=this.address(v);this.copyVariantPointer();this.releaseArrayPin(pin);},
-  storeVariant(v) {this.useVariant();const x=this.x;x.push();const pin=this.address(v);x.push().call(P+'copy');this.releaseArrayPin(pin);},
+  storeVariant(v) {this.useVariant('assign');const x=this.x;x.push();const pin=this.address(v);x.push().call(P+'assign');this.releaseArrayPin(pin);},
   /** EAX contains a Variant pointer; conversion returns the ordinary scalar ABI. */
   unboxVariant(type,explicit=false) {
     const tag=NATIVE_VARIANT_TYPES[type];if(tag===undefined)this.fail('Unsupported native Variant conversion: '+type);
@@ -91,6 +91,8 @@ export const nativeVariantMethods={
   },
   variantBuiltin(node,name) {
     if(!name||this.resolveProcedure(node.callee))return false;
+    // Inspect RichEdit's mixed-format mask before a scalar or Variant coercion.
+    if(this.nativeRichFormatNull(node,name))return true;
     const x=this.x,args=node.args;
     const one=()=>{if(args.length!==1||['missing','named'].includes(args[0]?.kind))this.fail(name+' expects one positional argument');};
     if(name==='cvar'){one();this.boxVariant(args[0]);return true;}
