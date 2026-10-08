@@ -1,3 +1,4 @@
+import {writeNativeResources} from './pe-resources.js';
 import {pruneNativeImports} from './import-reachability.js';
 import {pruneNativeProcedures} from './reachability.js';
 import {optimizeNativeSections,nativeOptimizationLevel} from './optimizer.js';
@@ -32,7 +33,11 @@ export class PE32Image {
     if (!this.imports.has(key)) this.imports.set(key, { dll, symbol, label: 'iat:' + key });
     return this.imports.get(key).label;
   }
-  manifest(xml) {
+  manifest(xml, resources = []) {
+    if(resources.length){
+      if(resources.some(e=>e.type===24&&e.name===1))throw new Error('Application manifest resource identity is reserved');
+      const r=this.section('.rsrc',0x40000040);this.directories.set(2,writeNativeResources(r,[...resources,{type:24,name:1,language:0,codepage:65001,bytes:new TextEncoder().encode(xml)}]));return;
+    }
     const r = this.section('.rsrc', 0x40000040), body = new TextEncoder().encode(xml);
     // Three resource-directory levels: RT_MANIFEST -> ID 1 -> LANG_NEUTRAL.
     r.label('resource-root').zero(12).u16(0).u16(1).u32(24).u32(0x80000018);

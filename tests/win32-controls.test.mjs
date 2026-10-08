@@ -58,11 +58,14 @@ test('native layout retains drop-down height policy for drive lists',()=>{
 });
 for(const {project:p,checks}of nativeControlFixtures())test('self-checking native control executable matrix: '+p.name,()=>{
   assert.ok(checks.length>=4);
-  for(const optimization of [0,1,2]){const result=compileWin32(p,{optimization});assert.ok(result.bytes.length<100*1024);assert.equal(result.report.extraction,false);assert.ok(result.report.sourceMap.length);}
+  for(const optimization of [0,1,2]){const result=compileWin32(p,{optimization});// Existing families retain the original 100 KiB budget; the new dense-grid
+    // fixture exercises the complete transactional storage + GDI kernel.
+    assert.ok(result.bytes.length<(p.name==='AotControlTabPagesLayout'?144:result.report.controls.runtime.grids?128:100)*1024);assert.equal(result.report.extraction,false);assert.ok(result.report.sourceMap.length);}
 });
 test('unimplemented resources, item-object methods and native hosting still fail explicitly',()=>{
-  for(const type of ['OLE','Data','Adodc','MSFlexGrid','MSHFlexGrid','DataGrid','MSChart','ImageList','CommonDialog'])assert.throws(()=>compileWin32(project(type)),/Unsupported native control|does not implement the data runtime/);
-  assert.throws(()=>compileWin32(project('Image',{Picture:'missing.bmp'})),/picture\/icon resources/);
+  for(const type of ['OLE','Data','Adodc'])assert.throws(()=>compileWin32(project(type)),/Unsupported native control|does not implement the data runtime/);
+  for(const type of ['CommonDialog','ImageList'])assert.ok(compileWin32(project(type)).report.controls.types.includes(type));
+  assert.throws(()=>compileWin32(project('Image',{Picture:'missing.bmp'})),/Missing embedded native picture asset/);
   assert.throws(()=>compileWin32(project('TreeView',{},'Private Sub Form_Load()\nControl1.Nodes.Add\nEnd Sub')),/collection method.*not lowered/);
 });
 test('range design values are checked before producing any executable',()=>{

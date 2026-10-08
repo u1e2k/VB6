@@ -1,3 +1,4 @@
+import {emitFileRecord} from './file-records.js';
 import {parseLeafStatement} from '../language/compiler.js';
 import {parseExpression} from '../language/expression.js';
 import {parseForHeader, parseLabel, parseComputedBranch} from '../language/statement-headers.js';
@@ -67,7 +68,7 @@ export function emitStatements(writer,context) {
     if((m=/^Exit\s+(Sub|Function|Property|For|Do)$/i.exec(text))){line(/sub|function|property/i.test(m[1])?result():'Exit '+m[1]);return;}
     if(/^On\s+Error\s/i.test(text)){const target=/^On\s+Error\s+GoTo\s+(.+)$/i.exec(text);line(target&&!/^(0|-1)$/.test(target[1])?'On Error GoTo '+label(parseLabel(target[1])):text);return;}
     if(/^On\s/i.test(text)){
-      const h=parseComputedBranch(text),temp='__vbBranch'+context.temp++;line('Dim '+temp+' As Integer = VbRuntime.BranchIndex('+e(h.expr)+')');
+      const h=parseComputedBranch(text),temp='__vbBranch'+context.temp++;line('Dim '+temp+' As Integer = '+context.runtime('VbRuntime.BranchIndex')+'('+e(h.expr)+')');
       open('Select Case '+temp);
       h.labels.forEach((target,index)=>{open('Case '+(index+1));if(h.gosub)gosub(target);else line('GoTo '+label(target));writer.indent--;});
       close('End Select');return;
@@ -79,14 +80,14 @@ export function emitStatements(writer,context) {
     for(const op of parseLeafStatement(text,context.module,proc,context.line))emitLeaf(op);
   };
   const emitLeaf=op=>{
-    if(emitArrayStatement(op,context,line))return;
+    if(emitArrayStatement(op,context,line)||emitFileRecord(op,context,line))return;
     switch(op.op){
       case 'dim': return; // Hoisted to procedure entry, matching VB6 procedure scope.
-      case 'assign': line(assignment(op.target,op.expr,context,{objectSet:op.objectSet}));return;
+      case 'assign': line(assignment(op.target,op.expr,context,{objectSet:op.objectSet,asReturn:context.directReturn}));return;
       case 'expr': line(e(op.expr));return;
       case 'print':{
         if(op.exprs.length>1)context.add('MIG_PRINT_ZONES','Debug.Print multiple-value spacing is not reproduced by Console output.','warning');
-        const value=op.exprs.length?'String.Concat(New Object() {'+op.exprs.map(e).join(', ')+'})':'""';
+        const value=context.options.codeStyle==='native'&&op.exprs.length===1?e(op.exprs[0]):op.exprs.length?'String.Concat(New Object() {'+op.exprs.map(e).join(', ')+'})':'""';
         line((context.target==='console'?'Global.System.Console.'+(op.newline?'WriteLine':'Write'):'Global.System.Diagnostics.Debug.'+(op.newline?'WriteLine':'Write'))+'('+value+')');return;
       }
       case 'assert':line('Global.System.Diagnostics.Debug.Assert('+c(op.expr)+')');return;
@@ -99,8 +100,8 @@ export function emitStatements(writer,context) {
         if(target?.control){context.add('MIG_DYNAMIC_CONTROL','Dynamic control-array Load/Unload requires control lifetime and event-registration adapters.');return;}
         line(op.action==='load'?'Call '+expression(op.expr,context,{reference:true})+'.CreateControl()':expression(op.expr,context,{reference:true})+'.Close()');return;
       }
-      case 'stringAlign':line(e(op.target)+' = VbRuntime.Align('+e(op.expr)+', Len('+e(op.target)+'), '+(op.right?'True':'False')+')');return;
-      case 'stringMid':line(e(op.target)+' = VbRuntime.MidAssign('+[e(op.target),e(op.start),e(op.expr),...(op.length?[e(op.length)]:[])].join(', ')+')');return;
+      case 'stringAlign':line(e(op.target)+' = '+context.runtime('VbRuntime.Align')+'('+e(op.expr)+', Len('+e(op.target)+'), '+(op.right?'True':'False')+')');return;
+      case 'stringMid':line(e(op.target)+' = '+context.runtime('VbRuntime.MidAssign')+'('+[e(op.target),e(op.start),e(op.expr),...(op.length?[e(op.length)]:[])].join(', ')+')');return;
       case 'fileOpen':{
         const permission={'read':'Read','write':'Write','read write':'ReadWrite'}[op.access]||'Default',sharing={'shared':'Shared','lock read':'LockRead','lock write':'LockWrite','lock read write':'LockReadWrite'}[op.sharing]||'Default';
         line(fs+'FileOpen('+[e(op.handle),e(op.path),'Global.Microsoft.VisualBasic.OpenMode.'+op.mode,'Global.Microsoft.VisualBasic.OpenAccess.'+permission,'Global.Microsoft.VisualBasic.OpenShare.'+sharing,op.recordLength?e(op.recordLength):'-1'].join(', ')+')');return;
@@ -112,11 +113,6 @@ export function emitStatements(writer,context) {
       case 'fileLock':line(fs+(op.unlock?'Unlock':'Lock')+'('+[e(op.handle),...(op.start?[e(op.start)]:[]),...(op.end?[e(op.end)]:[])].join(', ')+')');return;
       case 'filePrint':line(fs+(op.csv?(op.newline?'WriteLine':'Write'):(op.newline?'PrintLine':'Print'))+'('+[e(op.handle),...op.exprs.map(e)].join(', ')+')');return;
       case 'fileInput':for(const target of op.targets)line(op.whole?e(target)+' = '+fs+'LineInput('+e(op.handle)+')':fs+'Input('+e(op.handle)+', '+e(target)+')');return;
-      case 'fileRecord':{
-        const symbol=context.resolve(op.target);
-        if(symbol?.bounds!==null&&symbol?.bounds!==undefined||symbol?.fixedLength||!['byte','integer','long','single','double','string','date'].includes(key(context.type(op.target))))context.add('MIG_BINARY_LAYOUT','Binary Get/Put of arrays, fixed strings, Currency, Variant or records requires a verified VB6 binary-layout codec.');
-        line(fs+(op.action==='get'?'FileGet':'FilePut')+'('+[e(op.handle),e(op.target),op.position?e(op.position):'-1'].join(', ')+')');return;
-      }
       case 'graphics':context.add('MIG_GRAPHICS','Immediate-mode VB6 drawing requires a retained backing-surface adapter.');line("' Unconverted graphics statement retained in original source.");return;
       default:context.add('MIG_STATEMENT','Unconverted statement instruction: '+op.op);line("' Unconverted instruction: "+op.op);return;
     }

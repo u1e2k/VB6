@@ -1,3 +1,5 @@
+import {gridEditControlFixtures} from './win32-grid-edit-fixtures.mjs';
+import {tabControlFixtures} from './win32-tab-fixtures.mjs';
 /** Self-checking, freestanding Win32 control fixtures. No DOM, VM or user input. */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -5,6 +7,9 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {newProject,createControl} from '../src/project/model.js';
 import {compileWin32} from '../src/native/compiler.js';
+import {chartControlFixture} from './win32-chart-fixtures.mjs';
+import {gridControlFixtures} from './win32-grid-fixtures.mjs';
+import {advancedNativeControlFixtures} from './win32-advanced-control-fixtures.mjs';
 const api=`Private Declare Sub ExitProcess Lib "kernel32" (ByVal code As Long)
 Private Declare Function SendValue Lib "user32" Alias "SendMessageW" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, ByVal lp As Long) As Long
 Private Declare Function SendRecord Lib "user32" Alias "SendMessageW" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, lp As Any) As Long
@@ -241,7 +246,7 @@ Private Declare Function DeleteFileW Lib "kernel32" (ByVal path As Long) As Long
  selectionChanges=selectionChanges+1
 End Sub`);
 }
-export function nativeControlFixtures(){return [rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture()];}
+export function nativeControlFixtures(){return [rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture(),...advancedNativeControlFixtures(fixture),...gridControlFixtures(),...gridEditControlFixtures(),chartControlFixture(),...tabControlFixtures()];}
 export function buildControlFixtures(directory='reports/native-controls'){
   fs.mkdirSync(directory,{recursive:true});const builds=[];
   for(const {project,checks}of nativeControlFixtures())for(const optimization of [0,1,2]){

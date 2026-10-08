@@ -26,6 +26,33 @@ export function traceControlFixture(project){
     if(line.includes('Rich.Text=Plain.Text'))values.push('NativeTrace "RTF=" & s','NativeTrace "Actual=" & Rich.Text & ", expected=" & Plain.Text','NativeTrace "Lengths=" & CStr(Len(Rich.Text)) & "," & CStr(Len(Plain.Text))');
     return [marker,...values,line];
   }).join('\n').replace('Option Explicit','Option Explicit\n'+api)+'\n'+routine+'\n';
+  // The authoritative executable has already failed. Give only the diagnostic
+  // copy a normal VB error boundary around form creation so pre-Load failures
+  // are reported to stdout instead of disappearing behind a modal error box.
+  let name='NativeControlTraceStartup',suffix=0;
+  const occupied=new Set(copy.modules.map(m=>m.name.toLowerCase()));
+  while(occupied.has(name.toLowerCase()))name='NativeControlTraceStartup'+(++suffix);
+  const startup=copy.startup;
+  if(String(startup).toLowerCase()!=='sub main'){
+    copy.modules.push({id:name,name,kind:'module',code:`Option Explicit
+${api}
+Private Declare Sub TraceExit Lib "kernel32" Alias "ExitProcess" (ByVal code As Long)
+Private Sub Main()
+ Dim code As Long, location As String, line As Long
+ On Error GoTo Failed
+ NativeTrace "Creating startup form"
+ ${startup}.Show
+ Exit Sub
+Failed:
+ code=Err.Number
+ location=Err.Source
+ line=Erl
+ NativeTrace "Startup error " & CStr(code) & " in " & location & ":" & CStr(line)
+ TraceExit code
+End Sub
+${routine}`});
+    copy.startup='Sub Main';
+  }
   return copy;
 }
 export function buildControlTrace(name,filename){
@@ -33,7 +60,6 @@ export function buildControlTrace(name,filename){
   const fixture=match&&nativeControlFixtures().find(f=>f.project.name===match[1]);
   if(!fixture)throw new TypeError('Unknown native control fixture: '+name);
   const project=traceControlFixture(fixture.project),result=compileWin32(project,{optimization:Number(match[2])});
-  fs.writeFileSync(filename,result.bytes);
-  return {name,bytes:result.bytes.length,checks:fixture.checks};
+  fs.writeFileSync(filename,result.bytes);return {name,bytes:result.bytes.length,checks:fixture.checks};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)console.log(JSON.stringify(buildControlTrace(process.argv[2],process.argv[3])));

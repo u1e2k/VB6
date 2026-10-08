@@ -59,3 +59,10 @@ packages/vbnet-runtime-windows/obj/
 
 # Authored .vb runtime sources are embedded deterministically during build.
 /src/migration/runtime-sources.js
+
+# Standalone renderer SDK: generated and checked by the exact artifact manifest.
+/dist/vb6-rendering.js
+
+# Reproducible Apple Silicon compiler bundle and native execution outputs.
+/dist/vb6-macos.js
+/artifacts/macos-native/

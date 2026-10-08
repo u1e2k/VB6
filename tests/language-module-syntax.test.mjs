@@ -45,11 +45,13 @@ test('actual VM dispatch accepts a parameterless Declare without parentheses',as
   const {output,vm}=await run(module('Declare Function Tick Lib "kernel32" Alias "GetTickCount" As Long\nSub Main\nDebug.Print VarType(Tick())\nEnd Sub'));
   assert.deepEqual(output,['3']);vm.stop();
 });
-test('native scalar Declare syntax boundary remains explicit',()=>{
+test('native scalar Declare shares parameterless language syntax',()=>{
   const source='Declare Function Tick Lib "kernel32" Alias "GetTickCount" As Long\nSub Main\nDim n As Long\nn = Tick()\nEnd Sub';
-  assert.throws(()=>compileWin32(project(module(source))),/Unsupported native Declare syntax/);
+  const parameterless=compileWin32(project(module(source)));
+  assert.ok(parameterless.report.imports.some(i=>i.symbol==='GetTickCount'));
   const result=compileWin32(project(module(source.replace('As Long\nSub Main','() As Long\nSub Main'))));
   assert.equal(result.bytes[0],0x4d);assert.equal(result.bytes[1],0x5a);
+  assert.deepEqual(result.bytes,parameterless.bytes);
 });
 for(const name of ['[Select]','StanŻółci'])test('Enum identifiers and members execute: '+name,async()=>{
   const {output}=await run(module(`Public Enum ${name}\n[Then] = 4\nŻółć\nEnd Enum\nSub Main\nDim n As ${name}\nn = Żółć\nDebug.Print n, [Then], VarType(n)\nEnd Sub`));assert.deepEqual(output,['5 4 3']);

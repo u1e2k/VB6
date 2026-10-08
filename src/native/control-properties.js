@@ -5,6 +5,11 @@ const colorFields={backcolor:32,forecolor:36,fillcolor:40,fillstyle:44,shape:48,
 const editable=new Set(['TextBox','RichTextBox']);
 export const nativeControlPropertyMethods={
   nativeControlType(node){
+    const gridType=this.nativeTabTextType(node)||this.gridType(node)||this.chartType(node);if(gridType)return gridType;
+    if(node.kind==='call'&&node.callee.kind==='id'&&String(node.callee.name).toLowerCase()==='loadresstring')return 'string';
+    const imageType=this.nativeImageListType(node);if(imageType)return imageType;
+    const dialogType=this.nativeDialogType(node);if(dialogType)return dialogType;
+    const formatType=this.nativeSelectionFormatType(node);if(formatType)return formatType;
     if(node.kind!=='member')return null;
     const object=this.object(node.object);if(!object?.model)return null;
     const property=key(node.name),type=object.model.type;
@@ -19,7 +24,9 @@ export const nativeControlPropertyMethods={
     return rect;
   },
   getNativeControlProperty(object,property){
-    if(this.getNativeRichTextProperty(object,property)||this.getNativeCollectionProperty(object,property)||this.getNativeFileProperty(object,property)||this.getNativeFontProperty(object,property))return true;
+    if(property==='tabcaption'&&this.nativeTabText(object,null))return true;
+    if(this.nativeTabVisibility(object,property))return true;
+    if(this.getNativeChartProperty(object,property)||this.getNativeGridProperty(object,property)||this.getNativeImageListProperty(object,property)||this.getNativePictureProperty(object,property)||this.getNativeDialogProperty(object,property)||this.getNativeSelectionFormat(object,property)||this.getNativeRichTextProperty(object,property)||this.getNativeCollectionProperty(object,property)||this.getNativeFileProperty(object,property)||this.getNativeFontProperty(object,property))return true;
     if(object.model?.type==='ListBox'&&property==='text'){this.ensure(object);this.nativeListText(object);return true;}
     const type=object.model?.type,x=this.x;
     if(type==='Timer')return false;
@@ -31,7 +38,7 @@ export const nativeControlPropertyMethods={
     }
     if(!type)return false;
     if(property==='name'){x.value(this.string(object.model.name));return true;}
-    if(property==='tag'){this.ensure(object);this.nativeControlState(object);x.emit(0xff,0x70,28).invoke('oleaut32.dll','SysAllocString');this.ownString();return true;}
+    if(property==='tag'){this.ensure(object);this.nativeControlState(object);x.emit(0xff,0x70,28).call('native:string:copy');this.ownString();return true;}
     if(NATIVE_RANGE_CONTROLS.has(type)&&Object.hasOwn(rangeFields,property)) {
       this.ensure(object);
       if(property!=='value'){this.nativeControlState(object);x.emit(0x8b,0x40,rangeFields[property]);}
@@ -72,7 +79,9 @@ export const nativeControlPropertyMethods={
     return false;
   },
   setNativeControlProperty(object,property,expr){
-    if(this.setNativeRichTextProperty(object,property,expr)||this.setNativeFileProperty(object,property,expr)||this.setNativeFontProperty(object,property,expr))return true;
+    if(property==='tabcaption'&&this.nativeTabText(object,null,expr,true))return true;
+    if(this.nativeTabVisibility(object,property,expr))return true;
+    if(this.setNativeChartProperty(object,property,expr)||this.setNativeGridProperty(object,property,expr)||this.setNativeImageBinding(object,property,expr)||this.setNativeImageListProperty(object,property,expr)||this.setNativePictureProperty(object,property,expr)||this.setNativeDialogProperty(object,property,expr)||this.setNativeSelectionFormat(object,property,expr)||this.setNativeRichTextProperty(object,property,expr)||this.setNativeFileProperty(object,property,expr)||this.setNativeFontProperty(object,property,expr))return true;
     const type=object.model?.type,x=this.x;
     if(type==='Timer')return false;
     if(['left','top','width','height'].includes(property)) {
@@ -85,7 +94,7 @@ export const nativeControlPropertyMethods={
     }
     if(!type)return false;
     if(property==='tag') {
-      this.textExpression(expr);x.push().invoke('oleaut32.dll','SysAllocString').test().branch('e','error:7').push();this.nativeControlState(object);x.emit(0x59,0x8b,0x58,28,0x89,0x48,28,0x53).invoke('oleaut32.dll','SysFreeString');return true;
+      this.textExpression(expr);x.push().call('native:string:copy').push();this.nativeControlState(object);x.emit(0x59,0x8b,0x58,28,0x89,0x48,28,0x53).invoke('oleaut32.dll','SysFreeString');return true;
     }
     if(NATIVE_RANGE_CONTROLS.has(type)&&Object.hasOwn(rangeFields,property)) {
       this.nativeRangeHelpers ||= new Set();this.nativeRangeHelpers.add(type);
@@ -125,7 +134,8 @@ export const nativeControlPropertyMethods={
     return false;
   },
   nativeControlMethod(object,method,args){
-    if(this.nativeRichTextMethod(object,method,args)||this.nativeCollectionMethod(object,method,args)||this.nativeFileMethod(object,method,args))return true;
+    if(this.nativeTabTextMethod(object,method,args)||this.nativeGridMethod(object,method,args))return true;
+    if(this.nativeImageListMethod(object,method,args)||this.nativeDialogMethod(object,method,args)||this.nativeRichTextMethod(object,method,args)||this.nativeCollectionMethod(object,method,args)||this.nativeFileMethod(object,method,args))return true;
     const type=object.model?.type,x=this.x;
     if(!type||type==='Timer')return false;
     if(method==='refresh'&&!args.length){this.ensure(object);x.api('user32.dll','InvalidateRect',[this.controlHandleRef(object),0,1]).api('user32.dll','UpdateWindow',[this.controlHandleRef(object)]);return true;}

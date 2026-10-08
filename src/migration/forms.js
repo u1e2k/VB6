@@ -1,3 +1,4 @@
+import {finishRuntimeImports} from './runtime-plan.js';
 import {CONTROL_DEFAULTS} from '../project/model.js';
 import {CONTROL_MAPPINGS} from './registry.js';
 import {createContext} from './context.js';
@@ -11,11 +12,15 @@ const common=new Set('Name Left Top Width Height Visible Enabled TabIndex TabSto
 const specific=new Set('Caption Text Default Cancel MultiLine ScrollBars MaxLength PasswordChar Locked Alignment Value List ListIndex MultiSelect Sorted Style Interval AutoSize BorderStyle Stretch Min Max SmallChange LargeChange Checked Shortcut WindowList'.split(' '));
 
 export function emitForm(state,module,path) {
+  state={...state,generatedFile:path};
   const writer=new CodeWriter(path),context=createContext(state,module),form=module.form,properties=form.properties||{},nodes=[],byName=new Map();
-  writer.line('Option Strict On');writer.line('Imports System');writer.line('Imports System.Drawing');writer.line('Imports System.Windows.Forms');writer.line('Imports VB6.Compatibility.Windows');writer.line();
+  writer.line('Option Strict On');writer.line('Imports System');writer.line('Imports System.Drawing');writer.line('Imports System.Windows.Forms');writer.runtimeImportStart=writer.lines.length;writer.line();writer.line();writer.line();
+  const native=state.options.codeStyle==='native';
+  const tooltips=!native||(form.controls||[]).some(control=>control.properties?.ToolTipText)||state.plugins.some(plugin=>plugin.control);
+  const components=tooltips||!native||(form.controls||[]).some(control=>['Timer','ImageList'].includes(control.type));
   writer.open('Partial Public Class '+identifier(module.name));
-  writer.line('Private __vbComponents As Global.System.ComponentModel.IContainer');
-  writer.line('Private __vbTips As ToolTip');
+  if(components)writer.line('Private __vbComponents As Global.System.ComponentModel.IContainer');
+  if(tooltips)writer.line('Private __vbTips As ToolTip');
   if(form.menus?.length)writer.line('Private __vbMenu As MenuStrip');
   for(const [index,node] of [...(form.controls||[]),...(form.menus||[]).map(n=>({...n,type:'Menu'}))].entries()){
     const extension=context.hook('control',{node,module}),type=extension?.type||CONTROL_MAPPINGS[node.type];
@@ -27,10 +32,10 @@ export function emitForm(state,module,path) {
     writer.line('Friend WithEvents '+identifier(field)+' As '+type);
   }
   for(const [name,list] of byName)if(list[0].array)writer.line('Friend ReadOnly '+identifier(list[0].name)+' As New Global.System.Collections.Generic.Dictionary(Of Short, '+list[0].type+')()');
-  writer.line();writer.open('Protected Overrides Sub Dispose(disposing As Boolean)');
-  writer.open('Try');writer.line('If disposing AndAlso __vbComponents IsNot Nothing Then __vbComponents.Dispose()');writer.close('Finally');writer.indent++;writer.line('MyBase.Dispose(disposing)');writer.close('End Try');writer.close('End Sub');writer.line();
+  if(components){writer.line();writer.open('Protected Overrides Sub Dispose(disposing As Boolean)');
+  writer.open('Try');writer.line('If disposing AndAlso __vbComponents IsNot Nothing Then __vbComponents.Dispose()');writer.close('Finally');writer.indent++;writer.line('MyBase.Dispose(disposing)');writer.close('End Try');writer.close('End Sub');writer.line();}
   writer.line('<Global.System.Diagnostics.DebuggerStepThrough>');writer.open('Private Sub InitializeComponent()');
-  writer.line('__vbComponents = New Global.System.ComponentModel.Container()');writer.line('__vbTips = New ToolTip(__vbComponents)');writer.line('Me.SuspendLayout()');
+  if(components)writer.line('__vbComponents = New Global.System.ComponentModel.Container()');if(tooltips)writer.line('__vbTips = New ToolTip(__vbComponents)');writer.line('Me.SuspendLayout()');
   for(const node of nodes){
     const target='Me.'+identifier(node.field);writer.line(target+' = New '+node.type+'('+(['Timer','ImageList'].includes(node.type)?'__vbComponents':'')+')');
     if(node.array)writer.line('Me.'+identifier(node.name)+'.Add('+integer(node.properties.Index)+'S, '+target+')');
@@ -42,7 +47,7 @@ export function emitForm(state,module,path) {
   writer.line('Me.FormBorderStyle = FormBorderStyle.'+({0:'None',1:'FixedSingle',2:'Sizable',3:'FixedDialog',4:'FixedToolWindow',5:'SizableToolWindow'}[properties.BorderStyle]||'Sizable'));
   for(const name of ['KeyPreview','ControlBox','MaxButton','MinButton','ShowInTaskbar'])if(properties[name]!==undefined)writer.line('Me.'+({MaxButton:'MaximizeBox',MinButton:'MinimizeBox'}[name]||name)+' = '+boolean(properties[name]));
   if(form.type==='MDIForm')writer.line('Me.IsMdiContainer = True');
-  if(properties.MDIChild){const parent=[...state.compiled.modules.values()].find(m=>m.form?.type==='MDIForm');if(parent)writer.line('Me.MdiParent = VbForms.GetInstance(Of '+identifier(parent.name)+')()');}
+  if(properties.MDIChild){const parent=[...state.compiled.modules.values()].find(m=>m.form?.type==='MDIForm');if(parent)writer.line('Me.MdiParent = '+context.runtime('VbForms.GetInstance')+'(Of '+identifier(parent.name)+')()');}
   if(properties.ScaleMode!==undefined&&Number(properties.ScaleMode)!==1)context.add('MIG_SCALE_MODE','Form coordinate scaling other than twips requires a drawing/coordinate adapter.');
   font('Me',properties);colors('Me',properties);
   for(const node of nodes){
@@ -125,19 +130,19 @@ export function emitForm(state,module,path) {
     for(const control of sources){
       const adapter=eventAdapter(proc,event,control,context,adapters.length);
       if(!adapter)continue;
-      adapters.push(adapter);
-      writer.line('AddHandler '+(control.field==='Me'?'Me':'Me.'+identifier(control.field))+'.'+adapter.event+', AddressOf '+adapter.name);
+      if(adapter.lines.length)adapters.push(adapter);
+      writer.line('AddHandler '+(control.field==='Me'?'Me':'Me.'+identifier(control.field))+'.'+adapter.event+', '+(adapter.handler||'AddressOf '+adapter.name));
     }
   }
   writer.line('Me.ResumeLayout(False)');writer.line('Me.PerformLayout()');writer.close('End Sub');writer.line();
   for(const adapter of adapters){for(const text of adapter.lines)writer.line(text);writer.line();}
   writer.close('End Class');
-  return {code:writer.toString(),mappings:writer.mappings};
+  return finishRuntimeImports(writer,context);
   function font(target,p){
     const styles=[p.FontBold?'FontStyle.Bold':null,p.FontItalic?'FontStyle.Italic':null,p.FontUnderline?'FontStyle.Underline':null,p.FontStrikethrough?'FontStyle.Strikeout':null].filter(Boolean);
     writer.line(target+'.Font = New Font('+vbString(p.FontName||'Microsoft Sans Serif')+', '+(Number(p.FontSize)||8.25)+'F, '+(styles.join(' Or ')||'FontStyle.Regular')+', GraphicsUnit.Point)');
   }
-  function colors(target,p){for(const name of ['ForeColor','BackColor'])if(p[name]!==undefined)writer.line(target+'.'+name+' = VbForms.OleColor('+integer(p[name])+')');}
+  function colors(target,p){for(const name of ['ForeColor','BackColor'])if(p[name]!==undefined)writer.line(target+'.'+name+' = '+(context.options.codeStyle==='native'?'Global.System.Drawing.ColorTranslator.FromOle':context.runtime('VbForms.OleColor'))+'('+integer(p[name])+')');}
 }
 function eventAdapter(proc,event,control,context,index) {
   const k=key(event),name='__vbEvent'+index,lines=[],array=control.array?[integer(control.properties.Index)+'S']:[],target=control.field==='Me'?'Me':'Me.'+identifier(control.field);
@@ -158,6 +163,11 @@ function eventAdapter(proc,event,control,context,index) {
     if(unload){if(unload.params.length!==1)context.add('MIG_EVENT_SIGNATURE','Unload expects one Cancel parameter.');else after.unshift('If cancel = 0 Then '+identifier(unload.name)+'(cancel)');}
   }
   if(proc.params.length!==args.length){context.add('MIG_EVENT_SIGNATURE','Event signature does not match adapter: '+proc.name);return null;}
+  if(['keydown','keyup'].includes(k))context.runtime('VbForms.ShiftState');
+  if(['mousedown','mouseup','mousemove'].includes(k)){context.runtime('VbForms.ShiftState');context.runtime('VbForms.MouseButton');context.runtime('VbForms.PixelsToTwips');}
+  // Dropping EventHandler parameters with AddressOf is narrowing under Option
+  // Strict On. A typed inline Sub keeps the original handler and strict designer.
+  if(context.options.codeStyle==='native'&&!args.length&&!before.length&&!after.length)return {handler:'Sub(sender As Object, e As '+type+') '+identifier(proc.name)+'()',event:netEvent,lines:[]};
   lines.push('Private Sub '+name+'(sender As Object, e As '+type+')',...before.map(l=>'    '+l),'    '+identifier(proc.name)+'('+args.join(', ')+')',...after.map(l=>'    '+l),'End Sub');
   return {name,event:netEvent,lines};
 }

@@ -9,6 +9,10 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Architecture and SDK embedding](ARCHITECTURE.md): module boundaries, execution,
   persistence and extension points.
 - [Application export](APPLICATION-EXPORT.md): deployment APIs, modular output, CSP and validation.
+- [Native macOS export](MACOS-EXPORT.md): Apple Silicon compiler, AppKit runtime,
+  approved local builds, source kits, reusable APIs and compatibility boundaries.
+- [Native macOS lifetime and editing](MACOS-LIFETIME-EDITING.md): reference release,
+  finalizer safe points, live AppKit text, selection and list ownership contracts.
 - [Build artifacts](IDE-BUILD-ARTIFACTS.md): source-only builds, exact fingerprints
   and safe regeneration when integrating changes.
 - [Testing](TESTING.md): setup, reproducible checks and validation boundaries.
@@ -22,6 +26,9 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Language frontend](LANGUAGE-FRONTEND.md): scanning, declarations and diagnostics.
 - [VB.NET / .NET 10 migration](VBNET-MIGRATION.md): source conversion, ZIP export,
   reusable packages, compatibility runtime, extensions and conformance gates.
+- [VB.NET language and record lowering](VBNET-LANGUAGE-LOWERING.md): independent
+  property accessors, exact optional defaults, binary layouts and dispatch boundaries.
+- [Native-first VB.NET output and support policies](VBNET-NATIVE-FIRST.md).
 - [Compiler/runtime](COMPILER-RUNTIME.md) and [scalar/Variant semantics](SCALAR-COMPATIBILITY.md).
 - [Source debugger](DEBUGGER.md), [extended debugger contracts](DEBUGGER-COMPATIBILITY.md),
   [native break lifecycle](NATIVE-DEBUGGER-BREAK-LIFECYCLE.md) and
@@ -39,6 +46,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Auto Layout designer](auto-layout-designer.md): opt-in panel, canvas interaction,
   shared solver and export boundaries.
 - [Detached browser windows](BROWSER-WINDOWS.md).
+- [UI rendering backends](RENDERING.md): settings, native islands, lifecycle,
+  performance measurement and strict acceptance; [rendering source attribution](RENDERING-SOURCES.md).
 - [IDE themes](IDE-THEMES.md), [application themes](APPLICATION-THEMES.md) and
   [matching icon packs](THEME-ICON-PACKS.md).
 - [Classic icons](ICON-AUDIT.md), [classic HTML rendering and attribution](CLASSIC-HTML-RENDERING.md)
@@ -50,6 +59,8 @@ These guides describe the implemented system, not complete native VB6 parity.
   [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
 - [Win32 controls](WIN32-CONTROLS.md): native AOT control coverage, property and stream ownership, layout integration, output dependencies and Windows execution checks.
+- [Native RichEdit selection and search](WIN32-RICHEDIT.md): mixed-format masks, Unicode search, line lookup and undo/redo.
+- [Native grids, charts and tab pages](WIN32-GRIDS-CHARTS-TABS.md): storage, editing, GDI, ownership and execution gates.
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),
   [calendar intervals](WIN32-CALENDAR-INTERVALS.md), [arrays](WIN32-ARRAYS.md),
@@ -80,7 +91,8 @@ Package READMEs own their API, installation and compatibility details:
 [portable COM/OLE](../packages/com-ole/README.md),
 [Automation values and adapters](../packages/automation/README.md),
 [native COM/OLE companion](../packages/native-automation/README.md),
-[native debugger](../packages/native-debugger/README.md) and
+[native debugger](../packages/native-debugger/README.md),
+[Apple Silicon compiler and AppKit runtime](../packages/macos-native/README.md) and
 [optional compute compiler/runtime](../packages/vb6-compute/README.md).
 
 ## Maintaining these docs

@@ -4,6 +4,8 @@ export interface MigrationCliSettings {
   out?: string; target?: string; platform?: string; root?: string; entry?: string;
   namespace?: string; review?: boolean; strict?: boolean; 'no-originals'?: boolean;
   inspect?: boolean; help?: boolean;
+  'code-style'?: string; runtime?: string; 'semantic-policy'?: string;
+  'accept-rule'?: string; 'runtime-package'?: string; 'windows-runtime-package'?: string;
 }
 export function parseMigrationArguments(args: string[]): {input?: string; settings: MigrationCliSettings};
 export function loadMigrationInput(file: string, settings?: Pick<MigrationCliSettings, 'root' | 'entry'>): Promise<{project: VB6Project; diagnostics: Diagnostic[]}>;
