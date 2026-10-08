@@ -853,6 +853,11 @@ with sync_playwright() as playwright:
           window.r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
           for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
         }''',backend)
+        # Cache identity is measured only after initial font/layout delivery.
+        # Five RAFs alone need not drain deferred observer registration, notably
+        # in the headless shell. The barrier never changes styles or references.
+        startup = (ROOT / 'tests/fixtures/rendering-startup.mjs').read_text().replace('export default ', '', 1)
+        initialization = page.evaluate('(' + startup + ')(window.r)')
         result=page.evaluate('''async()=>{
           const label=document.querySelector('#label'),peer=document.querySelector('#peer'),rtl=document.querySelector('#rtl');
           const settle=async()=>{for(let i=0;i<5;i++)await new Promise(requestAnimationFrame)};
@@ -872,7 +877,7 @@ with sync_playwright() as playwright:
         check(result['styleReuses']==8 and all(result['retained']), 'Unchanged selector styles were reread: '+str(result))
         check(result['identical'],'Retained style scene differs from a complete resample')
         check(result['emptyColor']=='rgb(40, 50, 60)' and result['direction']=='rtl', 'Selector-sensitive text was not invalidated: '+str(result))
-        check(not page.errors,str(page.errors));page.close();return result
+        check(not page.errors,str(page.errors));page.close();return {**result, 'initialization':initialization}
     case('text changes reuse computed styles while preserving replacement nodes, empty selectors and direction',text_style_reuse)
 
     def stationary_hover_retention():
