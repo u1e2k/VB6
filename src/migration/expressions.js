@@ -1,3 +1,4 @@
+import {bindOptionalArguments, optionalDefault} from './optional-parameters.js';
 import {accessorReference, propertyPlan, defaultPropertyCall} from './property-plan.js';
 import {nativeIntrinsic, valueNeedsCopy} from './native-intrinsics.js';
 import {validateCallSemantics} from './call-semantics.js';
@@ -131,16 +132,17 @@ export function expression(node, context, usage={}) {
           if(member==='show'&&receiver.form)return context.runtime('VbForms.Show')+'('+[obj,...node.args.map(n=>e(n))].join(', ')+')';
         }
       }
-      const args=node.args.map((arg,index)=>{
-        const parameter=symbol?.params?.[index];
+      const emitArgument=(arg,parameter)=>{
         if(symbol?.external&&key(parameter?.type||'')==='string'&&arg.kind==='id'&&key(arg.name)==='vbnullstring')return 'Nothing';
         if(parameter?.byRef&&context.resolve(arg)?.autoNew&&context.resolve(arg)?.local)context.add('MIG_AS_NEW_BYREF','ByRef assignment to a lazy As New local requires a value-cell adapter.');
-        if(parameter&&arg.kind!=='missing'&&arg.kind!=='named'&&key(parameter.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+e(arg)+')':context.runtime('VbCurrency.FromObject')+'('+e(arg)+')';
+        if(parameter&&arg.kind!=='missing'&&key(parameter.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+e(arg)+')':context.runtime('VbCurrency.FromObject')+'('+e(arg)+')';
         return e(arg,{argument:true});
+      };
+      const args=bindOptionalArguments(node,symbol,context,emitArgument)||node.args.map((arg,index)=>{
+        const p=arg.kind==='named'?symbol?.params?.find(param=>key(param.name)===key(arg.name)):symbol?.params?.[index];
+        if(arg.kind==='missing'&&p?.optional)return optionalDefault(symbol,p,context);
+        return arg.kind==='named'?identifier(arg.name)+':='+emitArgument(arg.expr,p):emitArgument(arg,p);
       });
-      if(symbol?.params)for(let i=0;i<args.length;i++)if(node.args[i]?.kind==='missing'){
-        const p=symbol.params[i];if(p?.optional)args[i]=p.initial?e(p.initial):key(p.type)==='variant'?context.runtime('VbMissing.Value'):defaultValue(p,context);
-      }
       const call=e(node.callee,{callee:true})+'('+args.join(', ')+')';
       if(symbol?.controlArray&&!usage.receiver&&!usage.reference&&!usage.callee&&!usage.assignment){const member=controlDefault(symbol.type,context);if(member)return call+'.'+(SIMPLE_MEMBERS[key(member)]||identifier(member));}
       return call;
@@ -185,7 +187,7 @@ export function boundsArguments(bounds,context) {
 export function assignment(target,value,context,{objectSet=false,asReturn=false}={}) {
   target=defaultPropertyCall(target,context)||target;
   const callee=target.kind==='call'?target.callee:target,property=context.resolve(callee);
-  const plan=property?.kind==='property'?propertyPlan(property.owner||context.module,property.name):null;
+  const plan=property?.kind==='property'?propertyPlan(property.owner||context.module,property.name,context):null;
   // An assignment to the current getter's result variable is not a property set.
   const resultVariable=callee.kind==='id'&&context.aliases.has(key(callee.name));
   const accessor=plan?.methods&&!resultVariable&&!asReturn?accessorReference(property,context,objectSet?'set':'let'):null;

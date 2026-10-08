@@ -3,7 +3,7 @@ import {key, identifier} from './names.js';
 /** A CLR property cannot express independent Let/Set dispatch or mutable index
  * arguments. Keep ordinary properties native; lower only those contracts to
  * accessor methods and use the same plan for declarations and bound call sites. */
-export function propertyPlan(module, name) {
+export function propertyPlan(module, name, context) {
   if (!module) return null;
   const group = [...module.procedures.values()].filter(p => p.kind === 'property' && key(p.name) === key(name));
   if (!group.length) return null;
@@ -11,7 +11,8 @@ export function propertyPlan(module, name) {
   const letAccessor = group.find(p => p.accessor === 'let');
   const set = group.find(p => p.accessor === 'set');
   const indexes = p => p.accessor === 'get' ? p.params : p.params.slice(0, -1);
-  const methods = !!(letAccessor && set) || group.some(p => indexes(p).some(param => param.byRef));
+  const methods = !!(letAccessor && set) || group.some(p => indexes(p).some(param => param.byRef)) ||
+    !context?.decimalCurrency && group.some(p => p.params.some(param => param.optional && key(param.type) === 'currency'));
   return {group, get, let:letAccessor, set, methods};
 }
 
@@ -20,7 +21,7 @@ export function accessorName(name, accessor) {
 }
 
 export function accessorReference(symbol, context, accessor = 'get') {
-  const plan = symbol?.kind === 'property' ? propertyPlan(symbol.owner || context.module, symbol.name) : null;
+  const plan = symbol?.kind === 'property' ? propertyPlan(symbol.owner || context.module, symbol.name, context) : null;
   if (!plan?.methods) return null;
   if (!plan[accessor]) context.add('MIG_PROPERTY_ACCESSOR', 'Property ' + symbol.name + ' has no Property ' + accessor + ' accessor.');
   return identifier(accessorName(symbol.name, accessor));
@@ -33,6 +34,6 @@ export function defaultPropertyCall(node, context) {
   const receiver = context.resolve(node.callee);
   if (!receiver || receiver.procedure || receiver.module || receiver.control || receiver.paramArray || receiver.bounds != null) return null;
   const owner = context.compiled.modules.get(key(receiver.type));
-  if (!owner?.defaultMember || !propertyPlan(owner, owner.defaultMember)) return null;
+  if (!owner?.defaultMember || !propertyPlan(owner, owner.defaultMember, context)) return null;
   return {...node, callee:{kind:'member', object:node.callee, name:owner.defaultMember}};
 }

@@ -1,6 +1,7 @@
 import {project} from './migration-fixtures.mjs';
 
 export const FILE_RECORD_FIXTURE=project(`Option Explicit
+Private Const Width As Long = 4
 Public Type Coordinates
 X As Long
 Y As Integer
@@ -8,12 +9,12 @@ End Type
 Public Type Record
 Flag As Boolean
 Point As Coordinates
-Name As String * 4
+Name As String * Width
 End Type
 Public Sub Main()
 Dim file As Integer
 Dim enabled As Boolean
-Dim text As String * 4
+Dim text As String * Width
 Dim money As Currency
 Dim row As Record, loaded As Record
 file=FreeFile

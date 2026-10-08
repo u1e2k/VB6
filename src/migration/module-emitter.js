@@ -1,3 +1,4 @@
+import {optionalOverloads, declarationParameters, emitOptionalOverloads} from './optional-parameters.js';
 import {emitFileAdapters} from './file-records.js';
 import {propertyPlan, accessorName} from './property-plan.js';
 import {canReturnDirectly} from './output-plan.js';
@@ -78,14 +79,15 @@ function procedureBody(writer,context) {
 function emitProperty(writer,group,state,module,{contract=false}={}) {
   const get=group.find(p=>p.accessor==='get'),set=group.find(p=>p.accessor==='let')||group.find(p=>p.accessor==='set'),proc=get||set,context=createContext(state,module,proc);
   const value=set?.params.at(-1),params=get?get.params:set.params.slice(0,-1),returnType=get?.returnType||value?.type||'Variant';
-  if(propertyPlan(module,proc.name)?.methods){
+  if(propertyPlan(module,proc.name,context)?.methods){
     for(const accessor of group){
       const scope=contract?'':accessor.scope==='private'?'Private ':accessor.scope==='friend'?'Friend ':'Public ';
       const name=accessorName(accessor.name,accessor.accessor),reader=accessor.accessor==='get';
       const body=createContext(state,module,accessor);
-      const header=scope+(reader?'Function ':'Sub ')+identifier(name)+'('+accessor.params.map(p=>parameter(p,body)).join(', ')+')'+(reader?' As '+body.netType(accessor.returnType):'')+(contract?'':implementation(accessor,body,name));
+      const header=scope+(optionalOverloads(accessor,body)?'Overloads ':'')+(reader?'Function ':'Sub ')+identifier(name)+'('+declarationParameters(accessor,body).map(p=>parameter(p,body)).join(', ')+')'+(reader?' As '+body.netType(accessor.returnType):'')+(contract?'':implementation(accessor,body,name));
       if(contract)writer.line(header,body);
       else{writer.open(header,body);procedureBody(writer,body);writer.close(reader?'End Function':'End Sub');writer.line();}
+      emitOptionalOverloads(writer,accessor,body,{name,contract,scope,implementation:contract?'':implementation(accessor,body,name),parameter});
     }
     return;
   }
@@ -138,7 +140,10 @@ export function emitModule(state,module,path) {
   if(state.interfaces.has(key(module.name))){
     writer.open('Public Interface '+identifier('I'+module.name));
     for(const decl of module.declarations.filter(d=>d.scope==='public'&&!d.constant))writer.line('Property '+identifier(decl.name)+' As '+declarationType(decl,context));
-    for(const proc of publicMembers(module).filter(p=>p.kind!=='property'))writer.line((proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+proc.params.map(p=>parameter(p,context)).join(', ')+')'+(proc.kind==='function'?' As '+context.netType(proc.returnType):''));
+    for(const proc of publicMembers(module).filter(p=>p.kind!=='property')){
+      writer.line((optionalOverloads(proc,context)?'Overloads ':'')+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,context).map(p=>parameter(p,context)).join(', ')+')'+(proc.kind==='function'?' As '+context.netType(proc.returnType):''));
+      emitOptionalOverloads(writer,proc,context,{contract:true,parameter});
+    }
     for(const group of propertyGroups(module).values())if(group[0].scope==='public')emitProperty(writer,group,state,module,{contract:true});
     for(const event of module.events?.values()||[])if(event.scope==='public')writer.line('Event '+identifier(event.name)+'('+event.params.map(p=>parameter(p,context)).join(', ')+')');
     writer.close('End Interface');writer.line();
@@ -150,7 +155,7 @@ export function emitModule(state,module,path) {
   if(contracts.length)writer.line('Implements '+contracts.join(', '));
   emitEnums(writer,context);emitRecords(writer,context);
   for(const decl of module.declarations)field(writer,decl,context);
-  for(const event of module.events?.values()||[])writer.line((event.scope==='private'?'Private ':'Public ')+'Event '+identifier(event.name)+'('+event.params.map(p=>parameter(p,context)).join(', ')+')'+(state.interfaces.has(key(module.name))&&event.scope==='public'?' Implements '+identifier('I'+module.name)+'.'+identifier(event.name):''));
+  for(const event of module.events?.values()||[])writer.line((event.scope==='private'?'Private ':'Public ')+'Event '+identifier(event.name)+'('+event.params.map(p=>parameter(p,context)).join(', ')+')'+(state.interfaces.has(key(module.name))&&event.scope==='public'?' Implements '+identifier('I'+context.module.name)+'.'+identifier(event.name):''));
   writer.line();
   const initialize=module.procedures.get('class_initialize');
   if(module.form&&!initialize){writer.open('Public Sub New()');writer.line('InitializeComponent()');const init=[...module.procedures.values()].find(p=>/^(Form|MDIForm)_Initialize$/i.test(p.name));if(init){if(init.params.length)context.add('MIG_EVENT_SIGNATURE','Form Initialize must not have parameters.');else writer.line(identifier(init.name)+'()');}writer.close('End Sub');writer.line();}
@@ -162,11 +167,12 @@ export function emitModule(state,module,path) {
     if(constructor)header='Public Sub New()';
     else if(dispose){c.add('MIG_DETERMINISTIC_LIFETIME','Class_Terminate is emitted as IDisposable.Dispose; COM reference-counted destruction requires an explicit ownership migration.');header='Public Sub Dispose() Implements Global.System.IDisposable.Dispose';}
     else{
-      header=(proc.scope==='public'?'Public ':proc.scope==='friend'?'Friend ':'Private ')+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+proc.params.map(p=>parameter(p,c)).join(', ')+')'+(proc.kind==='function'?' As '+c.netType(proc.returnType):'')+implementation(proc,c);
+      header=(proc.scope==='public'?'Public ':proc.scope==='friend'?'Friend ':'Private ')+(optionalOverloads(proc,c)?'Overloads ':'')+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,c).map(p=>parameter(p,c)).join(', ')+')'+(proc.kind==='function'?' As '+c.netType(proc.returnType):'')+implementation(proc,c);
       const source=module.declarations.find(d=>d.withEvents&&key(proc.name).startsWith(key(d.name)+'_'));
       if(source){const event=proc.name.slice(source.name.length+1);header+=' Handles '+identifier(source.name)+'.'+identifier(event);}
     }
     writer.open(header,c);if(constructor&&module.form)writer.line('InitializeComponent()');procedureBody(writer,c);writer.close(proc.kind==='function'?'End Function':'End Sub');writer.line();
+    emitOptionalOverloads(writer,proc,c,{scope:proc.scope==='public'?'Public ':proc.scope==='friend'?'Friend ':'Private ',implementation:implementation(proc,c),parameter});
   }
   for(const group of propertyGroups(module).values())emitProperty(writer,group,state,module);
   if(!state.directEntry&&state.entry?.kind==='main'&&key(state.entry.module)===key(module.name)){writer.open('Friend Sub __vbStart()');writer.line('[Main]()');writer.close('End Sub');}

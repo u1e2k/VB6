@@ -20,7 +20,7 @@ export function parameter(decl,context,{name=decl.name}={}) {
 }
 export function variable(decl,context,{local=false,staticLocal=false,field=false}={}) {
   const name=context.name(decl.name),type=declarationType(decl,context);
-  if(decl.fixedLengthExpression)context.add('MIG_FIXED_LENGTH','Fixed-length string expression was not bound to a constant.');
+  if(decl.fixedLengthExpression&&!decl.fixedLength)context.add('MIG_FIXED_LENGTH','Fixed-length string expression was not bound to a constant.');
   if(decl.withEvents&&key(decl.type)==='object')context.add('MIG_WITH_EVENTS_OBJECT','WithEvents requires a statically known .NET event source; Object event binding needs an adapter.');
   let prefix=local?(staticLocal?'Static ':'Dim '):(decl.scope==='public'?'Public ':decl.scope==='friend'?'Friend ':'Private ');
   if(decl.constant){

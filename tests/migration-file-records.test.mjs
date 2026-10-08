@@ -42,3 +42,9 @@ test('FileGet arguments preserve handle, position and storage evaluation order',
  const result=convert(input);assert.ok(result.success,JSON.stringify(result.diagnostics));
  assert.match(result.files['Application/Module1.vb'],/FileGet\(FileNumber:=Handle\(\), RecordNumber:=Position\(\), Value:=x\)/);
 });
+
+test('resolved fixed-string length expressions use the verified bound layout',()=>{
+ const input=project('Private Const Width As Long=4\nPublic Type Row\nName As String * Width\nEnd Type\nPublic Sub Main()\nDim row As Row\nPut #1, , row\nEnd Sub');
+ const result=convert(input);assert.ok(result.success,JSON.stringify(result.diagnostics));
+ assert.match(result.files['Application/Module1.vb'],/VBFixedString\(4\)/);
+});

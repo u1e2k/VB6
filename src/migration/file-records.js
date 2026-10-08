@@ -36,7 +36,7 @@ export function emitFileRecord(op, context, line) {
   const position = op.position ? e(op.position) : '-1';
   const target = expression(op.target, context, {assignment:op.action === 'get', reference:true});
   const array = symbol?.bounds != null;
-  if (array || symbol?.fixedLengthExpression || (!scalars.has(type) && type !== 'currency' &&
+  if (array || (symbol?.fixedLengthExpression && !symbol.fixedLength) || (!scalars.has(type) && type !== 'currency' &&
       !frameworkRecordLayout(context.compiled, context.module, context.type(op.target)))) {
     context.add('MIG_BINARY_LAYOUT', 'Binary Get/Put of this array, Variant, object or record layout requires a verified VB6 binary-layout codec.');
     line("' Unconverted binary layout retained in original source.");
