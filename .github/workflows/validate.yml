@@ -353,6 +353,15 @@ jobs:
           args=()
           if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
           xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
+      - name: GPU selection, explicit retry and live Options diagnostics
+        env:
+          DISPLAY_MODE: ${{ matrix.display }}
+          REQUIRED_BACKEND: ${{ matrix.backend }}
+          RENDERING_BROWSER_FLAGS: --enable-gpu --ignore-gpu-blocklist --enable-features=Vulkan --use-webgpu-adapter=swiftshader --disable-vulkan-surface --disable-gpu-rasterization
+        run: |
+          args=()
+          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          xvfb-run -a python tools/browser-rendering-recovery.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
       - name: Require every case and reproducible outputs
         run: |
           python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
