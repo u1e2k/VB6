@@ -22,7 +22,8 @@ def select_browser(playwright, display: str) -> dict:
     else:
         # No channel or executable override: Playwright selects its own shell.
         # A missing shell or failed probe is fatal; do not try another browser.
-        browser = playwright.chromium.launch(headless=True, timeout=15000)
+        # CDP exposes its command line only with this explicit opt-in.
+        browser = playwright.chromium.launch(headless=True, timeout=15000, args=['--enable-automation'])
         try:
             version = browser.version
             command = browser.new_browser_cdp_session().send('Browser.getBrowserCommandLine')['arguments']

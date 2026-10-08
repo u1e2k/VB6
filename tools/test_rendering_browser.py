@@ -36,7 +36,7 @@ class BrowserSelectionTests(unittest.TestCase):
         result = select_browser(self.playwright(), 'headless')
         self.assertEqual(result['executable'], str(self.shell))
         self.assertEqual(result['binaryKind'], 'chromium-headless-shell')
-        self.assertEqual(self.calls, [{'headless': True, 'timeout': 15000}])
+        self.assertEqual(self.calls, [{'headless': True, 'timeout': 15000, 'args': ['--enable-automation']}])
         self.assertEqual(self.closed, 1)
         self.assertFalse(result['gpuQualification'])
 
