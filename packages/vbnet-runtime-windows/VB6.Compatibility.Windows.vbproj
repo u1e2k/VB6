@@ -8,7 +8,7 @@
     <OptionExplicit>On</OptionExplicit>
     <OptionInfer>On</OptionInfer>
     <PackageId>VB6.Studio.Compatibility.Windows</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>Windows Forms compatibility helpers for VB6 Studio migrations.</Description>
     <Deterministic>true</Deterministic>
