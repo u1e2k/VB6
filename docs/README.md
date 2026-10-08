@@ -9,6 +9,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Architecture and SDK embedding](ARCHITECTURE.md): module boundaries, execution,
   persistence and extension points.
 - [Application export](APPLICATION-EXPORT.md): deployment APIs, modular output, CSP and validation.
+- [Native macOS export](MACOS-EXPORT.md): Apple Silicon compiler, AppKit runtime,
+  approved local builds, source kits, reusable APIs and compatibility boundaries.
 - [Build artifacts](IDE-BUILD-ARTIFACTS.md): source-only builds, exact fingerprints
   and safe regeneration when integrating changes.
 - [Testing](TESTING.md): setup, reproducible checks and validation boundaries.
@@ -21,8 +23,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 - [Language frontend](LANGUAGE-FRONTEND.md): scanning, declarations and diagnostics.
 - [VB.NET / .NET 10 migration](VBNET-MIGRATION.md): source conversion, ZIP export,
-- [Native-first VB.NET output and support policies](VBNET-NATIVE-FIRST.md)
   reusable packages, compatibility runtime, extensions and conformance gates.
+- [Native-first VB.NET output and support policies](VBNET-NATIVE-FIRST.md).
 - [Compiler/runtime](COMPILER-RUNTIME.md) and [scalar/Variant semantics](SCALAR-COMPATIBILITY.md).
 - [Source debugger](DEBUGGER.md), [extended debugger contracts](DEBUGGER-COMPATIBILITY.md),
   [native break lifecycle](NATIVE-DEBUGGER-BREAK-LIFECYCLE.md) and
@@ -81,7 +83,8 @@ Package READMEs own their API, installation and compatibility details:
 [portable COM/OLE](../packages/com-ole/README.md),
 [Automation values and adapters](../packages/automation/README.md),
 [native COM/OLE companion](../packages/native-automation/README.md),
-[native debugger](../packages/native-debugger/README.md) and
+[native debugger](../packages/native-debugger/README.md),
+[Apple Silicon compiler and AppKit runtime](../packages/macos-native/README.md) and
 [optional compute compiler/runtime](../packages/vb6-compute/README.md).
 
 ## Maintaining these docs
