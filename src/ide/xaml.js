@@ -2,7 +2,6 @@ import {xamlBuildDiagnostics} from '../xaml/contract.js';
 import {el,clone,download} from '../core/core.js';
 import {promptDialog,alertDialog,modal} from './ui.js';
 import {XamlEditor} from '../editor/xaml-editor.js';
-import {xamlOptionsDialog} from './xaml-options.js';
 import {createVb6XamlSchema,compileFormXaml,xamlEnabled} from '../xaml/forms.js';
 import {readXamlDocument,prepareXamlEdit,synchronizeXamlProject,useDesignerXaml} from '../xaml/documents.js';
 import {escapeXml} from '../../packages/xaml-compiler/src/index.js';
@@ -154,6 +153,5 @@ export function installXaml(ide) {
   ide.updateCommandState=(...args)=>{const result=update(...args);controller.sync();return result;};
   ide.documents.designer=module=>{const designer=factory(module);installSelection(designer);return designer;};
   for(const designer of ide.documents.designers.values())installSelection(designer);
-  ide.optionsDialog=xamlOptionsDialog.bind(ide);
   controller.sync();return controller;
 }

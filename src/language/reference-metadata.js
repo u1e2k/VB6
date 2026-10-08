@@ -28,6 +28,21 @@ function metadataCopy(input){
   };
   return copy(input,0);
 }
+/** Make only reference metadata passive before workspace autosave. Invalid
+ * programmatic descriptors reject the save; the prior stored workspace remains
+ * intact. Never call metadata getters/toJSON merely because rendering or focus
+ * work caused the autosave timer to run. Other project data is not deep-copied.
+ */
+export function projectWithPassiveReferences(project) {
+  const properties = Object.getOwnPropertyDescriptors(project);
+  for (const name of ['references', 'typeLibraries']) {
+    const descriptor = properties[name];
+    if (!descriptor) continue;
+    if (!Object.hasOwn(descriptor, 'value')) throw new TypeError('Reference metadata accessors cannot be saved');
+    if (descriptor.value !== undefined) properties[name] = {...descriptor, value: metadataCopy(descriptor.value)};
+  }
+  return Object.create(null, properties);
+}
 // Read only own data descriptors. Neither native-reference wrappers nor
 // portable project metadata are allowed to run accessors/toJSON while an editor
 // constructs a cache key. Malformed entries are isolated from valid neighbors.

@@ -1,9 +1,10 @@
 // Native module lifetime, startup, forms and host boundary. MIT.
 #include "vb6.hpp"
+#include "lifetime.hpp"
 #include <iostream>
 namespace vb6 {
 Runtime::Runtime(std::unique_ptr<NativeHost> value):host(std::move(value)){if(!host)throw std::invalid_argument("Native host required");host->attach(*this);installBuiltins(*this);installFileBuiltins(*this);installFinancialBuiltins(*this);}
-Runtime::~Runtime(){ending=true;host->shutdown();instances.clear();files.clear();}
+Runtime::~Runtime(){ending=true;stopNativeFinalizers(*this);host->shutdown();instances.clear();files.clear();}
 Value Runtime::defaultValue(const std::string&raw,Frame*frame){
   auto type=lower(raw);
   if(type=="variant")return {};if(type=="object"||modules.count(type))return Value::object(nullptr);
@@ -16,17 +17,19 @@ Value Runtime::defaultValue(const std::string&raw,Frame*frame){
 std::shared_ptr<Instance> Runtime::instance(const std::string&raw,bool fresh){
   auto name=lower(raw);auto m=modules.find(name);if(m==modules.end())fail(429,"Unknown class: "+raw);
   if(!fresh){auto found=instances.find(name);if(found!=instances.end())return found->second;}
-  auto object=std::make_shared<Instance>(*this,m->second);object->initializing=true;
+  auto object=makeNativeInstance(*this,m->second);object->initializing=true;
   if(!fresh)instances[name]=object;
   try{Frame frame(*this,object);if(m->second.initialize)m->second.initialize(frame);object->initialized=true;object->initializing=false;if(m->second.kind=="class")dispatch(object,"class_initialize");}
-  catch(...){if(!fresh)instances.erase(name);throw;}
+  catch(...){object->initialized=false;object->initializing=false;if(!fresh)instances.erase(name);throw;}
   return object;
 }
 Value Runtime::create(const std::string&raw){auto name=lower(raw);if(modules.count(name))return Value::object(instance(name,true));return createLibraryObject(*this,name);}
 Value Runtime::invoke(const std::shared_ptr<Instance>&object,const std::string&raw,Args args,bool internal){
   auto name=lower(raw);auto found=object->module->procedures.find(name);if(found==object->module->procedures.end())fail(438,"Unknown procedure: "+raw);
   auto&proc=found->second;if(!internal&&proc.scope=="private")fail(438);if(!proc.code)fail(453);
-  Frame frame(*this,object,&proc,std::move(args));return proc.code(frame);
+  Value result;
+  {Frame frame(*this,object,&proc,std::move(args));result=proc.code(frame);}
+  drainNativeFinalizers(*this);return result;
 }
 Value Runtime::dispatch(const std::shared_ptr<Instance>&object,const std::string&name,Args args){if(!object->module->procedures.count(lower(name)))return {};return invoke(object,name,std::move(args),true);}
 void Runtime::load(const std::shared_ptr<Instance>&object){
@@ -52,7 +55,7 @@ void Runtime::run(){
       std::shared_ptr<Instance> owner;for(auto&entry:modules)if(entry.second.kind=="module"&&entry.second.procedures.count("main")){if(owner)fail(5,"Ambiguous Sub Main");owner=instance(entry.first);}
       if(!owner)fail(453,"Sub Main is not defined");invoke(owner,"main",{},true);
     }else{auto form=instance(startup);load(form);host->formCall(form,"show",{});}
-    host->run(*this);
+    host->run(*this);drainNativeFinalizers(*this);
   }catch(const EndExecution&){ending=true;host->shutdown();}
 }
 Value NativeHost::createObject(Runtime&,const std::string&name){fail(429,"Native object unavailable: "+name);}

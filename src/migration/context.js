@@ -1,3 +1,4 @@
+import {defaultPropertyCall} from './property-plan.js';
 import {findRecord, recordTraits} from './record-types.js';
 import {key, identifier, typeName} from './names.js';
 import {diagnostic, invokePlugins} from './contracts.js';
@@ -6,8 +7,9 @@ import {INTRINSICS, INTRINSIC_CONSTANTS, BUILTIN_NAMES} from './registry.js';
 export function moduleMember(module, name) {
   const k=key(name),decl=module.declarations.find(d=>key(d.name)===k);
   if(decl)return {...decl,owner:module};
-  const proc=[...module.procedures.values()].find(p=>key(p.name)===k && p.accessor!=='let' && p.accessor!=='set');
-  if(proc)return {...proc,type:proc.returnType,procedure:true,owner:module};
+  const procedures=[...module.procedures.values()].filter(p=>key(p.name)===k);
+  const proc=procedures.find(p=>p.accessor!=='let'&&p.accessor!=='set')||procedures[0];
+  if(proc)return {...proc,type:proc.kind==='property'&&proc.accessor!=='get'?proc.params.at(-1)?.type:proc.returnType,procedure:true,owner:module};
   const control=[...(module.form?.controls||[]),...(module.form?.menus||[])].find(c=>key(c.name)===k);
   if(control)return {...control,type:control.type||'Menu',control:true,owner:module,controlArray:control.properties?.Index!==undefined};
   const event=module.events?.get(k);if(event)return {...event,procedure:true,kind:'event',owner:module};
@@ -77,10 +79,11 @@ export function createContext(state, module, proc=null) {
       }
     }
     if(node.kind==='call'){
+      const expanded=defaultPropertyCall(node,context);if(expanded)return context.resolve(expanded);
       const callee=context.resolve(node.callee);
       if(callee?.controlArray)return {...callee,controlArray:false};
       if(callee?.bounds!==undefined&&callee.bounds!==null)return {...callee,bounds:null,arrayElement:true};
-      if(callee?.procedure)return {type:callee.returnType,owner:callee.owner};
+      if(callee?.procedure)return {type:callee.type,owner:callee.owner};
       if(callee&&['variant','object'].includes(key(callee.type)))return {type:'Variant',arrayElement:true,variantIndex:true};
     }
     return null;

@@ -91,7 +91,7 @@ export const nativeLayoutMethods={
       this.rawStorageAddress(rect);x.push();handle();x.push().invoke('user32.dll','GetClientRect').test().branch('e','error:5');this.rawStorageAddress(axis);x.emit(0x8b,0x08);this.rawStorageAddress(rect);x.emit(0x8b,0x44,0x88,8,0x6b,0xc0,15).push();this.rawStorageAddress(out);x.emit(0xdb,0x04,0x24,0xdd,0x18,0x83,0xc4,4);return true;
     }
     if(name==='hostshow'){
-      this.numeric(args[1]);const zero=x.unique();x.test().branch('e',zero).value(5).label(zero).push();handle();x.push().invoke('user32.dll','ShowWindow');return true;
+      this.numeric(args[1]);if(this.nativeTabPages.length){x.push();handle();x.push().call('native:tab:show');}else{const zero=x.unique();x.test().branch('e',zero).value(5).label(zero).push();handle();x.push().invoke('user32.dll','ShowWindow');}return true;
     }
     if(name==='hostapply'){
       const coords=this.arrayWorkspace(20,'layout-pixels');

@@ -88,7 +88,7 @@ This is a C++-lowering backend, not a handwritten ARM instruction encoder. JavaS
 | Error handling | Native error state, source checkpoints, On Error and Resume lowering. |
 | Project interfaces | Shared bound contracts, restricted dispatch and canonical target identity. |
 
-`Implements` lowering uses the shared frontend's member bindings, including public-field accessor contracts. Interface parameter names are translated to implementation parameter positions before ordinary call-frame binding. Interface views expose only their contract, support checked cross-casts and back-casts, preserve ByRef storage checks, and share object identity for `Is` and dictionary keys. A view strongly owns its instance; the reverse view cache is weak, avoiding an introduced target/view reference-count cycle. This does not implement arbitrary COM vtables, Windows type-library activation or class-finalization semantics.
+`Implements` lowering uses the shared frontend's member bindings, including public-field accessor contracts. Interface parameter names are translated to implementation parameter positions before ordinary call-frame binding. Interface views expose only their contract, support checked cross-casts and back-casts, preserve ByRef storage checks, and share object identity for `Is` and dictionary keys. A view strongly owns its instance; the reverse view cache is weak, avoiding an introduced target/view reference-count cycle. This does not implement arbitrary COM vtables or Windows type-library activation. Native class finalization and its remaining global/form-lifecycle boundaries are described in [lifetime and editing contracts](MACOS-LIFETIME-EDITING.md).
 
 AppKit provides native windows, editing controls, buttons, lists, outlines, tables, tabs, menus, timers, dialogs, retained drawing and printing adapters. Source-level `Declare` adapters translate explicitly supported kernel32/user32/gdi32/shell32-style contracts to native services. Windows DLL names do not cause DLL loading. Raw Windows pointers are not accepted as Cocoa objects.
 
@@ -134,8 +134,8 @@ Default signing is ad-hoc. It is **not** Developer ID signing, notarization, Gat
 
 The read-only Native macOS workflow has Linux and Apple Silicon jobs plus Chromium, Firefox and WebKit export UI jobs. The native harness:
 
-- Compiles and runs native value, generated VB and interface/view-lifetime tests with AddressSanitizer and UndefinedBehaviorSanitizer.
-- On Apple Silicon, compiles/signs/executes the app, creates 33 AppKit control types with selected behavior checks, verifies runtime-cache reuse, and downloads an app through the actual bridge before independently verifying and executing it.
+- Compiles and runs native value, generated VB, class-finalization and interface/view-lifetime tests with AddressSanitizer and UndefinedBehaviorSanitizer.
+- On Apple Silicon, compiles/signs/executes the app, creates 33 AppKit control types with selected behavior checks plus live field-editor, UTF-16 selection, rich-text replacement and list-identity regressions, verifies runtime-cache reuse, and downloads an app through the actual bridge before independently verifying and executing it.
 - Checks that reusable-API output remains after temporary source cleanup.
 
 The browser suite verifies source ZIPs, actual browser downloads, manual-save fallback, diagnostic failures, token lifetime, cancellation, design-mode restrictions and stale-project rejection. Its protocol image is explicitly synthetic and nonexecutable. It is not evidence of a working native binary. Native execution evidence comes from the separate Apple Silicon job. Local in-memory transport runs, when needed in restricted environments, are labelled and do not replace real HTTP/WebCrypto CI.
@@ -144,6 +144,6 @@ Portable Node regressions also validate malformed archives/Mach-O, permissions, 
 
 ## Unfinished compatibility
 
-A green targeted test run does not certify the complete original VB6 language/runtime/control API. Important remaining areas include full `Class_Terminate` lifetime semantics; design-time FRX/resource fidelity; complete control member, event and layout behavior; locale-sensitive formatting and ANSI conversion; native database/COM integration; and comprehensive visual/application parity. The 33-control test is a creation-and-selected-behavior smoke test, not full acceptance for every member of those controls.
+A green targeted test run does not certify the complete original VB6 language/runtime/control API. Important remaining areas include global/static/default-form shutdown and complete lifecycle semantics; reference-cycle collection and exact resurrection compatibility; design-time FRX/resource fidelity; complete control member, event and layout behavior; locale-sensitive formatting and ANSI conversion; native database/COM integration; and comprehensive visual/application parity. The 33-control test is a creation-and-selected-behavior smoke test, not full acceptance for every member of those controls.
 
 Unknown native declarations and unknown control types are rejected by native preflight. Some unsupported members are detected at runtime instead; compilation alone therefore does not prove a program's untested paths are supported. Arbitrary Windows DLL/OCX binaries, COM servers and pointer-based Win32 extensions are not made portable by this backend. Keep original sources and validate application behavior on an actual Mac before relying on a migration.

@@ -1,3 +1,4 @@
+import {emitFileRecord} from './file-records.js';
 import {parseLeafStatement} from '../language/compiler.js';
 import {parseExpression} from '../language/expression.js';
 import {parseForHeader, parseLabel, parseComputedBranch} from '../language/statement-headers.js';
@@ -79,7 +80,7 @@ export function emitStatements(writer,context) {
     for(const op of parseLeafStatement(text,context.module,proc,context.line))emitLeaf(op);
   };
   const emitLeaf=op=>{
-    if(emitArrayStatement(op,context,line))return;
+    if(emitArrayStatement(op,context,line)||emitFileRecord(op,context,line))return;
     switch(op.op){
       case 'dim': return; // Hoisted to procedure entry, matching VB6 procedure scope.
       case 'assign': line(assignment(op.target,op.expr,context,{objectSet:op.objectSet,asReturn:context.directReturn}));return;
@@ -112,11 +113,6 @@ export function emitStatements(writer,context) {
       case 'fileLock':line(fs+(op.unlock?'Unlock':'Lock')+'('+[e(op.handle),...(op.start?[e(op.start)]:[]),...(op.end?[e(op.end)]:[])].join(', ')+')');return;
       case 'filePrint':line(fs+(op.csv?(op.newline?'WriteLine':'Write'):(op.newline?'PrintLine':'Print'))+'('+[e(op.handle),...op.exprs.map(e)].join(', ')+')');return;
       case 'fileInput':for(const target of op.targets)line(op.whole?e(target)+' = '+fs+'LineInput('+e(op.handle)+')':fs+'Input('+e(op.handle)+', '+e(target)+')');return;
-      case 'fileRecord':{
-        const symbol=context.resolve(op.target);
-        if(symbol?.bounds!==null&&symbol?.bounds!==undefined||symbol?.fixedLength||!['byte','integer','long','single','double','string','date'].includes(key(context.type(op.target))))context.add('MIG_BINARY_LAYOUT','Binary Get/Put of arrays, fixed strings, Currency, Variant or records requires a verified VB6 binary-layout codec.');
-        line(fs+(op.action==='get'?'FileGet':'FilePut')+'('+[e(op.handle),e(op.target),op.position?e(op.position):'-1'].join(', ')+')');return;
-      }
       case 'graphics':context.add('MIG_GRAPHICS','Immediate-mode VB6 drawing requires a retained backing-surface adapter.');line("' Unconverted graphics statement retained in original source.");return;
       default:context.add('MIG_STATEMENT','Unconverted statement instruction: '+op.op);line("' Unconverted instruction: "+op.op);return;
     }

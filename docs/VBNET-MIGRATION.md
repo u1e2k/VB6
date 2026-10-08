@@ -128,6 +128,8 @@ root group's unresolved status.
 | `context.js`, `registry.js`, `record-types.js` | Module/procedure binding, declaration lookup, type information, intrinsic/control metadata and shared constants. |
 | `expressions.js`, `declarations.js`, `statements.js` | AST-aware expression lowering, typed declarations, structured statements and explicit compatibility calls. |
 | `array-statements.js`, `control-flow.js`, `call-semantics.js` | Ordered array-bound lowering, Variant selection predicates, Currency loop headers and reference-argument diagnostics. |
+| `property-plan.js`, `optional-parameters.js` | Shared accessor representation, typed optional forwarding overloads and declaration-bound defaults. |
+| `file-record-layout.js`, `file-records.js` | Recursive framework-layout proof and application-local binary record adapters. |
 | `module-emitter.js`, `forms.js` | Modules, classes, contracts, properties, lifecycle procedures, WinForms designers and event bridges. |
 | `representations.js`, `native-intrinsics.js`, `output-plan.js` | Conservative shape/ownership/allocation decisions, native intrinsic binding and direct-return eligibility. |
 | `runtime-catalog.js`, `runtime-plan.js`, `project-layout.js` | Explicit support roots and closure, per-file imports, selected source/project/package layout. |
@@ -143,13 +145,13 @@ procedure scope. Original physical lines map to generated locations.
 
 | Area | Implemented path | Boundary requiring review/adapters |
 |---|---|---|
-| Declarations | Modules/classes, constants, enums, UDT structures, fixed strings, Static locals, optional/ByRef/ParamArray parameters, events and Get/Let/Set grouping. | Simultaneous Property Let and Set, ByRef indexed-property mutation, parameterless/default methods and optional Currency metadata. |
+| Declarations | Modules/classes, constants, enums, UDT structures, fixed strings, Static locals, optional/ByRef/ParamArray parameters, events and Get/Let/Set grouping; independent Let/Set and ByRef indexed accessor methods; typed optional Currency forwarding overloads. | Parameterless/default methods, dynamic dispatch of rewritten properties, and unverified optional property/interop signatures. |
 | Numeric types | VB6 Integer → `Short`; Long → `Integer`; explicit conversion functions; scaled 64-bit Currency with four-place rounding. | Native Currency For loops use explicitly converted start/end/step values. Exact mixed-type/Variant promotion and every overflow boundary are not certified. |
 | Arrays and records | Column-major typed arbitrary-lower-bound arrays, Variant-contained typed arrays, ordered bounds, final-dimension ReDim Preserve, typed/dynamic Erase, element factories, CLR array imports and nested value copies. | Whole fixed-array assignment, live array-element ByRef aliases, complex Variant Erase locations, multi-target resumable statements, returned-record With semantics and binary array layout. |
 | Object model | Classes, method/property emission, source-class Implements contracts, WithEvents and event raising; lazy local and member As New; native With for record lvalues. | ByRef replacement of lazy locals, complete late-bound default-member coercion, COM reference identity/lifetime and all Variant object states. |
 | Control flow | If/ElseIf, inline If, For/For Each, Do/Loop, While/Wend, Select Case, labels, GoTo, computed branches, explicit GoSub continuation stacks. | Variant Select uses one captured selector, ordered null-aware comparisons and eager range endpoints. Combined GoSub/error-resumption and expanded-statement resumption behavior still require review. |
 | Errors | Native VB.NET On Error, Resume, Error/Err, preserved labeled handlers. | This deliberately avoids claiming that a mechanical Try/Catch rewrite preserves resumable VB6 errors. All exception-to-Err mappings are not certified. |
-| Intrinsics and files | Shared intrinsic constants, many Microsoft.VisualBasic APIs, array/string adapters, scalar file operations, source-retained unsupported statements. | Exact Null/Empty/Nothing/Variant subtype behavior across every intrinsic and binary UDT/Currency/Variant/fixed-string record codecs. |
+| Intrinsics and files | Shared intrinsic constants, many Microsoft.VisualBasic APIs, array/string adapters, scalar file operations, fixed-string/Currency binary I/O and recursively proven scalar UDT records, source-retained unsupported statements. | Exact Null/Empty/Nothing/Variant subtype behavior across every intrinsic; binary arrays, Variant/Object, and records containing compatibility storage. |
 | Forms | WinForms partial class/designer split, default instances, containers, text/font/color/layout, menus, standard control fields, sparse control arrays, event bridges and initialization/close ordering. | Dynamic control Load/Unload; complete OCX/control object models, complex data binding, graphics/printing, resources, multi-form shutdown, designer pixel parity and all event orderings. |
 | Native/COM | ANSI Declare emission, explicit bitness/ABI diagnostics, retained references, COM activation calls and extension points. | Raw pointers, callbacks, custom marshaling, COM type-library conversion/registration, OCX persistence and deployment are not automatic. |
 
@@ -161,6 +163,14 @@ not a complete reimplementation of the VB6 Variant discriminated representation.
 `Class_Terminate` is exposed through `IDisposable` with a blocking ownership
 migration diagnostic, not silently equated to GC finalization. Unsupported graphics
 or components are not replaced with behaviorless success stubs.
+
+## Property, optional-argument and binary-record lowering
+
+See [Language and record lowering](VBNET-LANGUAGE-LOWERING.md) for the accessor
+method plan, declaration-bound optional defaults, binary layout eligibility,
+calling-assembly constraints and regression fixtures. These transformations use
+ordinary VB.NET or the framework where behavior is representable; they do not
+claim that all VB6 object, interop and binary layouts are covered.
 
 ## Array and control-flow semantics
 
@@ -289,9 +299,13 @@ node tools/test-vbnet-package.mjs
 tsc --noEmit --strict --module nodenext --moduleResolution nodenext --target es2022 tests/migration-types.fixture.mts
 ```
 
-The .NET harness in `tests/migration-dotnet.test.mjs` builds emitted projects and
+The shared .NET harness in `tests/migration-dotnet-support.mjs` builds emitted projects and
 executes assertions for arrays, Currency, strings, static variables, GoSub, record
-copying, As New, Implements dispatch and WinForms controls/events. These cases are
+copying, As New, Implements dispatch, separate property accessors, fixed-string and
+Currency binary byte goldens, optional Currency overloads and WinForms controls/events.
+`migration-dotnet.test.mjs` and `migration-optional-dotnet.test.mjs` exercise both
+native and compatibility output; the optional fixtures also use `Option Strict On`.
+These cases are
 explicitly **skipped when the .NET 10 SDK is absent**, never reported as successful
 compilation. `VB6_REQUIRE_DOTNET=1` makes a missing SDK fail the gate. The dedicated
 GitHub workflow installs .NET 10 on Linux and Windows; Windows executes WinForms.

@@ -144,7 +144,7 @@ export class SourceEditor extends Signal {
   goToLine(line,column=1){const offset=offsetAt(this.index,line,column),pane=this.activePane;pane.explicitDeclarations=false;this.syncPane(pane,offset);this.input.focus();const y=(positionAt(this.index,offset).line-1-pane.range.firstLine)*this.lineHeight;if(y<this.input.scrollTop||y>this.input.scrollTop+this.viewport.clientHeight-50)this.input.scrollTop=Math.max(0,y-this.viewport.clientHeight*.35);this.cursorChanged();}
   setViewMode(mode){const cursor=this.cursor();this.activePane.mode=mode==='procedure'?'procedure':'module';this.syncPane(this.activePane,cursor.offset,cursor.offset,{scroll:false});this.goToLine(cursor.line,cursor.column);}
   setValue(value){if(this.readOnly||String(value)===this.text)return;this.closeCompletion();this.closeInfo();const oldText=this.text;this.assignSource(value);this.emit('change',{module:this.module,oldText,newText:this.text,kind:'command'});this.updateSelectors(false);this.cursorChanged();}
-  setReadOnly(value){if(value){this.closeCompletion();this.closeInfo();}this.readOnly=!!value;for(const pane of this.panes)pane.input.readOnly=this.readOnly;this.root.classList.toggle('read-only',this.readOnly);}
+  setReadOnly(value){if(value){this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();}this.readOnly=!!value;for(const pane of this.panes)pane.input.readOnly=this.readOnly;this.root.classList.toggle('read-only',this.readOnly);}
   setBreakpoints(values){this.breakpoints=values;this.paint();}setDiagnostics(values){this.diagnostics=values;this.diagnosticRevision=(this.diagnosticRevision||0)+1;this.diagnosticMap=new Map();for(const d of values){const key=lower(d.source)+':'+d.line;if(!this.diagnosticMap.has(key))this.diagnosticMap.set(key,d);}this.paint();}setExecution(value){this.execution=value;this.paint();}
   replaceSelection(text,start=undefined,end=undefined,kind='command'){if(this.input.readOnly)return;if(this.activePane.virtualizer?.active){const bounds=this.selectionBounds();return this.replaceGlobal(text,start===undefined?bounds.start:this.activePane.range.start+start,end===undefined?bounds.end:this.activePane.range.start+end,kind);}start??=this.input.selectionStart;end??=this.input.selectionEnd;this.input.focus();this.activePane.editKind=kind;this.activePane.editHint=replacementChange(start,end,String(text).length);this.input.setRangeText(text,start,end,'end');this.changed();}
   replaceGlobal(text,start,end,kind='command'){
@@ -182,7 +182,7 @@ export class SourceEditor extends Signal {
     if(this.completion&&!ctrl&&!e.altKey){
       if(['ArrowDown','ArrowUp','PageDown','PageUp','Home','End','Enter','Tab','Escape'].includes(e.key)){
         e.preventDefault();
-        if(e.key==='Escape'){this.closeCompletion();this.closeInfo();}
+        if(e.key==='Escape'){this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();}
         else if(e.key==='Enter'||e.key==='Tab')this.acceptCompletion(e.key==='Enter'?'\n':'');
         else {const count=this.completionItems.length;this.completionIndex=e.key==='Home'?0:e.key==='End'?count-1:Math.max(0,Math.min(count-1,this.completionIndex+({ArrowDown:1,ArrowUp:-1,PageDown:9,PageUp:-9}[e.key])));this.scrollCompletion();}
         return;
@@ -190,7 +190,7 @@ export class SourceEditor extends Signal {
       if(['.','(',',',' ',')'].includes(e.key)&&!this.input.readOnly){e.preventDefault();this.acceptCompletion(e.key);return;}
       if(['ArrowLeft','ArrowRight'].includes(e.key))this.closeCompletion();
     }
-    if(ctrl&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const line=this.cursor().line,proc=e.key==='ArrowDown'?this.procedureIndex.find(p=>p.line>line):[...this.procedureIndex].reverse().find(p=>p.line<line);if(proc)this.goToLine(proc.line);return;}if(ctrl&&e.key.toLowerCase()==='y'&&!this.input.readOnly){e.preventDefault();this.cutLine();return;}if(ctrl&&e.code==='Space'){e.preventDefault();this.completeWord();return;}if(ctrl&&!e.shiftKey&&['f','h'].includes(e.key.toLowerCase())){e.preventDefault();this.showFind(e.key.toLowerCase()==='h');return;}if(e.key==='F3'||e.key==='F4'&&e.shiftKey){e.preventDefault();this.find(e.key==='F4'?1:e.shiftKey?-1:1);return;}if(e.key==='Escape'){this.findBar.hidden=true;this.closeCompletion();this.closeInfo();}
+    if(ctrl&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const line=this.cursor().line,proc=e.key==='ArrowDown'?this.procedureIndex.find(p=>p.line>line):[...this.procedureIndex].reverse().find(p=>p.line<line);if(proc)this.goToLine(proc.line);return;}if(ctrl&&e.key.toLowerCase()==='y'&&!this.input.readOnly){e.preventDefault();this.cutLine();return;}if(ctrl&&e.code==='Space'){e.preventDefault();this.completeWord();return;}if(ctrl&&!e.shiftKey&&['f','h'].includes(e.key.toLowerCase())){e.preventDefault();this.showFind(e.key.toLowerCase()==='h');return;}if(e.key==='F3'||e.key==='F4'&&e.shiftKey){e.preventDefault();this.find(e.key==='F4'?1:e.shiftKey?-1:1);return;}if(e.key==='Escape'){this.cancelCompositionAssistance();this.findBar.hidden=true;this.closeCompletion();this.closeInfo();}
     if(e.key==='Tab'&&!this.input.readOnly){e.preventDefault();const bounds=this.selectionBounds();if(bounds.start!==bounds.end||e.shiftKey)this.indentBlock(e.shiftKey);else this.replaceSelection(' '.repeat(this.project.settings.tabWidth||4));return;}
     if(e.key==='Enter'&&!this.input.readOnly){e.preventDefault();const previous=this.input.value.slice(0,this.input.selectionStart).split('\n').at(-1),indent=this.appearance.autoIndent?previous.match(/^\s*/)[0]:'';this.replaceSelection('\n'+indent,undefined,undefined,'typing');return;}
   }
@@ -269,7 +269,7 @@ export class SourceEditor extends Signal {
   }
   closeInfo(){this.info?.remove();this.info=null;clearTimeout(this.infoTimer);}
   definition(){const c=this.cursor(),text=this.input.value.slice(this.input.selectionStart,this.input.selectionEnd)||wordAt(this.text,c.offset).text;return this.intelligence.definition(this.project,{...this.module,code:this.text},c.line,this.text,c.offset,text);}
-  cancelCompositionAssistance(){clearTimeout(this.compositionTimer);this.compositionTimer=0;this.compositionResume=null;}
+  cancelCompositionAssistance(){clearTimeout(this.compositionTimer);this.compositionTimer=null;this.compositionResume=null;this.compositionMode=null;}
   resumeCompositionAssistance(){
     const pending=this.compositionResume;if(!pending)return;
     this.cancelCompositionAssistance();
