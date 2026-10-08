@@ -118,7 +118,11 @@ export function compileFormXaml(text, {form:previous,settings={},schema=createVb
   function resources(value) { if (value?.kind === 'Dictionary') return value.entries; if (value?.dictionary) return resources(plain(value).Items?.value); return []; }
   function constant(value,scopes,seen=new Set()) {
     if (value?.kind === 'Literal') return jsonValue(value.value);
-    if (value?.kind === 'Object' && value.type.name === 'SolidColorBrush') return constant(plain(value).Color?.value,scopes,seen);
+    if (value?.kind === 'Object' && value.type.name === 'SolidColorBrush') {
+      const props=plain(value);
+      if(Object.keys(props).some(k=>k!=='Color'))throw new Error('Brush opacity and transforms are not silently discarded by the VB6 target.');
+      return constant(props.Color?.value,scopes,seen);
+    }
     if (value?.kind === 'Resource' && !value.theme) {
       const entry = scopes.map(s => s.find(e => e.key === value.key)).find(Boolean);
       if (!entry) throw new Error('Unknown static resource ' + value.key + '.');
@@ -130,7 +134,10 @@ export function compileFormXaml(text, {form:previous,settings={},schema=createVb
   function lower(node,parent=null,root=false,list=controls,inheritedResources=[]) {
     if (node.kind !== 'Object') { error('A form child must be a control object.',node.source); return null; }
     const native = node.type.namespaceURI === VB6_XAML_NS, values = plain(node), metadata = design(node);
-    const localResources = resources(values.Resources?.value).map(entry => ({...entry}));
+    const resourceValue=values.Resources?.value;
+    if(resourceValue?.kind==='Object'&&resourceValue.properties.some(p=>p.member.name!=='Items'))error('Merged, external and theme resource dictionaries are not lowered by the VB6 target.',resourceValue.source);
+    const localResources = resources(resourceValue).map(entry => ({...entry}));
+    for(const entry of localResources)if(entry.key?.startsWith('@type:'))error('Implicit WinUI styles are not lowered by the VB6 target.',entry.value.source);
     const scopes = [localResources,...inheritedResources];
     for (const entry of localResources) entry.scopes = scopes;
     const type = native ? metadata.Type ?? node.type.name : aliases[node.type.name];
@@ -171,7 +178,11 @@ export function compileFormXaml(text, {form:previous,settings={},schema=createVb
       if (p.member.namespaceURI === VB6_XAML_NS && p.member.owner === 'Designer') continue;
       if (key === 'Resources') continue;
       if (p.value.kind === 'Collection' && ['Children','Menus','Content','Child'].includes(key)) { children.push(...p.value.items.map(child=>({child,menu:key==='Menus'}))); continue; }
-      if (p.value.kind === 'Object' && ['Content','Child'].includes(key)) { children.push({child:p.value,menu:false}); continue; }
+      if (p.value.kind === 'Object' && ['Content','Child'].includes(key)) {
+        if(!native&&!['Form','MDIForm','PictureBox'].includes(type))error('Object content requires a supported native container; '+type+' cannot host this content.',p.source);
+        else children.push({child:p.value,menu:false});
+        continue;
+      }
       if (p.member.kind === 'event') { deferred.push(p);continue; }
       try {
         if (native) { if(key!=='Name')set(key,constant(p.value,scopes),p); continue; }
