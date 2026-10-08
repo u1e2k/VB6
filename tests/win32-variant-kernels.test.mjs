@@ -74,3 +74,7 @@ test('Null conditions are false; explicit Boolean conversion still rejects Null'
 test('unused Variant subsystem emits no runtime code or imports',()=>{
  const image=new PE32Image(),section=image.section('.text',0x60000020),x=new X86(section,image);emitNativeVariantHelpers({x});assert.equal(section.length,0);assert.equal(image.imports.size,0);
 });
+
+test('explicit Error-to-Date conversion is rejected without changing the destination',()=>{
+ const h=harness(),source=h.slot(10,2042),out=h.slot(7,42);assert.throws(()=>h.call('change',[out,source,7,1]),e=>e.number===13);assert.deepEqual(h.read(out),{vt:7,value:42});
+});

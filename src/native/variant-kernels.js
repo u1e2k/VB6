@@ -35,7 +35,7 @@ export function emitNativeVariantHelpers(c){
   // does not. Missing is distinct from an ordinary user-created Error value.
   const notError=x.unique(),convert=x.unique();
   x.value(arg(12)).cmp(w('eax'),1).branch('e','error:94').cmp(w('eax'),10).branch('ne',notError);
-  x.cmp(at('eax',8),0x80020004).branch('e','error:449').cmp(m(20),0).branch('e','error:13');
+  x.cmp(at('eax',8),0x80020004).branch('e','error:449').cmp(m(20),0).branch('e','error:13').cmp(m(16),7).branch('e','error:13');
   // OleAut32 does not coerce VT_ERROR itself. A borrowed VT_I4 view carries the
   // original SCODE through the same checked explicit numeric/string conversion.
   x.mov('ecx',at('eax',8)).mov(m(-16),3).mov(m(-8),'ecx').push(arg(16)).push(2).push(0x400).push(addr(-16)).push(addr(-16)).invoke(DLL,'VariantChangeTypeEx').jump(convert);

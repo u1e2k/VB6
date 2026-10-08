@@ -2,7 +2,7 @@ import {mem32} from './x86-operands.js';
 /** Native storage lowering. BSTR ownership is explicit; no JS or VB runtime is embedded. */
 import {NATIVE_ARRAY_MAX_BYTES, NATIVE_ARRAY_MAX_RANK} from './arrays.js';
 const key = value => String(value).toLowerCase();
-const types = new Set(['byte', 'integer', 'long', 'boolean', 'string', 'single', 'double', 'currency', 'date']);
+const types = new Set(['byte', 'integer', 'long', 'boolean', 'string', 'single', 'double', 'currency', 'date', 'variant']);
 export const MAX_NATIVE_STRING = 1024 * 1024;
 
 function boundValue(compiler, node, module, proc) {
@@ -30,13 +30,14 @@ function boundValue(compiler, node, module, proc) {
 }
 
 export function storageLayout(compiler, decl, module, proc) {
-  if (!types.has(key(decl.type)) || decl.autoNew || decl.withEvents) compiler.fail('Native storage requires Byte, Integer, Long, Boolean, Single, Double, Currency, Date or String: ' + decl.name, module);
+  if (!types.has(key(decl.type)) || decl.autoNew || decl.withEvents) compiler.fail('Native storage requires Byte, Integer, Long, Boolean, Single, Double, Currency, Date, String or Variant: ' + decl.name, module);
   if (decl.fixedLength !== null && decl.fixedLength !== undefined && (!Number.isInteger(decl.fixedLength) || decl.fixedLength < 1 || decl.fixedLength > 65535)) compiler.fail('Invalid fixed String length: ' + decl.name, module);
-  const elementBytes = key(decl.type) === 'byte' ? 1 : ['integer', 'boolean'].includes(key(decl.type)) ? 2 : ['double','currency','date'].includes(key(decl.type)) ? 8 : 4;
+  const elementBytes = key(decl.type) === 'variant' ? 16 : key(decl.type) === 'byte' ? 1 : ['integer', 'boolean'].includes(key(decl.type)) ? 2 : ['double','currency','date'].includes(key(decl.type)) ? 8 : 4;
   decl.nativeElementBytes = elementBytes;
   let count = 1;
   if (decl.bounds !== null && decl.bounds !== undefined) {
     decl.nativeArray = true;
+    if(key(decl.type)==='variant')compiler.nativeVariantArraysUsed=true;
     decl.nativeDynamic = !decl.bounds.length;
     if (decl.parameter && (!decl.byRef || decl.bounds.length)) compiler.fail('Native array parameters must be unsized and ByRef', module);
     if (decl.bounds.length > NATIVE_ARRAY_MAX_RANK) compiler.fail('Native fixed arrays support at most 60 dimensions', module);
@@ -93,6 +94,8 @@ export const nativeStorageMethods = {
     const ready = this.x.unique(); this.x.test().branch('ne', ready).value(this.string('')).label(ready);
   },
   storageExpression(variable, node) {
+    if(key(variable.type)==='variant'&&!variable.nativeArray){this.boxVariant(node);return;}
+    if(this.type(node)==='variant'&&!variable.nativeArray&&!variable.nativeRecord){this.expression(node);this.unboxVariant(key(variable.type));return;}
     if(variable.recordFieldArray)this.fail('Native record array field requires indices');
     if(variable.nativeRecord)return this.recordExpression(variable,node);
     if (variable.nativeArray && !variable.elementOf) this.fail('Whole-array values require array assignment or a ByRef array parameter');

@@ -41,7 +41,7 @@ export const nativeCurrencyMethods = {
     return null;
   },
   currencyExpression(node) {
-    const type=this.type(node);this.expression(node);
+    const type=this.type(node);if(type==='variant'){this.expression(node);this.unboxVariant('currency');return;}this.expression(node);
     if(type==='currency')return;
     const x=this.x,out=this.currencyWorkspace();
     x.push();this.rawStorageAddress(out);x.emit(0x59).push().emit(0x51).call(C+(type==='string'?'parse':floats.has(type)?'from-double':'from-int'));

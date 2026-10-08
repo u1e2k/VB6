@@ -67,7 +67,6 @@ test('unparenthesized fixed-length String copy-back is not falsely implemented',
   assert.throws(()=>compile('Dim s As String * 8\nCall Text(s)','Private Sub Text(ByRef s As String)\nEnd Sub'),/Fixed-length String ByRef/);
 });
 for(const [decl,body,pattern]of [
- ['Private Sub P(Optional x As Variant)\nEnd Sub','P',/supported scalar/],
  ['Private Sub P(ParamArray x() As Variant)\nEnd Sub','P',/ParamArray/],
  ['Private Sub P(Optional ByRef x() As Long)\nEnd Sub','P',/Optional.*array/i],
  ['Private Sub P(Optional x As Object)\nEnd Sub','P',/supported scalar/],
@@ -134,4 +133,8 @@ test('native control-property ByRef value copies compile without unsupported pro
   const {callPropertiesFixture}=await import('../tools/win32-call-fixtures.mjs');
   const {project:p,checks}=callPropertiesFixture(),before=JSON.stringify(p);
   assert.equal(checks.length,5);assert.ok(compileWin32(p).bytes.length);assert.equal(JSON.stringify(p),before);
+});
+
+test('optional Variant omissions lower a Missing sentinel with checked ownership',()=>{
+ const r=compile('P','Private Sub P(Optional x As Variant)\nDim omitted As Boolean\nomitted=IsMissing(x)\nEnd Sub');assert.ok(JSON.stringify(r.report.imports).includes('VariantCopyInd'));
 });

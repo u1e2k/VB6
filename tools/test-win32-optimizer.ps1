@@ -4,10 +4,10 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path $Directory).Path
 $plans = Get-Content (Join-Path $root 'builds.json') -Raw | ConvertFrom-Json
 $expected = @()
-foreach ($family in @('AotOptimizerRecords','AotArithmetic','AotLanguage','AotContinuationLanguage','AotStringLibrary','AotWithControls','AotAssembler','AotSpeedSize','AotCompactAssembler')) {
+foreach ($family in @('AotOptimizerRecords','AotArithmetic','AotLanguage','AotContinuationLanguage','AotStringLibrary','AotVariants','AotWithControls','AotAssembler','AotSpeedSize','AotCompactAssembler')) {
   foreach ($level in 0..2) {$expected += "$family-O$level"}
 }
-$expected += @('AotContinuationLanguage-O2-pruned','AotStringLibrary-O2-pruned','AotSpeedSize-O2-pruned')
+$expected += @('AotContinuationLanguage-O2-pruned','AotStringLibrary-O2-pruned','AotVariants-O2-pruned','AotSpeedSize-O2-pruned')
 if ($plans.Count -ne $expected.Count -or (Compare-Object ($plans.name | Sort-Object) ($expected | Sort-Object))) {throw 'Incomplete or duplicated native fixture/optimization matrix'}
 if (@($plans | Where-Object {-not $_.checks -or $_.checks.Count -lt 1}).Count) {throw 'Every native fixture must have explicit assertions'}
 $results = @()
