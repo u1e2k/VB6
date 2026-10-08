@@ -3,6 +3,7 @@
 #include <cassert>
 #include <iostream>
 using namespace vb6;
+void checkNativeRichText(Runtime&,const std::shared_ptr<Instance>&);
 namespace {
 int changes=0,listClicks=0;
 bool reenter=false;
@@ -114,5 +115,6 @@ void checkNativeEditing(Runtime& rt,MacHost& host,const std::shared_ptr<Instance
   assert(integer(rt,edit,"selstart")==1&&integer(rt,edit,"sellength")==2);
   assert([window makeFirstResponder:nil]);
   form->module->procedures.erase("c2_change");form->module->procedures.erase("c11_click");
+  checkNativeRichText(rt,form);
   host.check();std::cout<<"APPKIT_EDIT_SELECTION_LIST_OK\n";
 }

@@ -98,7 +98,7 @@ void nativeEditSetSelection(MacControl& c, const std::string& name, Value value)
     if ([c.widget isKindOfClass:NSTextView.class]) {
       auto view = (NSTextView*)c.widget;
       NSDictionary* attributes = view.typingAttributes;
-      if (range.location < view.textStorage.length)
+      if (range.length && range.location < view.textStorage.length)
         attributes = [view.textStorage attributesAtIndex:range.location effectiveRange:nullptr];
       auto inserted = [[NSAttributedString alloc] initWithString:ns(replacement) attributes:attributes];
       [view.textStorage replaceCharactersInRange:range withAttributedString:inserted];

@@ -1,6 +1,7 @@
 // Native AppKit control implementation. MIT.
 #include "appkit-control-utils.hpp"
 #include "appkit-edit.hpp"
+#include "appkit-richtext.hpp"
 namespace vb6 {
 Value MacControl::get(Runtime&rt,const std::string&raw){
   if(disposed)fail(91,"Control has been unloaded");auto name=lower(raw.empty()?defaultMember():raw);
@@ -18,7 +19,7 @@ Value MacControl::get(Runtime&rt,const std::string&raw){
     if(!isNativeEdit(*this))fail(438);auto range=nativeEditSelection(*this);
     return name=="selstart"?Value::integer(range.location):name=="sellength"?Value::integer(range.length):Value::string(nativeEditText(*this).substr(range.location,range.length));
   }
-  if(name=="textrtf"&&spec.type=="RichTextBox"){NSData*data=[textView(*this)RTFFromRange:NSMakeRange(0,textView(*this).string.length)];return Value::string(fromUTF8(std::string(static_cast<const char*>(data.bytes),data.length)));}
+  if(nativeRichProperty(name))return nativeRichGet(*this,name);
   if(name=="listcount")return Value::integer(list.size());
   if(name=="listindex"){if([widget isKindOfClass:NSComboBox.class])return Value::integer([(NSComboBox*)widget indexOfSelectedItem]);if(auto t=tableView(*this))return Value::integer(t.selectedRow);return property(name,Value::integer(-1));}
   if(name=="selcount")return Value::integer(selected.size());
@@ -57,7 +58,7 @@ void MacControl::set(Runtime&rt,const std::string&raw,Value value,bool){
   if(name=="selstart"||name=="sellength"||name=="seltext"){nativeEditSetSelection(*this,name,std::move(value));return;}
   if(name=="text"&&isNativeEdit(*this)){nativeEditSetText(*this,value.string());return;}
   if(name=="maxlength"){auto n=coerce(value,"long").integral();if(n<0)fail(380);properties[name]=Value::integer(n);return;}
-  if(name=="textrtf"&&spec.type=="RichTextBox"){auto source=toUTF8(value.string());NSData*data=[NSData dataWithBytes:source.data() length:source.size()];NSAttributedString*rich=[[NSAttributedString alloc]initWithRTF:data documentAttributes:nullptr];if(!rich)fail(380,"Invalid RTF");[textView(*this).textStorage setAttributedString:rich];changed("text");return;}
+  if(nativeRichProperty(name)){nativeRichSet(*this,name,std::move(value));return;}
   if(name=="selecteditem"){
     auto item=std::dynamic_pointer_cast<MacItem>(value.asObject());if(!item)fail(13);if(spec.type=="TreeView"){id token=outlineTokens[item->identity];if(!token){[(NSOutlineView*)widget reloadData];token=outlineTokens[item->identity];}if(!token)fail(380);NSInteger row=[(NSOutlineView*)widget rowForItem:token];if(row<0)fail(380);[(NSTableView*)widget selectRowIndexes:[NSIndexSet indexSetWithIndex:size_t(row)]byExtendingSelection:NO];}
     else{auto collection=items(spec.type=="ListView"?"listitems":"tabs");auto it=std::find(collection->items.begin(),collection->items.end(),item);if(it==collection->items.end())fail(380);size_t i=size_t(it-collection->items.begin());if(spec.type=="ListView")[(NSTableView*)widget selectRowIndexes:[NSIndexSet indexSetWithIndex:i]byExtendingSelection:NO];else [(NSTabView*)widget selectTabViewItemAtIndex:i];}return;

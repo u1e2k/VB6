@@ -60,9 +60,10 @@ try {
     generatedPassed(await run(built.executable,[]));report.checks.push('signed-arm64-app-execution');
     const sdkPath=await run('/usr/bin/xcrun',['--sdk','macosx','--show-sdk-path']);
     const ui=path.join(work,'appkit-tests');
-    await run(compiler,['-std=c++17','-arch','arm64','-isysroot',sdkPath,'-mmacosx-version-min=11.0','-fobjc-arc','-I',native,path.join(sdk,'tests/appkit.mm'),path.join(sdk,'tests/appkit-edit.mm'),path.join(cache,built.runtimeSha256,'libvb6-native.a'),'-framework','AppKit','-framework','Foundation','-framework','CoreGraphics','-framework','QuartzCore','-o',ui]);
+    const uiSources=(await fs.readdir(path.join(sdk,'tests'))).filter(name=>/^appkit(?:-[a-z-]+)?\.mm$/.test(name)).sort().map(name=>path.join(sdk,'tests',name));
+    await run(compiler,['-std=c++17','-arch','arm64','-isysroot',sdkPath,'-mmacosx-version-min=11.0','-fobjc-arc','-I',native,...uiSources,path.join(cache,built.runtimeSha256,'libvb6-native.a'),'-framework','AppKit','-framework','Foundation','-framework','CoreGraphics','-framework','QuartzCore','-o',ui]);
     await run('/usr/bin/codesign',['--sign','-','--timestamp=none',ui]);
-    const uiOutput=await run(ui,[],{timeout:30000});assert.match(uiOutput,/APPKIT_CONFORMANCE_OK/);assert.match(uiOutput,/APPKIT_EDIT_SELECTION_LIST_OK/);report.checks.push('appkit-controls-events-api','appkit-live-edit-selection-lists');
+    const uiOutput=await run(ui,[],{timeout:30000});assert.match(uiOutput,/APPKIT_CONFORMANCE_OK/);assert.match(uiOutput,/APPKIT_EDIT_SELECTION_LIST_OK/);assert.match(uiOutput,/APPKIT_RICH_SELECTION_OK/);report.checks.push('appkit-controls-events-api','appkit-live-edit-selection-lists','appkit-rich-selection-formatting');
     const reused=await buildNativeKit(kitDir,{out:path.join(work,'reused'),cache,jobs:3,log});assert.equal(reused.cacheHit,true);report.checks.push('native-cache-reuse');
     // Verify the exact signed bytes produced by ditto; do not repack the bundle.
     const archive=await verifyMacOSAppArchive(new Uint8Array(await fs.readFile(built.zip)),kit.options);
