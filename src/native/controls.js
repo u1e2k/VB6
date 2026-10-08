@@ -1,4 +1,11 @@
 import {initializeNativeObjectTag,disposeNativeStandaloneTags} from './control-metadata.js';
+import {nativeTabPageMethods} from './control-tabs.js';
+import {nativeChartMethods} from './control-chart.js';
+import {nativeGridMethods} from './control-grid.js';
+import {nativeImageListMethods} from './control-imagelist.js';
+import {nativePictureMethods} from './control-pictures.js';
+import {nativeDialogMethods} from './control-dialogs.js';
+import {nativeSelectionFormatMethods} from './control-format.js';
 /** Native HWND lowering. Runtime instructions are emitted per used control family;
  * this module itself is compiler code and is never embedded in a PE32 image. */
 import {NATIVE_CONTROL_CATALOG,nativeControlDependencies} from './control-catalog.js';
@@ -14,12 +21,13 @@ import {nativeRichTextMethods} from './control-richtext.js';
 const mem=memory=>({memory}),key=s=>String(s).toLowerCase();
 export const NATIVE_CONTROL_STATE=Object.freeze({min:0,max:4,value:8,smallchange:12,largechange:16,tickfrequency:20,tab:24,tag:28,backcolor:32,forecolor:36,fillcolor:40,fillstyle:44,shape:48,bordercolor:52,borderwidth:56,borderstyle:60,brush:64,backstyle:68,font:72});
 export const nativeControlMethods={
-  ...nativeControlTextMethods,...nativeRichTextMethods,...nativeControlFontMethods,...nativeControlFileMethods,...nativeControlCollectionMethods,...nativeControlPropertyMethods,...nativeControlEventMethods,...nativeControlDrawingMethods,
+  ...nativeTabPageMethods,...nativeChartMethods,...nativeGridMethods,...nativeImageListMethods,...nativePictureMethods,...nativeDialogMethods,...nativeSelectionFormatMethods,...nativeControlTextMethods,...nativeRichTextMethods,...nativeControlFontMethods,...nativeControlFileMethods,...nativeControlCollectionMethods,...nativeControlPropertyMethods,...nativeControlEventMethods,...nativeControlDrawingMethods,
   nativeControlEvents,nativeCommandEvents,
   nativeControlDescriptor(model,module){
     const descriptor=NATIVE_CONTROL_CATALOG[model.type];
     if(!descriptor)this.fail('Unsupported native control: '+model.type+'; no freestanding Win32 implementation is installed',module);
-    if(model.properties.Picture||model.properties.Icon)this.fail('Native picture/icon resources are not yet lowered: '+model.name,module);
+    if((model.properties.Picture||model.properties.Icon)&&!['Image','PictureBox'].includes(model.type))this.fail('Native picture/icon resources on '+model.type+' are not yet lowered',module);
+    if(model.properties.Icon)this.fail('Only a native Form exposes Icon',module);
     if(NATIVE_RANGE_CONTROLS.has(model.type)) {
       const p=model.properties,min=Number(p.Min??0),max=Number(p.Max??100),value=Number(p.Value??0);
       for(const [name,n]of [['Min',min],['Max',max],['Value',value]])if(!Number.isInteger(n)||n< -2147483648||n>2147483647)this.fail(model.name+'.'+name+' must be a signed 32-bit integer',module);
@@ -33,7 +41,7 @@ export const nativeControlMethods={
     if(model.type==='Timer')return;
     const events=nativeControlEvents(model.type),handlers=module.procedures;
     const input=NATIVE_INPUT_EVENTS.some(e=>handlers.has(key(model.name)+'_'+e));
-    if(descriptor.container||input)control.oldProcedure=this.slot('control-old-procedure:'+module.name+':'+control.key);
+    if(!descriptor.nonvisual&&(descriptor.container||descriptor.kernel||input))control.oldProcedure=this.slot('control-old-procedure:'+module.name+':'+control.key);
     control.state='control-state:'+module.name+':'+control.key;
     this.data.align(4).label(control.state);
     const values=[Number(p.Min??0),Number(p.Max??100),NATIVE_RANGE_CONTROLS.has(model.type)?Number(p.Value??0):0,Number(p.SmallChange??p.Increment??1),Number(p.LargeChange??1),Number(p.TickFrequency??1),Number(p.Tab??0),0,Number(p.BackColor??-2147483633),Number(p.ForeColor??-2147483640),Number(p.FillColor??16777215),Number(p.FillStyle??1),Number(p.Shape??0),Number(p.BorderColor??0),Number(p.BorderWidth??1),Number(p.BorderStyle??1),0,Number(p.BackStyle??1),0];
@@ -41,6 +49,7 @@ export const nativeControlMethods={
     for(const n of values){if(!Number.isInteger(n)||n< -2147483648||n>4294967295)this.fail('Invalid native control property on '+model.name,module);this.data.u32(n);}
     // Recreate restores authored values, not stale state from an unloaded HWND.
     control.initialState=values;
+    this.prepareNativeImageList(control);this.prepareNativeControlPictures(control);this.prepareNativeDialog(control);this.prepareNativeGrid(control);this.prepareNativeChart(control);
     if(NATIVE_DATE_CONTROLS.has(model.type)) {
       let fields;try{fields=nativeDateFields(p.Value);}catch(error){this.fail(model.name+': '+error.message,module);}
       control.dateSeed='control-date:'+module.name+':'+control.key;this.ro.align(4).label(control.dateSeed);for(const n of fields)this.ro.u16(n);
@@ -73,9 +82,10 @@ export const nativeControlMethods={
       const descriptor=control.nativeDescriptor,{style,ex}=nativeControlStyle(type,p),parent=order.parents.get(control)||module;
       control.nativeParent=parent;
       for(let i=0;i<control.initialState.length;i++)x.value(control.initialState[i]).store(control.state,i*4);
+      if(descriptor.nonvisual){this.initializeNativeImageList(control);this.initializeNativeDialog(control);continue;}
       const drop=(type==='ComboBox'&&Number(p.Style)!==1)||type==='DriveListBox'?160:0;
       x.api('user32.dll','CreateWindowExW',[ex,this.string(descriptor.className),this.string(p.Text??p.Caption??''),style,this.pixels(p.Left??0),this.pixels(p.Top??0),this.pixels(p.Width??1440),this.pixels(p.Height??420)+drop,mem(parent.handle),control.id,mem('instance'),0]).test().branch('e','error:7').store(control.handle);
-      x.api('user32.dll','SetWindowLongW',[mem(control.handle),-21,control.state]);
+      x.api('user32.dll','SetWindowLongW',[mem(control.handle),-21,control.state]);this.initializeNativeTabPage(control);
       if(control.oldProcedure)x.api('user32.dll','SetWindowLongW',[mem(control.handle),-4,'control-procedure:'+module.name+':'+control.key]).test().branch('e','error:7').store(control.oldProcedure);
       this.applyNativeControlFont(control);this.initializeNativeControlFont(control);
       const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[mem(control.handle),msg,w,l]);
@@ -101,13 +111,15 @@ export const nativeControlMethods={
       if(type==='StatusBar'){send(0x409,1);send(0x40b,255,this.string(p.SimpleText??''));}
       if(type==='Toolbar')send(0x41e,20);
       if(NATIVE_TAB_CONTROLS.has(type)) {
-        for(const [index,tab]of control.tabs.entries()){const data='control-tab:'+module.name+':'+control.key+':'+index,caption=this.string(tab.Caption??'');this.ro.align(4).label(data).u32(1).u32(0).u32(0).reference(caption).u32(0).u32(-1).u32(0);send(0x133e,index,data);}
+        for(const [index,tab]of control.tabs.entries()){const data='control-tab:'+module.name+':'+control.key+':'+index,caption=this.string(tab.Caption??''),image=this.nativeBoundImageIndex(control,tab.Image);this.ro.align(4).label(data).u32(image<0?1:3).u32(0).u32(0).reference(caption).u32(0).u32(image).u32(0);send(0x133e,index,data);}
         send(0x130c,Number(p.Tab??0));
       }
       if(NATIVE_DATE_CONTROLS.has(type)){send(type==='DTPicker'?0x1002:0x1002,0,control.dateSeed);if(type==='DTPicker'&&p.CustomFormat)send(0x1032,0,this.string(p.CustomFormat));}
-      this.createNativeControlCollections(control);this.createNativeFileControl(control);this.initializeNativeRichText(control);
+      this.initializeNativeGrid(control);this.initializeNativeChart(control);this.initializeNativeControlPictures(control);this.createNativeControlCollections(control);this.createNativeFileControl(control);this.initializeNativeRichText(control);
       if(control.tooltip)this.createNativeTooltip(module,control);
     }
+    this.initializeNativeImageBindings(module);
+    for(const control of module.controls.values())this.applyNativeTabPages(control);
   },
   createNativeTooltip(module,control){
     const x=this.x;
@@ -119,6 +131,7 @@ export const nativeControlMethods={
   nativeControlState(object){
     // Scalars use a relocated address; dynamically indexed controls resolve
     // their own HWND user-data, never the first element's design values.
+    if(['CommonDialog','ImageList'].includes(object.model?.type)){this.x.value(this.controlHandleRef(object));return;}
     if(!object.indexed&&!object.boundIndex&&object.state)this.x.value(object.state);
     else this.x.api('user32.dll','GetWindowLongW',[this.controlHandleRef(object),-21]).test().branch('e','error:5');
   },
@@ -127,12 +140,12 @@ export const nativeControlMethods={
     disposeNativeStandaloneTags(this,module);
     if(module.tooltip){const skip=x.unique();x.value(mem(module.tooltip)).test().branch('e',skip).push().invoke('user32.dll','DestroyWindow').value(0).store(module.tooltip).label(skip);}
     for(const control of module.controls.values())if(control.state){
-      this.disposeNativeFileControl(control);this.disposeNativeControlFont(control);
+      this.disposeNativeGrid(control);this.disposeNativeChart(control);this.disposeNativeImageList(control);this.disposeNativePictures(control);this.disposeNativeDialog(control);this.disposeNativeFileControl(control);this.disposeNativeControlFont(control);
       for(const [offset,dll,fn]of [[28,'oleaut32.dll','SysFreeString'],[64,'gdi32.dll','DeleteObject']]){const skip=x.unique();x.value({memory:control.state,addend:offset}).test().branch('e',skip).push().invoke(dll,fn).value(0).store(control.state,offset).label(skip);}
     }
   },
   nativeControlsReport(){
     const types=[...new Set([...this.modules.values()].flatMap(m=>[...m.controls.values()].map(c=>c.model.type)))].sort();
-    return {types,dependencies:this.nativeControlDependencies,implementation:'Win32 HWND/common-controls/GDI',embeddedRuntime:false,runtime:{richTextFeatures:[...(this.nativeRichTextFeatures||[])].sort(),mutableFonts:!!this.nativeMutableFonts,fileFamilies:[...(this.nativeFileFamilies||[])].sort(),ownerDrawingFamilies:[...(this.nativeDrawingFamilies||[])].sort()}};
+    return {types,dependencies:this.nativeControlDependencies,implementation:'Win32 HWND/common-controls/GDI',embeddedRuntime:false,runtime:{tabPages:this.nativeTabPages.length,charts:this.chartModule?{instances:this.nativeCharts.length,features:[...this.chartFeatures].sort(),procedures:this.chartEmitted}:null,grids:this.gridModule?{kernel:'private VB-to-x86',instances:this.nativeGridControls.length,features:[...this.gridFeatures].sort(),procedures:this.gridEmitted}:null,imageLists:[...(this.nativeImageListFeatures||[])].sort(),pictures:[...(this.nativePictureFeatures||[])].sort(),pictureBytes:[...(this.nativePictures?.values()||[])].reduce((n,p)=>n+p.length,0),dialogs:[...(this.nativeDialogs||[])].sort(),selectionFormatting:[...(this.nativeSelectionFormats||[])].sort(),richTextFeatures:[...(this.nativeRichTextFeatures||[])].sort(),mutableFonts:!!this.nativeMutableFonts,fileFamilies:[...(this.nativeFileFamilies||[])].sort(),ownerDrawingFamilies:[...(this.nativeDrawingFamilies||[])].sort()}};
   }
 };

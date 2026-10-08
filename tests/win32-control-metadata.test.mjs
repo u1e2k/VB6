@@ -88,3 +88,13 @@ for(const optimization of [0,1,2])test('extended editing metadata fixture has de
  assert.ok(checks.some(s=>s.includes('unload/reload')));assert.ok(checks.some(s=>s.includes('dialog tab traversal')));
  assert.ok(Buffer.from(a.bytes).includes(Buffer.from('control\0seed','utf16le')));
 });
+
+test('nonvisual ImageList and CommonDialog Tag validates the owner form, not a state pointer',()=>{
+ for(const type of ['ImageList','CommonDialog']){
+  const {c,object,form,section}=harness(type);
+  getNativeMetadataProperty(c,object,'tag');setNativeMetadataProperty(c,object,'tag',{kind:'literal',value:'counted\0tag'});
+  assert.equal(section.fixups.filter(f=>f.label===form.handle).length,2);
+  assert.equal(section.fixups.some(f=>f.label===object.handle),false);
+  assert.equal(section.fixups.filter(f=>f.label==='native:string:copy').length,2);
+ }
+});

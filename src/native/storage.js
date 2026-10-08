@@ -1,3 +1,4 @@
+import {mem32} from './x86-operands.js';
 /** Native storage lowering. BSTR ownership is explicit; no JS or VB runtime is embedded. */
 import {NATIVE_ARRAY_MAX_BYTES, NATIVE_ARRAY_MAX_RANK} from './arrays.js';
 const key = value => String(value).toLowerCase();
@@ -69,6 +70,18 @@ export const nativeStorageMethods = {
       (c.stringTemps ||= []).push(variable);
     } else { variable.label = variable.name; this.allocateStorage(variable); }
     return variable;
+  },
+  /** Adopt one statement-scoped native reference in EAX. Error dispatch and
+   * normal instruction cleanup share the same release path. */
+  ownNativePointer(release,blockScoped=false) {
+    if(!this.context?.proc?.name)this.fail('Native object temporary requires a procedure frame');
+    const variable=this.arrayWorkspace(4,'native-owned-reference'),x=this.x;
+    (this.context.nativeOwnedTemps ||= []).push({variable,release,blockScoped});
+    x.push();this.rawStorageAddress(variable);x.mov('ebx','eax').pushOperand(mem32({base:'ebx'})).call(release).popOperand('edi').mov(mem32({base:'ebx'}),'edi').mov('eax','edi');
+    return variable;
+  },
+  clearNativeOwnedPointer({variable,release}) {
+    const x=this.x;this.rawStorageAddress(variable);x.emit(0xff,0x30,0xc7,0x00,0,0,0,0).call(release);
   },
   /** Adopt a freshly allocated BSTR in EAX. Each source expression has its own slot. */
   ownString() {

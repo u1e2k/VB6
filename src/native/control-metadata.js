@@ -3,6 +3,7 @@
  * separate slots; HWND controls retain their existing state-layout Tag field.
  */
 import {mem32} from './x86-operands.js';
+import {NATIVE_CONTROL_CATALOG} from './control-catalog.js';
 const TAG_OFFSET=28,WS_TABSTOP=0x10000,GWL_STYLE=-16;
 const tabbable=new Set(['TextBox','RichTextBox','CommandButton','CheckBox','OptionButton','ListBox','ComboBox','HScrollBar','VScrollBar','Slider','UpDown','TreeView','ListView','Toolbar','TabStrip','SSTab','DTPicker','MonthView','DriveListBox','DirListBox','FileListBox']);
 const key=value=>String(value).toLowerCase();
@@ -24,7 +25,9 @@ function tagAddress(c,object){
  x.jump('error:340').label(done);
 }
 function requireLiveObject(c,object){
- const owner=object.model?.type==='Timer'?object.module:object;
+ const type=object.model?.type;
+ const windowless=type==='Timer'||NATIVE_CONTROL_CATALOG[type]?.nonvisual;
+ const owner=windowless?object.module:object;
  c.x.api('user32.dll','IsWindow',[c.controlHandleRef(owner)]).test().branch('e','error:5');
 }
 function checkWindowLong(c){

@@ -40,7 +40,9 @@ runtime's Option Compare policy; this is not an exhaustive original-VB6 oracle.
 ## Tag, Name, and TabStop
 
 Design and runtime `Tag` values on supported HWND controls, forms, and scalar or
-statically indexed Timers use owned counted BSTR storage. Getters produce owned
+statically indexed Timers use owned counted BSTR storage. Existing nonvisual
+ImageList/CommonDialog tags retain their state-record ownership; their owner form
+is validated as an HWND rather than treating the state pointer as a window. Getters produce owned
 snapshots. Setters resolve the receiver, copy the incoming value, swap the owner,
 and then release the previous value. Empty strings and self-assignment are valid.
 A setter whose receiver is no longer live after RHS evaluation reports error 5
@@ -86,8 +88,9 @@ and pruned O2. The editing family retains its original 14 assertions and adds 23
 metadata groups, running at O0, O1, and O2. New checks include counted design-time
 and runtime tags, snapshots, empty/self assignment, independent timer/HWND array
 state, unload/reload, actual `GetNextDlgTabItem` traversal, and repeated replacement.
-Original fixture families, matrix completeness checks, timeouts, executable hash
-verification, and no-extraction checks are retained.
+The integrated Windows control matrix retains all 19 main-branch families:
+57 executables and 669 assertions. Matrix completeness checks, timeouts, executable
+hash verification, and no-extraction checks are retained.
 
 Node compilation, encoding and ownership checks are not Windows execution proof.
 Review the current commit's `native-optimizer-execution` and
