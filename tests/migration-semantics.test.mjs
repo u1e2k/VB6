@@ -5,7 +5,7 @@ import {convertVbNetProject} from '../src/migration/index.js';
 import {project, procedure} from './migration-fixtures.mjs';
 
 function converted(input) {
-  const result = convertVbNetProject(input, {platform: 'AnyCPU'});
+  const result = convertVbNetProject(input, {platform: 'AnyCPU',codeStyle:'compatibility',runtime:'project'});
   assert.equal(result.success, true, JSON.stringify(result.diagnostics));
   return result.files['Application/Module1.vb'];
 }

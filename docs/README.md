@@ -21,6 +21,7 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 - [Language frontend](LANGUAGE-FRONTEND.md): scanning, declarations and diagnostics.
 - [VB.NET / .NET 10 migration](VBNET-MIGRATION.md): source conversion, ZIP export,
+- [Native-first VB.NET output and support policies](VBNET-NATIVE-FIRST.md)
   reusable packages, compatibility runtime, extensions and conformance gates.
 - [Compiler/runtime](COMPILER-RUNTIME.md) and [scalar/Variant semantics](SCALAR-COMPATIBILITY.md).
 - [Source debugger](DEBUGGER.md), [extended debugger contracts](DEBUGGER-COMPATIBILITY.md),
