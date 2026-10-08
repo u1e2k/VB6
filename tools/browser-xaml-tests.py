@@ -126,7 +126,7 @@ class XamlAcceptance(unittest.TestCase):
         text=self.open();offset=text.index(' Caption="Original"')
         self.input.evaluate('(e,n)=>{e.focus();e.setSelectionRange(n,n);}',offset);self.input.press('Control+Space')
         self.assertGreater(self.page.locator('.xaml-completions [role="option"]').count(),0);self.input.press('Escape')
-        self.input.evaluate('(e,n)=>e.setSelectionRange(n,n)',text.indexOf('Caption="Original"')+2);self.input.press('Control+i')
+        self.input.evaluate('(e,n)=>e.setSelectionRange(n,n)',text.index('Caption="Original"')+2);self.input.press('Control+i')
         self.assertIn('Caption',self.page.locator('.xaml-info').inner_text())
         self.input.press('Control+f');self.page.get_by_label('Find in XAML',exact=True).fill('Original');self.page.get_by_label('Find in XAML',exact=True).press('Enter')
         self.assertEqual(self.input.evaluate('e=>e.value.slice(e.selectionStart,e.selectionEnd)'),'Original')
