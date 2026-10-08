@@ -2,6 +2,7 @@
  * are rejected: a byte copy must never masquerade as COM record ownership.
  * Fields use natural scalar widths with a maximum four-byte alignment.
  */
+import {nativeEventItemStorage} from './control-items.js';
 import {foldNativeInteger} from './optimizer.js';
 const key=v=>String(v).toLowerCase();
 const align=(n,a)=>Math.ceil(n/a)*a;
@@ -69,6 +70,7 @@ export class NativeRecordLayouts {
 
 export const nativeRecordMethods={
   recordStorage(decl,module) {
+    const item=nativeEventItemStorage(this,decl,module,this.preparingProcedure);if(item)return item;
     const layout=this.recordLayouts.resolve(decl.type,module);
     if(!layout)return null;
     if(decl.bounds!=null)this.fail('Native arrays of records require SAFEARRAY record ownership and are not yet lowered',module);

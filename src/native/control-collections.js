@@ -1,3 +1,4 @@
+import {nativeItemObject,prepareNativeItems,createNativeItems,getNativeItemProperty,invalidateNativeItems} from './control-items.js';
 /** Persisted common-control content and collection-wide native operations. Item
  * objects are not silently approximated as HWNDs: unlowered member calls fail. */
 const mem=memory=>({memory}),key=s=>String(s).toLowerCase();
@@ -14,11 +15,13 @@ export function nativeTreePlan(nodes){
 }
 export const nativeControlCollectionMethods={
   nativeControlCollectionObject(node){
+    const item=nativeItemObject(this,node);if(item)return item;
     if(node.kind!=='member'||!['nodes','listitems','columnheaders','panels','buttons','tabs'].includes(key(node.name)))return null;
     const owner=this.object(node.object),kind=key(node.name);if(!collections[owner?.model?.type]?.includes(kind))return null;
     return {nativeCollection:true,owner,kind,module:owner.module};
   },
   prepareNativeControlCollections(control){
+    prepareNativeItems(this,control);
     const p=control.model.properties;
     try{if(control.model.type==='TreeView')control.treePlan=nativeTreePlan(p.Nodes||[]);}catch(error){this.fail(control.model.name+': '+error.message,control.module);}
     if(control.model.type==='ListView'){
@@ -30,6 +33,7 @@ export const nativeControlCollectionMethods={
     if(control.model.type==='Toolbar'&&(!Array.isArray(p.Buttons||[])||(p.Buttons||[]).length>10000))this.fail('Native Toolbar supports at most 10000 saved buttons',control.module);
   },
   createNativeControlCollections(control){
+    createNativeItems(this,control);
     const {model,module}=control,p=model.properties,type=model.type,x=this.x;
     const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[mem(control.handle),msg,w,l]);
     if(type==='TreeView'){
@@ -76,6 +80,7 @@ export const nativeControlCollectionMethods={
     }
   },
   getNativeCollectionProperty(object,property){
+    if(getNativeItemProperty(this,object,property))return true;
     if(!object.nativeCollection)return false;
     if(property!=='count')this.fail('Native collection property is not lowered: '+object.kind+'.'+property);
     const x=this.x,owner=object.owner;this.ensure(owner);
@@ -88,6 +93,7 @@ export const nativeControlCollectionMethods={
     if(method!=='clear'||args.length)this.fail('Native collection method is not lowered: '+object.kind+'.'+method);
     const owner=object.owner,x=this.x;this.ensure(owner);
     const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[this.controlHandleRef(owner),msg,w,l]);
+    if(['nodes','listitems','tabs'].includes(object.kind))invalidateNativeItems(this,owner);
     if(object.kind==='nodes')send(0x1101,0,0xffff0000);
     if(object.kind==='listitems')send(0x1009);
     if(object.kind==='tabs'){send(0x1309);x.api('user32.dll','SendMessageW',[mem(owner.module.handle),0x8003,0,this.controlHandleRef(owner)]);}
