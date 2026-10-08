@@ -3,7 +3,16 @@ const key=value=>String(value).toLowerCase().replace(/[$%&!#@]$/, '');
 
 /** Pure binding; validates the complete list before emitting any argument code. */
 export function planNativeArguments(signature,args,fail=message=>{throw new Error(message);}) {
-  const params=signature.params, slots=new Array(params.length), order=[];
+  const params=signature.params, paramArray=params.findIndex(p=>p.paramArray);
+  if(paramArray!==-1) {
+    if(paramArray!==params.length-1||params.some(p=>p.optional)||params[paramArray].bounds?.length!==0||key(params[paramArray].type)!=='variant')
+      fail('Native ParamArray must be the final unsized Variant array without Optional parameters');
+    if(args.some(a=>a?.kind==='named'))fail('Native ParamArray procedures require positional arguments: '+signature.name);
+    const prefix=planNativeArguments({...signature,params:params.slice(0,paramArray)},args.slice(0,paramArray),fail);
+    const entry={index:paramArray,node:{kind:'nativeParamArray',args:args.slice(paramArray)},omitted:false};
+    return {slots:[...prefix.slots,entry],order:[...prefix.order,entry]};
+  }
+  const slots=new Array(params.length), order=[];
   const names=new Map(params.map((p,i)=>[key(p.name),i]));
   let positional=0,named=false;
   for(const argument of args) {
