@@ -90,7 +90,7 @@ has no XAML schema/parser/IDE dependency. Existing export/runtime limits remain.
 
 ## WinUI conversion boundary
 
-The package recognizes a representative set of 98 built-in schema types. Its
+The package recognizes a representative built-in schema vocabulary. Its
 host object writer supports extensible construction and explicit resource,
 binding/event/template hooks; these contracts are not a WinUI UI implementation.
 The VB6 adapter supports selected forms/containers/basic controls, scalar text,
