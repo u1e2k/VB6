@@ -70,14 +70,23 @@ export const nativeFlowMethods={
       }else{
         const object=this.object(ins.expr);
         if(!object||object.controlArray)this.fail('Native With requires an addressable POD record, form or indexed/scalar intrinsic control');
-        this.ensure(object);
-        // An indexed control is resolved now, not again at every member access.
-        binding={active,object:{...object,...(object.indexed?{indexed:false,boundIndex:true}:{}),nativeWithActive:active}};
+        if(object.nativeImageItem){
+          this.nativeImageItemAddress(object);x.cmp(mem32({base:'eax',displacement:16}),0x7fffffff).branch('ae','error:6').inc(mem32({base:'eax',displacement:16}));
+          const variable=this.ownNativePointer('native:imagelist:free-node',true);
+          binding={active,reference:{variable,release:'native:imagelist:free-node'},object:{...object,boundImageItem:variable,nativeWithActive:active}};
+        }else if(object.nativePicture){
+          this.nativePictureExpression(ins.expr);const variable=this.ownNativePointer('native:picture:release',true);
+          binding={active,reference:{variable,release:'native:picture:release'},object:{...object,boundPicture:variable,nativeWithActive:active}};
+        }else{
+          this.ensure(object);
+          // An indexed control is resolved now, not again at every member access.
+          binding={active,object:{...object,...(object.indexed?{indexed:false,boundIndex:true}:{}),nativeWithActive:active}};
+        }
       }
       x.mov(memory(active),-1);context.withBindings.push(binding);return true;
     }
     if(ins.op==='withPop'){
-      const binding=context.withBindings.pop();if(!binding)this.fail('Unbalanced native With block');x.mov(memory(binding.active),0);return true;
+      const binding=context.withBindings.pop();if(!binding)this.fail('Unbalanced native With block');x.mov(memory(binding.active),0);if(binding.reference)this.clearNativeOwnedPointer(binding.reference);return true;
     }
     if(ins.op==='withUnwind'){
       if(!Number.isInteger(ins.count)||ins.count<0||ins.count>context.withBindings.length)this.fail('Invalid native With unwind');

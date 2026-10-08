@@ -36,8 +36,8 @@ export const nativeControlCollectionMethods={
       const plan=control.treePlan;
       for(const item of plan)item.handle=this.slot('tree-item:'+module.name+':'+control.key+':'+item.index);
       for(const item of plan){
-        const data='tree-insert:'+module.name+':'+control.key+':'+item.index;
-        this.data.align(4).label(data).u32(0xffff0000).u32(0xffff0002).u32(1).u32(0).u32(0).u32(0).reference(this.string(item.value.Text||'')).u32(0).u32(0).u32(0).u32(0).u32(0);
+        const data='tree-insert:'+module.name+':'+control.key+':'+item.index,image=this.nativeBoundImageIndex(control,item.value.Image),selected=this.nativeBoundImageIndex(control,item.value.SelectedImage??item.value.Image);
+        this.data.align(4).label(data).u32(0xffff0000).u32(0xffff0002).u32(1|(image<0?0:2)|(selected<0?0:32)).u32(0).u32(0).u32(0).reference(this.string(item.value.Text||'')).u32(0).u32(image).u32(selected).u32(0).u32(0);
         if(item.parent)x.value(mem(item.parent.handle)).store(data);
         send(0x1132,0,data);x.test().branch('e','error:7').store(item.handle);
       }
@@ -51,8 +51,8 @@ export const nativeControlCollectionMethods={
         send(0x1061,index,data);x.compare(-1).branch('e','error:7');
       }
       for(const [index,item]of control.items.entries()){
-        const data='list-item:'+module.name+':'+control.key+':'+index,caption=this.string(item.Text??'');
-        this.ro.align(4).label(data).u32(1).u32(index).u32(0).u32(0).u32(0).reference(caption).u32(0).u32(-1).u32(0).u32(0);
+        const data='list-item:'+module.name+':'+control.key+':'+index,caption=this.string(item.Text??''),image=this.nativeBoundImageIndex(control,item.SmallIcon??item.Icon,item.SmallIcon!==undefined?'smallicons':'icons');
+        this.ro.align(4).label(data).u32(image<0?1:3).u32(index).u32(0).u32(0).u32(0).reference(caption).u32(0).u32(image).u32(0).u32(0);
         send(0x104d,0,data);x.compare(-1).branch('e','error:7');
         for(const [subIndex,text]of (item.SubItems||item.subItems||[]).entries()){
           const sub=data+':'+subIndex,caption=this.string(text);this.ro.align(4).label(sub).u32(1).u32(index).u32(subIndex+1).u32(0).u32(0).reference(caption).u32(0).u32(0).u32(0).u32(0);
@@ -71,7 +71,7 @@ export const nativeControlCollectionMethods={
       const captions=p.Buttons.map(button=>this.string(button.Caption||button.Key||''));
       const data='toolbar-buttons:'+module.name+':'+control.key;this.ro.align(4).label(data);
       module.nextToolbarId ||= 20001;
-      for(const [index,button] of p.Buttons.entries()){if(module.nextToolbarId>60000)this.fail('Native toolbar command ID limit exceeded',module);this.ro.u32(button.Style===3?8:-2).u32(module.nextToolbarId++).emit((button.Enabled===0?0:4)|(button.Visible===0?8:0)|(button.Value?1:0),button.Style===3?1:16|(button.Style===1?2:button.Style===2?6:0),0,0).u32(0).reference(captions[index]);}
+      for(const [index,button] of p.Buttons.entries()){if(module.nextToolbarId>60000)this.fail('Native toolbar command ID limit exceeded',module);this.ro.u32(button.Style===3?8:button.Image===undefined?-2:this.nativeBoundImageIndex(control,button.Image)).u32(module.nextToolbarId++).emit((button.Enabled===0?0:4)|(button.Visible===0?8:0)|(button.Value?1:0),button.Style===3?1:16|(button.Style===1?2:button.Style===2?6:0),0,0).u32(0).reference(captions[index]);}
       send(0x444,p.Buttons.length,data);x.test().branch('e','error:7'); // TB_ADDBUTTONSW
     }
   },
@@ -90,7 +90,7 @@ export const nativeControlCollectionMethods={
     const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[this.controlHandleRef(owner),msg,w,l]);
     if(object.kind==='nodes')send(0x1101,0,0xffff0000);
     if(object.kind==='listitems')send(0x1009);
-    if(object.kind==='tabs')send(0x1309);
+    if(object.kind==='tabs'){send(0x1309);x.api('user32.dll','SendMessageW',[mem(owner.module.handle),0x8003,0,this.controlHandleRef(owner)]);}
     if(object.kind==='panels'){send(0x409,1);this.nativeControlState(owner);x.emit(0xc7,0x40,24,0,0,0,0);}
     if(object.kind==='buttons'||object.kind==='columnheaders'){const loop=x.unique();x.label(loop);send(object.kind==='buttons'?0x416:0x101c,0,0);x.test().branch('ne',loop);}
     return true;
