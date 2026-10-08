@@ -37,7 +37,7 @@ MyApplication.build.json
 
 The bridge performs code-signature verification before returning the archive. The browser validates bundle metadata, Mach-O architecture, execute permissions, safe ZIP entries and SHA-256 hashes. **Browser validation is not cryptographic signature verification.** It preserves the original archive rather than rebuilding a ZIP that could lose permissions or signature-related metadata.
 
-Closing the dialog cancels the request and clears its token. Changing the project while a build is pending prevents downloading a result for the old snapshot. A keyboard-accessible Save ZIP link remains available when automatic download is suppressed. No export path runs the produced application.
+Closing the dialog cancels the request and clears its token. Cancellation settles the client even when an injected transport or response stream ignores its abort signal; late response bodies are discarded and cannot update a replacement connection. Response deadlines cover both headers and body streaming, and every completed response must match an advertised Content-Length. Changing the project while a build is pending prevents downloading a result for the old snapshot. A keyboard-accessible Save ZIP link remains available when automatic download is suppressed. No export path runs the produced application.
 
 ### Source build kit
 
@@ -126,7 +126,7 @@ HTTP requests can select compiler target options, not arbitrary SDK source, shel
 
 This is an authority boundary, not a sandbox. The compiler invokes a local native toolchain, and exported apps can use native capabilities available to their process. Approve only trusted projects. Source text is emitted as checked values rather than concatenated executable C++ fragments, but that is not a guarantee that arbitrary untrusted compilation is risk-free.
 
-The native builder uses direct process arguments, source/toolchain-keyed runtime caching, private staging, output-path checks, Mach-O segment inspection and native signature verification. SDK line endings are normalized before embedding so Windows CRLF and Unix LF checkouts yield the same build-kit revision and IDE fingerprints.
+The native builder uses direct process arguments, source/toolchain-keyed runtime caching, private staging, output-path checks, Mach-O segment inspection and native signature verification. Each POSIX compiler invocation owns a separate process group. Cancellation, timeout, excessive diagnostics or a failing log callback terminates that group and waits for process exit and closed output streams before source staging can be removed. This does not sandbox a malicious tool that escapes its process group. UTF-8 output is decoded incrementally and independently for stdout and stderr. SDK line endings are normalized before embedding so Windows CRLF and Unix LF checkouts yield the same build-kit revision and IDE fingerprints.
 
 Default signing is ad-hoc. It is **not** Developer ID signing, notarization, Gatekeeper acceptance or App Store qualification. A trusted local CLI can supply its signing identity with `--identity`; project/HTTP data cannot choose it. No signing credential is included in project exports. Developer ID distribution and notarization remain the developer's responsibility.
 

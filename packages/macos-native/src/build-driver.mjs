@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {StringDecoder} from 'node:string_decoder';
 import {pathToFileURL} from 'node:url';
 import {macOSOptions} from './target.js';
 import {inspectMachO} from './mach-o.js';
@@ -13,23 +14,73 @@ const MAX_LOG=4*1024*1024;
 export class NativeBuildError extends Error {
   constructor(message,details={}) {super(message);this.name='NativeBuildError';Object.assign(this,details);}
 }
+/** Run one owned compiler process tree. Abort is complete only after `close`,
+ * not merely after a signal was sent: build staging must outlive native tools.
+ * On POSIX each tool leads a new process group; this also stops clang's children.
+ * This is lifecycle containment, not a sandbox against a tool escaping its group.
+ */
 export async function runTool(executable,args,{cwd,timeout=180000,signal,log}={}) {
-  if(!path.isAbsolute(executable)||!Array.isArray(args)||args.some(a=>typeof a!=='string'||a.includes('\0')))throw new TypeError('Absolute tool and NUL-free string arguments required');
+  if(typeof executable!=='string'||!path.isAbsolute(executable)||executable.includes('\0')||!Array.isArray(args)||args.some(a=>typeof a!=='string'||a.includes('\0')))throw new TypeError('Absolute tool and NUL-free string arguments required');
   if(!Number.isInteger(timeout)||timeout<1000||timeout>600000)throw new TypeError('Tool timeout must be 1000..600000 ms');
+  if(log!==undefined&&typeof log!=='function')throw new TypeError('Native tool log must be a function');
+  if(signal!==undefined&&!(signal instanceof AbortSignal))throw new TypeError('Native tool signal must be an AbortSignal');
+  const tool=path.basename(executable);
+  const cancelled=()=>new NativeBuildError('Native tool cancelled',{tool,code:'ABORT_ERR',cause:signal?.reason});
+  if(signal?.aborted)throw cancelled();
   return new Promise((resolve,reject)=>{
-    let output='',size=0,timedOut=false,settled=false;
-    const child=spawn(executable,args,{cwd,env:{...process.env,LC_ALL:'C'},shell:false,stdio:['ignore','pipe','pipe'],signal});
-    const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},timeout);timer.unref();
-    function finish(error,value){if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(value);}
-    const consume=data=>{size+=data.length;if(size>MAX_LOG){child.kill('SIGKILL');finish(new NativeBuildError('Native tool output exceeds 4 MiB',{tool:path.basename(executable)}));return;}const text=data.toString('utf8');output+=text;log?.(text);};
-    child.stdout.on('data',consume);child.stderr.on('data',consume);
-    child.on('error',error=>finish(new NativeBuildError(error.message,{cause:error,tool:path.basename(executable),output})));
-    child.on('close',(code,killedBy)=>{
-      if(code!==0)finish(new NativeBuildError(timedOut?'Native tool timed out':`${path.basename(executable)} failed (${code??killedBy})`,{tool:path.basename(executable),args,code,output}));
-      else finish(null,output.trim());
+    const processGroup=process.platform!=='win32';
+    let child;
+    try {
+      // Keep the process/stdio referenced. Do not use spawn's signal option:
+      // its AbortError can precede process exit, releasing build files too early.
+      child=spawn(executable,args,{cwd,env:{...process.env,LC_ALL:'C'},shell:false,
+        detached:processGroup,stdio:['ignore','pipe','pipe']});
+    }catch(cause){reject(new NativeBuildError(cause.message,{tool,cause}));return;}
+    let output='',size=0,failure=null,closed=false,stopping=false;
+    const stdout=new StringDecoder('utf8'),stderr=new StringDecoder('utf8');
+    const stop=error=>{
+      failure??=error;
+      if(closed||stopping)return;
+      stopping=true;
+      try {
+        if(processGroup&&child.pid)process.kill(-child.pid,'SIGKILL');
+        else if(child.pid&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');
+      }catch(cause){
+        // ESRCH means the tool/group has already exited. Still wait for `close`.
+        if(cause.code!=='ESRCH')failure.terminationError=cause;
+      }
+    };
+    const abort=()=>stop(cancelled());
+    const timer=setTimeout(()=>stop(new NativeBuildError('Native tool timed out',
+      {tool,code:'ETIMEDOUT',timeout})),timeout);
+    const append=text=>{
+      if(!text)return;
+      output+=text;
+      if(log)try{log(text);}catch(cause){stop(new NativeBuildError('Native tool log callback failed',{tool,cause}));}
+    };
+    const consume=(decoder,data)=>{
+      if(failure)return; // Drain pipes without retaining data after cancellation.
+      size+=data.length;
+      if(size>MAX_LOG){stop(new NativeBuildError('Native tool output exceeds 4 MiB',{tool,code:'OUTPUT_LIMIT'}));return;}
+      append(decoder.write(data));
+    };
+    child.stdout.on('data',data=>consume(stdout,data));
+    child.stderr.on('data',data=>consume(stderr,data));
+    child.once('error',cause=>stop(new NativeBuildError(cause.message,{tool,cause})));
+    child.once('close',(code,killedBy)=>{
+      closed=true;
+      clearTimeout(timer);signal?.removeEventListener('abort',abort);
+      if(!failure){append(stdout.end());append(stderr.end());}
+      if(failure){Object.assign(failure,{args:[...args],output,exitCode:code,killedBy});reject(failure);}
+      else if(code!==0)reject(new NativeBuildError(`${tool} failed (${code??killedBy})`,
+        {tool,args:[...args],code,killedBy,output}));
+      else resolve(output.trim());
     });
+    signal?.addEventListener('abort',abort,{once:true});
+    if(signal?.aborted)abort();
   });
 }
+
 async function regularFile(filename,max=16*1024*1024) {
   const stat=await fs.lstat(filename);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.size>max)throw new NativeBuildError('Expected a bounded regular file: '+filename);
