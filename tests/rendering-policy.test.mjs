@@ -60,7 +60,7 @@ test('device acquisition is shared by window and invalidated after loss', async 
 });
 test('device failure is retryable and pending acquisition has a bounded timeout', async () => {
   let count = 0; const view = {navigator: {gpu: {requestAdapter: async () => { count++; throw Error('adapter failed'); }}}};
-  await assert.rejects(acquireDevice(view)); await assert.rejects(acquireDevice(view)); assert.equal(count, 2);
+  await assert.rejects(acquireDevice(view)); await assert.rejects(acquireDevice(view)); assert.equal(count, 8, 'four bounded adapter options on each independent acquisition');
   await assert.rejects(deadline(new Promise(() => {}), 5), /timed out/);
   assert.equal(await deadline(Promise.resolve(42), 100), 42);
 });
