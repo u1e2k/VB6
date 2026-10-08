@@ -34,7 +34,10 @@ export const nativeChartMethods={
   x.value(control.chartIndex).store(control.state,76).push(s.cols).push(s.rows).push(mem(control.handle)).push(control.chartIndex).call(this.chartProc('initialize').label);this.checkNativeError();x.push(control.chartIndex).call(this.chartProc('stamp').label);this.checkNativeError();x.store(control.state,80);
   x.value(0).store('native:chart:state',base+F.redraw*4).value(s.type).store('native:chart:state',base+F.charttype*4);
   const setIndex=(r,c)=>x.value(r).store('native:chart:state',base+F.row*4).value(c).store('native:chart:state',base+F.col*4);
-  for(const {row,col,value}of s.values){setIndex(row,col);this.invokeChart('setdata',[...this.chartArgs(control),lit(value)]);}
+  // Persisted chart values are Double even when the JSON number is integral.
+  // Untagged synthetic literals intentionally use Long in the scalar compiler;
+  // a fractional seed would otherwise emit an unconditional overflow branch.
+  for(const {row,col,value}of s.values){setIndex(row,col);this.invokeChart('setdata',[...this.chartArgs(control),{kind:'literal',value,valueType:'double'}]);}
   for(const [labels,field,n]of [[s.rowLabels,F.rowlabels,s.rows],[s.colLabels,F.collabels,s.cols]]){
    if(!Array.isArray(labels)||labels.length>n)this.fail('Native chart labels exceed their axis');for(let i=0;i<labels.length;i++){setIndex(i+1,i+1);this.invokeChart('setlabel',[...this.chartArgs(control),lit(field),lit(String(labels[i]??''))]);}
   }
