@@ -57,3 +57,11 @@ test('HTML fallback does not present previous canvas timings or geometry as curr
   assert.equal(result.last,null);assert.equal(result.buildP50Ms,0);assert.equal(result.submitCpuP95Ms,0);
   assert.equal(result.frames,81,'lifetime counter remains available');assert.deepEqual(result.candidates,['webgpu','html']);
 });
+
+
+test('generic measurement-only failures keep their evidence source', () => {
+  const live={requested:'html',active:'html',attempts:[]};
+  const measured={results:[{backend:'webgpu',available:false,reason:'No WebGPU adapter'}]};
+  assert.deepEqual(diagnostics.graphicsDiagnosis(live,measured),{code:'GPU_UNAVAILABLE',source:'measurement'});
+  assert.deepEqual(diagnostics.graphicsDiagnosis(live),{code:'NATIVE_RENDERING',source:'renderer'});
+});

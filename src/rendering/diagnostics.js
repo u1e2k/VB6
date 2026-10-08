@@ -23,7 +23,8 @@ export function graphicsDiagnosis(status, measurement = null) {
       (r.details || r.attempts || []).some(a => browserGraphicsDisabled(a.reason))));
     if (failure) return {code: 'BROWSER_GRAPHICS_DISABLED', source, reason: failure.reason};
   }
-  return {code: sources.some(([, failures]) => failures.some(r => ['webgpu', 'webgl2'].includes(r.backend))) ? 'GPU_UNAVAILABLE' : 'NATIVE_RENDERING', source: 'renderer'};
+  const failedSource = sources.find(([, failures]) => failures.some(r => ['webgpu', 'webgl2'].includes(r.backend)));
+  return {code: failedSource ? 'GPU_UNAVAILABLE' : 'NATIVE_RENDERING', source: failedSource?.[0] || 'renderer'};
 }
 export function renderingAdvice(status, environment = {}, measurement = null) {
   if (!status) return [];
