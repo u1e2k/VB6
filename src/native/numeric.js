@@ -1,3 +1,5 @@
+import {planNativeInStrArguments} from './call-plan.js';
+import {mem32} from './x86-operands.js';
 /** Native Single/Double lowering. Floating expressions return an immutable Double
  * snapshot address in EAX; only ABI returns use ST(0). No live FPU values span
  * a call, checkpoint, allocation or VB error transfer. */
@@ -121,12 +123,21 @@ export const nativeNumericMethods = {
       this.floatExpression(args[0]);x.push();this.numeric(args[1]||literal(0));x.push();
       const out=this.floatWorkspace();this.rawStorageAddress(out);x.emit(0x5a,0x59).push().emit(0x52,0x51).call(N+'round');return true;
     }
-    if(name==='instr'){
-      if(args.length<2||args.length>4)this.fail('InStr expects two to four arguments');
-      const offset=args.length===2?0:1,defaultCompare=this.context.module.module.optionCompare==='text'?1:0;
-      this.numeric(offset?args[0]:literal(1));x.push();this.textExpression(args[offset]);x.push();this.textExpression(args[offset+1]);x.push();
-      this.numeric(args[3]||literal(defaultCompare));const ready=x.unique();x.compare(-1).branch('ne',ready).value(defaultCompare).label(ready);
-      x.emit(0x5a,0x59,0x5b).push().emit(0x52,0x51,0x53).call(N+'instr');return true;
+    if(name==='instr'&&!this.resolveProcedure(node.callee)){
+      const plan=planNativeInStrArguments(args,message=>this.fail('InStr expects valid arguments: '+message));
+      const defaultCompare=this.context.module.module.optionCompare==='text'?1:0,slots=new Array(4);
+      for(const entry of plan.order){
+        const expr=entry.omitted?literal(entry.index===0?1:defaultCompare):entry.node;
+        if(entry.index===1||entry.index===2)this.textExpression(expr);
+        else {
+          this.numeric(expr);
+          if(entry.index===3){const ready=x.unique();x.compare(-1).branch('ne',ready).value(defaultCompare).label(ready);}
+        }
+        const slot=this.arrayWorkspace(4,'instr-argument');
+        x.mov(mem32({base:'ebp',displacement:slot.offset}),'eax');slots[entry.index]=slot;
+      }
+      for(const slot of slots.reverse())x.pushOperand(mem32({base:'ebp',displacement:slot.offset}));
+      x.call(N+'instr');return true;
     }
     return false;
   },

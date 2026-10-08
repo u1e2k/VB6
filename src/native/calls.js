@@ -1,41 +1,11 @@
+import {planNativeArguments,planNativeInStrArguments} from './call-plan.js';
+export {planNativeArguments,planNativeInStrArguments};
 /** Early-bound native calls: separate source evaluation order from stdcall slot
  * order, and never expose a literal/read-only snapshot as writable ByRef storage. */
 import {coerce, defaultValue} from '../runtime/values.js';
 import {nativeParameterBytes} from './numeric.js';
 const key=value=>String(value).toLowerCase().replace(/[$%&!#@]$/, '');
 const scalarTypes=new Set(['byte','integer','long','boolean','single','double','currency','date','string']);
-
-/** Pure binding; validates the complete list before emitting any argument code. */
-export function planNativeArguments(signature,args,fail=message=>{throw new Error(message);}) {
-  const params=signature.params, slots=new Array(params.length), order=[];
-  const names=new Map(params.map((p,i)=>[key(p.name),i]));
-  let positional=0,named=false;
-  for(const argument of args) {
-    let index,node=argument;
-    if(argument.kind==='named') {
-      named=true;index=names.get(key(argument.name));node=argument.expr;
-      if(index===undefined)fail('Unknown native named argument: '+argument.name+' in '+signature.name);
-    }else {
-      if(named)fail('Positional argument cannot follow a named argument: '+signature.name);
-      index=positional++;
-      if(index>=params.length)fail('Too many native arguments: '+signature.name);
-    }
-    if(slots[index]!==undefined)fail('Duplicate native argument: '+params[index].name);
-    if(!node||node.kind==='missing') {
-      if(!params[index].optional)fail('Native argument is not optional: '+params[index].name);
-      slots[index]={index,omitted:true};
-    }else {const entry={index,node,omitted:false};slots[index]=entry;order.push(entry);}
-  }
-  params.forEach((p,index)=>{
-    if(slots[index]===undefined) {
-      if(!p.optional)fail('Missing required native argument: '+p.name+' in '+signature.name);
-      slots[index]={index,omitted:true};
-    }
-  });
-  // Omitted defaults have already been bound and checked in declaration scope;
-  // they are not expressions that can execute inside the caller's lexical scope.
-  return {slots,order:[...order,...slots.filter(s=>s.omitted)]};
-}
 
 export const nativeCallMethods={
   prepareNativeParameters(context) {
