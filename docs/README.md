@@ -11,6 +11,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Application export](APPLICATION-EXPORT.md): deployment APIs, modular output, CSP and validation.
 - [Native macOS export](MACOS-EXPORT.md): Apple Silicon compiler, AppKit runtime,
   approved local builds, source kits, reusable APIs and compatibility boundaries.
+- [Native macOS lifetime and editing](MACOS-LIFETIME-EDITING.md): reference release,
+  finalizer safe points, live AppKit text, selection and list ownership contracts.
 - [Build artifacts](IDE-BUILD-ARTIFACTS.md): source-only builds, exact fingerprints
   and safe regeneration when integrating changes.
 - [Testing](TESTING.md): setup, reproducible checks and validation boundaries.
