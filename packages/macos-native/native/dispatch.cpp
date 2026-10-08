@@ -21,7 +21,7 @@ Value getMember(Runtime& rt,Value value,const std::string& name){
 }
 Ref objectReference(Runtime& rt,Value value,const std::string& name,Args args){
   if(value.type==Type::Record){std::vector<Value> indices;for(auto&a:args)indices.push_back(a.value);return indexedRef(rt,value.asRecord()->member(name).get(),indices);}
-  return value.asObject()->reference(rt,name,args);
+  return value.asObject()->reference(rt,name,std::move(args));
 }
 Ref memberRef(Runtime& rt,Value value,const std::string& name){
   if(value.type==Type::Record)return value.asRecord()->member(name);
@@ -29,15 +29,15 @@ Ref memberRef(Runtime& rt,Value value,const std::string& name){
 }
 Ref indexedRef(Runtime& rt,Value value,std::vector<Value> indices){
   if(value.type==Type::Array)return value.asArray()->at(indices);
-  Args args;for(auto&v:indices)args.emplace_back(v);return value.asObject()->reference(rt,"",args);
+  Args args;for(auto&v:indices)args.emplace_back(v);return value.asObject()->reference(rt,"",std::move(args));
 }
 Value callMember(Runtime& rt,Value receiver,const std::string& name,Args args){
-  if(receiver.type==Type::Record){auto value=receiver.asRecord()->member(name).get();return callValue(rt,value,args);}
-  return receiver.asObject()->invoke(rt,name,args);
+  if(receiver.type==Type::Record){auto value=receiver.asRecord()->member(name).get();return callValue(rt,value,std::move(args));}
+  return receiver.asObject()->invoke(rt,name,std::move(args));
 }
 Value callValue(Runtime& rt,Value receiver,Args args){
   if(receiver.type==Type::Array){std::vector<Value> indices;for(auto&a:args)indices.push_back(scalar(rt,a.value));return receiver.asArray()->at(indices).get();}
-  return receiver.asObject()->invoke(rt,"",args);
+  return receiver.asObject()->invoke(rt,"",std::move(args));
 }
 
 Value Instance::get(Runtime& rt,const std::string& raw){
@@ -66,10 +66,10 @@ Value Instance::invoke(Runtime&rt,const std::string&raw,Args args){
   auto self=std::static_pointer_cast<Instance>(shared_from_this());
   auto key=name+(put?(raw.rfind("set:",0)==0?":set":":let"):"");
   if(!put && module->procedures.count(name+":get"))key=name+":get";
-  if(module->procedures.count(key))return rt.invoke(self,key,args);
+  if(module->procedures.count(key))return rt.invoke(self,key,std::move(args));
   if(put && args.size()==1){set(rt,name,args[0].value,raw.rfind("set:",0)==0);return {};}
-  if(auto it=fields.find(name);it!=fields.end()&&module->publicFields.count(name))return args.empty()?it->second->get():callValue(rt,it->second->get(),args);
-  if(module->kind=="form"){rt.load(self);if(controls.count(name))return args.empty()?Value::object(controls.at(name)):callValue(rt,Value::object(controls.at(name)),args);return rt.host->formCall(self,name,args);}
+  if(auto it=fields.find(name);it!=fields.end()&&module->publicFields.count(name))return args.empty()?it->second->get():callValue(rt,it->second->get(),std::move(args));
+  if(module->kind=="form"){rt.load(self);if(controls.count(name))return args.empty()?Value::object(controls.at(name)):callValue(rt,Value::object(controls.at(name)),std::move(args));return rt.host->formCall(self,name,std::move(args));}
   if(args.empty())return get(rt,name);fail(438);
 }
 Ref Instance::reference(Runtime&rt,const std::string&raw,Args args){
@@ -78,7 +78,7 @@ Ref Instance::reference(Runtime&rt,const std::string&raw,Args args){
     if(args.empty())return cellRef(it->second);
     std::vector<Value> indices;for(auto&a:args)indices.push_back(a.value);return indexedRef(rt,it->second->get(),indices);
   }
-  return Object::reference(rt,name,args);
+  return Object::reference(rt,name,std::move(args));
 }
 bool Instance::supports(const std::string&raw)const{
   auto name=lower(raw);return Object::supports(raw)||module->interfaceBindings.count(name)!=0;
