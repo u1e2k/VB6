@@ -44,7 +44,10 @@ export function emitRecords(writer,context) {
     if(traits?.recursive)context.add('MIG_RECURSIVE_RECORD','Recursive value-record layout requires an explicit representation adapter.');
     writer.open('Public Structure '+identifier(name));
     if(!native||traits.copy)writer.line('Implements '+context.runtime('IVbValue'));
-    for(const field of fields)writer.line(variable(field,context,{field:true}));
+    for(const field of fields){
+      if(field.fixedLength)writer.line('<Global.Microsoft.VisualBasic.VBFixedString('+field.fixedLength+')>');
+      writer.line(variable(field,context,{field:true}));
+    }
     if(!native||traits.initialize){
       writer.open('Public Shared Function Create() As '+identifier(name));
       writer.line('Dim result As New '+identifier(name)+'()');

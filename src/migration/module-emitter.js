@@ -1,3 +1,5 @@
+import {emitFileAdapters} from './file-records.js';
+import {propertyPlan, accessorName} from './property-plan.js';
 import {canReturnDirectly} from './output-plan.js';
 import {finishRuntimeImports} from './runtime-plan.js';
 import {defaultIdentifierType} from '../language/default-types.js';
@@ -8,13 +10,17 @@ import {parameter, variable, declarationType, emitRecords, emitEnums, emitDeclar
 import {emitStatements} from './statements.js';
 
 function publicMembers(module) { return [...module.procedures.values()].filter(p=>p.scope==='public'&&!p.external); }
-function implementation(proc,context) {
+function implementation(proc,context,emittedName=proc.name) {
   const matches=[];
   const ownContract=context.interfaces.has(key(context.module.name));
-  if(ownContract&&proc.scope==='public')matches.push(identifier('I'+context.module.name)+'.'+identifier(proc.name));
+  if(ownContract&&proc.scope==='public')matches.push(identifier('I'+context.module.name)+'.'+identifier(emittedName));
   for(const contract of context.module.interfaces){
     const prefix=key(contract.name)+'_';
-    if(key(proc.name).startsWith(prefix))matches.push(identifier('I'+contract.name)+'.'+identifier(proc.name.slice(contract.name.length+1)));
+    if(key(proc.name).startsWith(prefix)){
+      const name=proc.name.slice(contract.name.length+1);
+      const mapped=emittedName===proc.name?name:accessorName(name,proc.accessor);
+      matches.push(identifier('I'+contract.name)+'.'+identifier(mapped));
+    }
   }
   return matches.length?' Implements '+matches.join(', '):'';
 }
@@ -72,6 +78,17 @@ function procedureBody(writer,context) {
 function emitProperty(writer,group,state,module,{contract=false}={}) {
   const get=group.find(p=>p.accessor==='get'),set=group.find(p=>p.accessor==='let')||group.find(p=>p.accessor==='set'),proc=get||set,context=createContext(state,module,proc);
   const value=set?.params.at(-1),params=get?get.params:set.params.slice(0,-1),returnType=get?.returnType||value?.type||'Variant';
+  if(propertyPlan(module,proc.name)?.methods){
+    for(const accessor of group){
+      const scope=contract?'':accessor.scope==='private'?'Private ':accessor.scope==='friend'?'Friend ':'Public ';
+      const name=accessorName(accessor.name,accessor.accessor),reader=accessor.accessor==='get';
+      const body=createContext(state,module,accessor);
+      const header=scope+(reader?'Function ':'Sub ')+identifier(name)+'('+accessor.params.map(p=>parameter(p,body)).join(', ')+')'+(reader?' As '+body.netType(accessor.returnType):'')+(contract?'':implementation(accessor,body,name));
+      if(contract)writer.line(header,body);
+      else{writer.open(header,body);procedureBody(writer,body);writer.close(reader?'End Function':'End Sub');writer.line();}
+    }
+    return;
+  }
   if(group.filter(p=>p.accessor!=='get').length>1)context.add('MIG_DUAL_PROPERTY_SET','Property Let and Property Set share a name; .NET has one setter, so an object/value-dispatch adapter is required.');
   const prefix=(contract?'':proc.scope==='private'?'Private ':'Public ')+(module.defaultMember===key(proc.name)?'Default ':'')+(get&&!set?'ReadOnly ':!get&&set?'WriteOnly ':'');
   const header=prefix+'Property '+identifier(proc.name)+(params.length?'('+params.map(p=>parameter({...p,byRef:false},context)).join(', ')+')':'')+' As '+context.netType(returnType)+(contract?'':implementation(proc,context));
@@ -108,7 +125,7 @@ function field(writer,decl,context) {
   }else writer.line(variable(decl,context),{source:context.source,line:decl.line||1});
 }
 export function emitModule(state,module,path) {
-  state={...state,generatedFile:path};
+  state={...state,generatedFile:path,fileAdapters:new Map()};
   const writer=new CodeWriter(path),context=createContext(state,module);
   writer.line('Option Explicit On');writer.line('Option Strict '+(state.options.strict?'On':'Off'));writer.line('Option Infer On');writer.line('Option Compare '+(module.optionCompare==='text'?'Text':'Binary'));
   writer.line('Imports System');writer.line('Imports Microsoft.VisualBasic');
@@ -153,6 +170,7 @@ export function emitModule(state,module,path) {
   }
   for(const group of propertyGroups(module).values())emitProperty(writer,group,state,module);
   if(!state.directEntry&&state.entry?.kind==='main'&&key(state.entry.module)===key(module.name)){writer.open('Friend Sub __vbStart()');writer.line('[Main]()');writer.close('End Sub');}
+  emitFileAdapters(writer,context);
   writer.close(module.kind==='module'?'End Module':'End Class');
   return finishRuntimeImports(writer,context);
 }

@@ -1,3 +1,5 @@
+import {FILE_RECORD_FIXTURE,FILE_RECORD_EXPECTED} from './migration-file-record-fixtures.mjs';
+import {PROPERTY_FIXTURE,PROPERTY_EXPECTED} from './migration-property-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -353,4 +355,20 @@ test('native typed constant ranges execute without compatibility support',{skip,
  const input=project('Public Sub Main()\nDim value As Long\nvalue=4\nSelect Case value\nCase 0 To 5\nDebug.Print "hit"\nCase Else\nDebug.Print "miss"\nEnd Select\nEnd Sub');
  const h=harness(t,'native-constant-range',input,{codeStyle:'native',runtime:'none',strict:true});
  assert.deepEqual(h.run(),['hit']);assert.deepEqual(h.result.report.runtime.features,[]);
+});
+
+for(const codeStyle of ['native','compatibility'])test('property accessor execution: '+codeStyle,{skip,timeout:150000},t=>{
+ const h=harness(t,'property-accessors-'+codeStyle,PROPERTY_FIXTURE,{codeStyle});
+ assert.deepEqual(h.run(),PROPERTY_EXPECTED);
+});
+
+for(const codeStyle of ['native','compatibility'])test('legacy binary record execution: '+codeStyle,{skip,timeout:150000},t=>{
+ const h=harness(t,'binary-records-'+codeStyle,FILE_RECORD_FIXTURE,{codeStyle,patch:invariantCulture});
+ assert.deepEqual(h.run(),FILE_RECORD_EXPECTED);
+ // Independent byte goldens, not only a reader/writer round trip.
+ const scalar=Buffer.alloc(14);scalar.writeInt16LE(-1,0);scalar.write('AB  ',2,'ascii');scalar.writeBigInt64LE(-123456n,6);
+ assert.deepEqual(fs.readFileSync(path.join(h.directory,'scalar.bin')),scalar);
+ const row=Buffer.from([255,255,4,3,2,1,2,1,67,68,32,32]);
+ const file=fs.readFileSync(path.join(h.directory,'record.bin'));
+ assert.equal(file.length,24);assert.deepEqual(file.subarray(12),row);
 });

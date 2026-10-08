@@ -1,3 +1,4 @@
+import {frameworkRecordLayout} from './file-record-layout.js';
 import {key} from './names.js';
 
 /** Bind standard-library overloads from proven argument representations. Return
@@ -25,7 +26,7 @@ export function nativeIntrinsic(node,context,emit,usage={}) {
     const split=arg?.kind==='call'&&arg.callee.kind==='id'&&['split','filter'].includes(key(arg.callee.name))&&!context.find(arg.callee.name);
     if(nativeArray||split)return strings+'Join('+[emit(arg,{nativeArray:true}),...node.args.slice(1).map(value=>emit(value))].join(', ')+')';
   }
-  if(name==='len'&&scalar&&type!=='currency')return strings+'Len('+args()+')';
+  if(name==='len'&&((scalar&&type!=='currency')||(symbol?.bounds==null&&context.record(type)&&frameworkRecordLayout(context.compiled,context.module,type))))return strings+'Len('+args()+')';
   if(name==='isnull'&&scalar)return 'Global.System.Convert.IsDBNull('+args()+')';
   if(name==='vartype'&&scalar&&type!=='currency')return 'CInt('+info+'VarType('+args()+'))';
   if(name==='abs'&&['single','double','decimal'].includes(type))return 'Global.System.Math.Abs('+args()+')';

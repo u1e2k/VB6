@@ -25,3 +25,14 @@ export function accessorReference(symbol, context, accessor = 'get') {
   if (!plan[accessor]) context.add('MIG_PROPERTY_ACCESSOR', 'Property ' + symbol.name + ' has no Property ' + accessor + ' accessor.');
   return identifier(accessorName(symbol.name, accessor));
 }
+
+/** Expand a statically known default indexed property before ordinary call
+ * binding. Dynamic Object/COM dispatch deliberately remains outside this proof. */
+export function defaultPropertyCall(node, context) {
+  if (node?.kind !== 'call') return null;
+  const receiver = context.resolve(node.callee);
+  if (!receiver || receiver.procedure || receiver.module || receiver.control || receiver.paramArray || receiver.bounds != null) return null;
+  const owner = context.compiled.modules.get(key(receiver.type));
+  if (!owner?.defaultMember || !propertyPlan(owner, owner.defaultMember)) return null;
+  return {...node, callee:{kind:'member', object:node.callee, name:owner.defaultMember}};
+}
