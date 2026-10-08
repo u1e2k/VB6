@@ -29,7 +29,7 @@ struct MacItems:Object {
 struct MacControl:Object {
   MacHost*host;std::weak_ptr<Instance>owner;ControlSpec spec;std::map<std::string,Value>properties;
   NSView*view=nil;NSView*widget=nil;NSMenuItem*menu=nil;VB6ControlDelegate*delegate=nil;VB6TableDelegate*tableDelegate=nil;VB6OutlineDelegate*outlineDelegate=nil;NSTimer*timer=nil;
-  int32_t handle=0;bool initialized=false,disposed=false,eventActive=false;std::vector<Text>list;std::vector<int32_t>itemData;std::set<size_t>selected;
+  int32_t handle=0;bool initialized=false,disposed=false,eventActive=false,editSelectionPending=false;std::vector<Text>list;std::vector<int32_t>itemData;std::set<size_t>selected;
   std::map<std::string,std::shared_ptr<MacItems>>collections;std::vector<std::vector<Text>>grid;std::map<int,double>columnWidths,rowHeights;std::vector<GraphicCommand>graphics;
   std::map<uint64_t,id>outlineTokens;double currentX=0,currentY=0;size_t suspendLayout=0,eventSuppression=0;NSSize originalParentSize=NSZeroSize;NSRect originalFrame=NSZeroRect;
   MacControl(MacHost&h,std::shared_ptr<Instance>f,ControlSpec s):host(&h),owner(f),spec(std::move(s)){}
