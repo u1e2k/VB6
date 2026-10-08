@@ -18,7 +18,7 @@ export const nativeControlEventMethods={
     const x=this.x;
     for(const control of module.controls.values())if(control.oldProcedure){
       const fallback=x.unique(),exit=x.unique(),zero=x.unique(),forward=x.unique();
-      x.label('control-procedure:'+module.name+':'+control.key).enter(48);this.enterCallbackBoundary(-12);
+      x.label('control-procedure:'+module.name+':'+control.key).enter(control.nativeDescriptor.kernel?192:48);this.enterCallbackBoundary(-12);
       // Container notifications go directly to the form. Do not stop at a Frame
       // or tab HWND, and do not forward the container's own WM_SIZE/WM_PAINT.
       if(control.nativeDescriptor.container){x.value(arg(12));for(const msg of [0x111,0x4e,0x114,0x115,0x2b,0x132,0x133,0x134,0x135,0x136,0x137,0x138])x.compare(msg).branch('e',forward);}
@@ -49,7 +49,7 @@ export const nativeControlEventMethods={
         if(event.startsWith('key'))x.value(arg(-20)).emit(0x25).imm(65535).test().branch('e',zero).emit(0x89,0x45,16);
         x.jump(fallback).label(next);
       }
-      x.label(fallback).api('user32.dll','CallWindowProcW',[mem(control.oldProcedure),arg(8),arg(12),arg(16),arg(20)]).jump(exit);
+      x.label(fallback);const nativeFallback=x.unique();this.gridWindowMessages(control,zero,exit,nativeFallback);x.label(nativeFallback);const chartFallback=x.unique();this.chartWindowMessages(control,zero,exit,chartFallback);x.label(chartFallback).api('user32.dll','CallWindowProcW',[mem(control.oldProcedure),arg(8),arg(12),arg(16),arg(20)]).jump(exit);
       x.label(forward).api('user32.dll','SendMessageW',[mem(module.handle),arg(12),arg(16),arg(20)]).jump(exit);
       x.label(zero).value(0).label(exit);this.leaveCallbackBoundary(-12);x.leave(16);
     }
@@ -96,6 +96,8 @@ export const nativeControlEventMethods={
   },
   nativeTabChanged(module,control,zero){
     const x=this.x;x.api('user32.dll','SendMessageW',[mem(control.handle),0x130b,0,0]).emit(0x8b,0x0d).addr(control.state,24).emit(0x89,0x4d,0xec,0x39,0xc8).branch('e',zero).store(control.state,24);
+    if(control.nativePageChildren?.length){save(x,-24);x.value(mem(control.handle));save(x,-28);this.applyNativeTabPages(control);
+    x.value(mem(module.loaded)).test().branch('e',zero).value(mem(control.handle)).test().branch('e',zero).emit(0x3b,0x45,0xe4).branch('ne',zero).api('user32.dll','SendMessageW',[mem(control.handle),0x130b,0,0]).emit(0x3b,0x45,0xe8).branch('ne',zero);}
     this.controlHandler(module,control,'Click',control.model.type==='SSTab'?[{ref:-20}]:[]);x.jump(zero);
   },
   nativeScrollPosition(control,zero){

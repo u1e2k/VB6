@@ -48,7 +48,9 @@ export const nativeControlDrawingMethods={
       x.label('native:control:draw:'+family).enter(40).value(arg(8)).emit(0x89,0xc6).value(arg(12)).emit(0x89,0xc7,0x8b,0x47,24,0x89,0x45,0xf4).push().invoke('gdi32.dll','SaveDC').emit(0x89,0x45,0xf0);
       x.value(0).emit(0x89,0x45,0xfc,0x89,0x45,0xf8); // owned pen and brush
       if(family==='surface'){
-        x.emit(0xff,0x76,32).call('native:control:ole-color').push().invoke('gdi32.dll','CreateSolidBrush').emit(0x89,0x45,0xf8).push();x.emit(0x8d,0x47,28).push().push(arg(-12)).invoke('user32.dll','FillRect').jump(finish);
+        x.emit(0xff,0x76,32).call('native:control:ole-color').push().invoke('gdi32.dll','CreateSolidBrush').emit(0x89,0x45,0xf8).push();x.emit(0x8d,0x47,28).push().push(arg(-12)).invoke('user32.dll','FillRect');
+        if(this.nativePictureFeatures?.size){x.emit(0xff,0x76,80,0x8b,0x47,40,0x2b,0x47,32).push().emit(0x8b,0x47,36,0x2b,0x47,28).push().emit(0xff,0x77,32,0xff,0x77,28).push(arg(-12)).emit(0xff,0x76,76).call('native:picture:draw');}
+        x.jump(finish);
       }else{
         // OLE_COLOR may be a negative system-color identifier, not RGB bits.
         x.emit(0xff,0x76,52).call('native:control:ole-color').push().emit(0xff,0x76,56,0x8b,0x46,60);const penStyle=x.unique();x.test().branch('ne',penStyle).value(6).label(penStyle).emit(0x48).push().invoke('gdi32.dll','CreatePen').emit(0x89,0x45,0xfc).push().push(arg(-12)).invoke('gdi32.dll','SelectObject');
