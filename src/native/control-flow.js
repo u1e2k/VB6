@@ -1,3 +1,4 @@
+import {nativeFileInstruction} from './files.js';
 /** Native intra-procedure control flow. GoSub uses a bounded per-activation
  * return stack separate from ESP, so error unwinding cannot corrupt returns. */
 import {bindNativeItem} from './control-items.js';
@@ -32,6 +33,7 @@ export const nativeFlowMethods={
     return binding;
   },
   nativeFlowInstruction(ins,context,index) {
+    if(nativeFileInstruction(this,ins))return true;
     if(ins.op==='assign'&&this.nativeListAssignment(ins.target,ins.expr))return true;
     if(ins.op==='expr'&&ins.expr.kind==='member'&&String(ins.expr.name).toLowerCase()==='clear'){
       const object=this.object(ins.expr.object);

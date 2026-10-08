@@ -1,3 +1,6 @@
+import {nativeFileType,nativeFileBuiltin} from './files.js';
+import {emitNativeFileHelpers} from './file-kernels.js';
+import {emitNativePrintHelpers} from './print.js';
 import {nativeFormatType,nativeFormatBuiltin,emitNativeFormatHelpers} from './format-intrinsics.js';
 import {emitNativeStringArrayHelpers} from './string-array-kernels.js';
 import {nativeStringArrayType,nativeStringArrayBuiltin} from './string-arrays.js';
@@ -26,6 +29,7 @@ const specs={
 for(const fields of Object.values(specs)){for(const f of fields)Object.freeze(f);Object.freeze(fields);}Object.freeze(specs);
 export const nativeStringLibraryMethods={
   stringLibraryType(node){
+    const fileType=nativeFileType(this,node);if(fileType)return fileType;
     const formatted=nativeFormatType(this,node);if(formatted)return formatted;
     const arrayType=nativeStringArrayType(this,node);if(arrayType)return arrayType;
     if(node.kind!=='call'||node.callee.kind!=='id')return null;
@@ -44,6 +48,7 @@ export const nativeStringLibraryMethods={
     this.x.emit(0x5a,0x59).push().emit(0x52,0x51).call(S+'strcomp');
   },
   stringLibraryBuiltin(node,name){
+    if(nativeFileBuiltin(this,node,name))return true;
     if(nativeFormatBuiltin(this,node,name))return true;
     if(nativeStringArrayBuiltin(this,node,name))return true;
     if(!Object.hasOwn(specs,name)||this.resolveProcedure(node.callee))return false;
@@ -72,6 +77,7 @@ export const nativeStringLibraryMethods={
   }
 };
 export function emitNativeStringLibrary(c){
+  emitNativeFileHelpers(c);emitNativePrintHelpers(c);
   emitNativeFormatHelpers(c);
   emitNativeStringArrayHelpers(c);
   const x=c.x;

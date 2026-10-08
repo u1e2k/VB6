@@ -1,3 +1,4 @@
+import {nativeFileControlFixture} from './win32-file-fixture.mjs';
 import {nativeListControlFixture} from './win32-list-fixture.mjs';
 import {commonItemControlFixture} from './win32-control-items-fixture.mjs';
 import {gridEditControlFixtures} from './win32-grid-edit-fixtures.mjs';
@@ -252,7 +253,7 @@ Private Declare Function DeleteFileW Lib "kernel32" (ByVal path As Long) As Long
  selectionChanges=selectionChanges+1
 End Sub`);
 }
-export function nativeControlFixtures(){return [nativeListControlFixture(fixture),commonItemControlFixture(fixture),rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture(),...advancedNativeControlFixtures(fixture),...gridControlFixtures(),...gridEditControlFixtures(),chartControlFixture(),...tabControlFixtures()];}
+export function nativeControlFixtures(){return [nativeFileControlFixture(fixture),nativeListControlFixture(fixture),commonItemControlFixture(fixture),rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture(),...advancedNativeControlFixtures(fixture),...gridControlFixtures(),...gridEditControlFixtures(),chartControlFixture(),...tabControlFixtures()];}
 export function buildControlFixtures(directory='reports/native-controls'){
   fs.mkdirSync(directory,{recursive:true});const builds=[];
   for(const {project,checks}of nativeControlFixtures())for(const optimization of [0,1,2]){
