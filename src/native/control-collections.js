@@ -23,7 +23,13 @@ export const nativeControlCollectionMethods={
   prepareNativeControlCollections(control){
     prepareNativeItems(this,control);
     const p=control.model.properties;
-    try{if(control.model.type==='TreeView')control.treePlan=nativeTreePlan(p.Nodes||[]);}catch(error){this.fail(control.model.name+': '+error.message,control.module);}
+    try{if(control.model.type==='TreeView'){
+      control.treePlan=nativeTreePlan(p.Nodes||[]);
+      // Procedures (including Node.Key/Index) are emitted before form creation.
+      // Reserve handle identities now; allocating them during HWND creation
+      // made the earlier comparison encode an absolute read from address zero.
+      for(const item of control.treePlan)item.handle=this.slot('tree-item:'+control.module.name+':'+control.key+':'+item.index);
+    }}catch(error){this.fail(control.model.name+': '+error.message,control.module);}
     if(control.model.type==='ListView'){
       control.columns=p.Columns||p.ColumnHeaders||[];control.items=p.Items||p.ListItems||[];
       if(!Array.isArray(control.columns)||!Array.isArray(control.items)||control.columns.length>1000||control.items.length>10000)this.fail('Native ListView collection limit exceeded',control.module);
@@ -38,7 +44,6 @@ export const nativeControlCollectionMethods={
     const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[mem(control.handle),msg,w,l]);
     if(type==='TreeView'){
       const plan=control.treePlan;
-      for(const item of plan)item.handle=this.slot('tree-item:'+module.name+':'+control.key+':'+item.index);
       for(const item of plan){
         const data='tree-insert:'+module.name+':'+control.key+':'+item.index,image=this.nativeBoundImageIndex(control,item.value.Image),selected=this.nativeBoundImageIndex(control,item.value.SelectedImage??item.value.Image);
         this.data.align(4).label(data).u32(0xffff0000).u32(0xffff0002).u32(1|(image<0?0:2)|(selected<0?0:32)).u32(0).u32(0).u32(0).reference(this.string(item.value.Text||'')).u32(0).u32(image).u32(selected).u32(0).u32(0);

@@ -1,3 +1,4 @@
+import {nativeControlCollectionMethods} from '../src/native/control-collections.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -50,4 +51,13 @@ test('recognition does not mutate shared source declarations or silently accept 
 test('With SelectedItem is lowered and selected item access is not an HWND caption read',()=>{
   const p=gallery();p.modules[0].code='Private Sub Form_Load()\nDim s As String\nWith TabStrip1.SelectedItem\n s=.Caption\nEnd With\nEnd Sub';
   const result=compileWin32(p);assert.ok(result.report.imports.some(i=>i.symbol==='SysReAllocStringLen'));
+});
+
+test('tree item handle identities exist before procedures are emitted, not only during form creation',()=>{
+  const allocated=[],c={slot:name=>{allocated.push(name);return name;},fail:m=>{throw new Error(m);}};
+  const owner={model:{name:'Tree',type:'TreeView',properties:{Nodes:[{Key:'child',Parent:'root',Text:'Child'},{Key:'root',Text:'Root'}]}},module:{name:'Form1'},key:'tree'};
+  nativeControlCollectionMethods.prepareNativeControlCollections.call(c,owner);
+  assert.deepEqual(owner.treePlan.map(n=>[n.index,n.handle]),[[1,'tree-item:Form1:tree:1'],[0,'tree-item:Form1:tree:0']]);
+  assert.equal(new Set(allocated).size,3);
+  for(const item of owner.treePlan)assert.ok(allocated.includes(item.handle));
 });
