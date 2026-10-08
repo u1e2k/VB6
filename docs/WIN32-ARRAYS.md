@@ -26,10 +26,12 @@ Public Sub Main()
 End Sub
 ```
 
-Element types are Byte, Integer, Boolean, Long, Single, Double, Currency, Date and String. Single
+Element types are Byte, Integer, Boolean, Long, Single, Double, Currency, Date, String and Variant. Single
 and Double elements occupy four and eight bytes respectively. Floating element
 reads produce value snapshots and Single stores round to Single precision; see
-[Native numeric storage](WIN32-NUMERIC.md). Currency uses eight-byte VT_CY elements and exact scaled-bit snapshots; see [Native Currency](WIN32-CURRENCY.md). Dynamic arrays begin unallocated.
+[Native numeric storage](WIN32-NUMERIC.md). Currency uses eight-byte VT_CY elements and exact scaled-bit snapshots; see [Native Currency](WIN32-CURRENCY.md). Variant elements occupy 16 bytes and retain their individual scalar/String/Decimal
+and nested-array ownership; see [native Variants and ParamArray](WIN32-VARIANTS.md).
+Dynamic arrays begin unallocated.
 `ReDim` accepts one through sixty dimensions with runtime signed 32-bit bounds and
 Option Base for omitted lower bounds. ReDim without Preserve creates
 zero/empty-initialized storage and can change rank. ReDim Preserve retains existing
@@ -41,7 +43,7 @@ arrays pad new elements and truncate/pad assignments to the declared length.
 `LBound` and `UBound` have a checked optional dimension. Unallocated arrays, invalid
 indices, invalid rank and incompatible Preserve bounds raise catchable error 9.
 Whole-array assignment to a dynamic destination creates an independent copy of
-bounds, data and owned String elements. Assigning an unallocated array clears its
+bounds, data and owned String/Variant elements. Assigning an unallocated array clears its
 destination. Copying a fixed array does not make its dynamic copy fixed.
 
 Whole-array parameters are borrowed `ByRef` descriptor slots with exact element
@@ -51,7 +53,7 @@ Attempting to resize/replace a fixed array through a parameter raises error 10;
 Erase on a fixed array resets its elements without changing its bounds.
 
 Dynamic local arrays are destroyed on normal return and error unwind, including
-owned BSTRs. Static arrays retain their storage between calls. Form-owned arrays
+owned BSTRs and Variant elements. Static arrays retain their storage between calls. Form-owned arrays
 are released when their default-form storage is reinitialized. Globals/statics
 otherwise live until process exit.
 
@@ -81,12 +83,22 @@ Hosts can request a stricter per-array limit with
 the x86 ceiling. It checks both fixed declarations and dynamic allocation/Preserve
 before changing live storage; byte counts need not be multiples of element width.
 It is not a cumulative process-memory budget or a bound on separate String data. Procedure workspace remains limited to
-512 KiB. Reversed bounds are errors, not zero-element arrays. Unsupported element
-types, undeclared ReDim targets, ByVal whole arrays, array returns, fixed-length
+512 KiB. Reversed ReDim bounds are errors. Builtin String-array results and empty
+ParamArray packs have explicit zero-element array construction; their empty-array
+contracts do not change the ReDim rule. Unsupported element
+types, undeclared ReDim targets, typed ByVal whole-array parameters, typed array returns, fixed-length
 String whole-array arguments and fixed-length String scalar ByRef copy-back to
 project procedures are not implemented. External Declare String element and fixed
 String copy-back follow [the separate marshalling contract](WIN32-STRING-INTEROP.md). Native Declare array/SAFEARRAY signatures remain rejected;
-project-to-project whole-array parameters are an internal compiler ABI.
+project-to-project whole-array parameters are an internal compiler ABI. A typed
+Variant array is not the same feature as a whole array stored inside a scalar
+Variant, but both are now supported. Boxed arrays preserve their element type
+and bounds, support checked indexing and nested values, and can be copied back
+into matching dynamic typed arrays. Variant-returning functions can return such
+owned values. Whole typed-array borrowing through a scalar ByRef Variant remains
+unsupported. See [the Variant array contract](WIN32-VARIANTS.md).
+`Split`/`Filter` String-array results and `Join` are described in
+[native String metadata and array results](NATIVE-STRING-METADATA.md).
 
 Array dimensions and element type must not be modified through raw native pointers.
 Unrestricted Declare calls are not sandboxed; incorrect signatures or native memory

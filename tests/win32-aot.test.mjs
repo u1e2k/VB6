@@ -70,8 +70,7 @@ for(const [name,code] of [
   ['unsupported managed record storage','Private Type Point\n x As String\nEnd Type\nDim n As Point'],['ByVal array parameters','Private Sub F(ByVal n() As Long)\nEnd Sub'],
   ['unsupported Decimal storage','Private Sub Form_Load()\n Dim n As Decimal\nEnd Sub'],
 
-  ['unsupported event','Private Sub Form_KeyDown(KeyCode As Integer, Shift As Integer)\nEnd Sub'],
-  ['ambiguous default variant','Private Sub F(n)\nEnd Sub']
+  ['unsupported event','Private Sub Form_KeyDown(KeyCode As Integer, Shift As Integer)\nEnd Sub']
 ])test('AOT fails closed for '+name,()=>assert.throws(()=>buildCode(code)));
 test('AOT rejects unimplemented controls and WebGPU rather than silently changing targets',()=>{
   const p=newProject();p.modules[0].form.controls.push(createControl('OLE'));assert.throws(()=>compileWin32(p),/control/);
@@ -131,4 +130,8 @@ test('freestanding compiler rejects modern data connections and bound fields exp
   assert.throws(()=>compileWin32(p),/data.*runtime/i);
   p.dataSources.connections=[];const control=createControl('TextBox','Text1');control.properties.DataSource='Database';p.modules[0].form.controls.push(control);
   assert.throws(()=>compileWin32(p),/Electron desktop target/);
+});
+
+test('default parameter type is an owned native Variant, not an ambiguous scalar',()=>{
+ const r=buildCode('Private Sub F(n)\nn=Null\nEnd Sub');assert.ok(JSON.stringify(r.report.imports).includes('VariantCopyInd'));
 });

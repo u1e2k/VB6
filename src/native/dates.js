@@ -43,6 +43,7 @@ export const nativeDateMethods={
   },
   dateExpression(node) {
     const type=this.type(node),x=this.x;
+    if(type==='variant'){this.expression(node);this.unboxVariant('date');return;}
     this.expression(node);
     if(type==='date'){x.call(D+'validate');return;}
     if(!numbers.has(type)&&type!=='string')this.fail('CDate requires a supported scalar value');

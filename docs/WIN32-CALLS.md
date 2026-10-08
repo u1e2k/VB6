@@ -9,7 +9,7 @@ new IDE interface or an embedded JavaScript/VB6 execution engine.
 ## Typed Optional arguments
 
 Sub and Function parameters can be declared Optional with Byte, Integer, Long,
-Boolean, Single, Double, Currency, Date or String. Both ByVal and ByRef forms are
+Boolean, Single, Double, Currency, Date, String or Variant. Both ByVal and ByRef forms are
 supported. A constant default is bound in the **declaring module**, not the
 caller's scope, and checked for the declared type before machine code is emitted.
 An omitted scalar without an explicit default receives zero, False or an empty
@@ -42,8 +42,11 @@ native numeric backend requires conversion from String text.
 An unsupported default expression, out-of-range default or unsupported type is
 a compile diagnostic. Call-specific default errors identify the declaration's
 module and line. The compiler does not evaluate user procedures or variables to
-obtain a default. Optional Variant/objects/arrays, ParamArray, and IsMissing
-semantics remain outside the native typed target. Startup Main and native event
+obtain a default. An Optional Variant without an explicit default receives the
+Missing VT_ERROR value and can be tested with IsMissing; a supplied Empty or Null
+is not Missing. Optional objects/arrays remain unsupported. Project ParamArray
+and its ownership/positional-call contract are documented in
+[Native Variants and ParamArray](WIN32-VARIANTS.md). Startup Main and native event
 handlers retain their fixed signatures; they cannot gain Optional parameters.
 
 ## Named argument evaluation and layout
@@ -56,8 +59,10 @@ positional slot already occupies that parameter; naming it later is a duplicate.
 Supplied expressions evaluate once in written order. Values are staged in the
 caller's frame and then pushed in formal-parameter order required by stdcall,
 not in the order that named arguments appeared. Double/Currency ByVal slots are
-eight bytes; other supported scalar slots/references are four. The compiler also
-bounds the argument area against the x86 RET immediate limit.
+eight bytes; ordinary supported scalar slots/references are four. Variant values
+use pointer-based slots and Variant functions add a hidden caller-owned result
+pointer; the value itself is 16 bytes. The compiler also bounds the full argument
+area, including that hidden pointer, against the x86 RET immediate limit.
 
 This applies to project Sub/Function procedures and supported early-bound Declare
 signatures. It does not add named-argument metadata to every built-in function,
@@ -65,8 +70,11 @@ late-bound COM call, unsupported control method or Property procedure.
 
 ## ByRef variables versus values
 
-An unparenthesized addressable scalar variable still requires the exact declared
-ByRef type and aliases its original storage. Array elements retain a backing-store
+An unparenthesized addressable scalar variable requires the exact declared
+ByRef type, except that ByRef As Variant accepts supported typed scalar l-values
+through borrowed VT_BYREF descriptors. Those descriptors preserve immediate alias
+updates and the referent's declared width; see [the Variant ABI](WIN32-VARIANTS.md).
+Array elements retain a backing-store
 pin through the call, and failure during a later argument releases earlier pins
 before recovery continues.
 
@@ -99,7 +107,8 @@ error cleanup if argument evaluation or the callee fails. String function result
 are retained independently before these temporary references are destroyed.
 Fixed-length String sources can be read into an explicitly grouped value copy,
 but fixed-length String **copy-back to project procedures** is still unsupported. Parenthesized
-whole-array values are rejected instead of silently aliasing their source.
+whole-array values cannot alias a typed array parameter; a value boxed into a
+supported Variant parameter is instead an independently owned snapshot.
 
 ## Explicit native pointer/value overrides
 
@@ -151,8 +160,9 @@ runtime-error dialog text on timeout and writes reports on success or failure.
 The PowerShell/C# probe is test-only, not compiled into the shipped EXE or SDK.
 A successful JavaScript test or browser download is **not** a Windows execution
 pass. Native execution of these new fixtures is a required validation gate before
-merging. The read-only workflow `.github/workflows/win32-calls.yml` supplies that
-gate once this patch has been pushed to GitHub.
+merging. The existing read-only `.github/workflows/validate.yml` native-compiler job
+runs the integrated runtime and control matrices. The standalone call fixture
+commands above remain useful for focused Windows investigation.
 
 ## Primary language references
 
@@ -162,5 +172,7 @@ gate once this patch has been pushed to GitHub.
 - ByRef mismatch and explicit grouping: https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/byref-argument-type-mismatch
 
 This remains the direct native-controls/GDI target. It does not add WebGPU,
-Variant containers, Decimal storage, arbitrary classes/COM/OCX, full native
+arbitrary classes/COM/OCX, full native
 callback/structure interoperability, or licensed Microsoft compiler certification.
+Native scalar Variants, Decimal subtypes, typed and Variant-contained arrays,
+nested array values and project ParamArray are implemented under [their separate contract](WIN32-VARIANTS.md).

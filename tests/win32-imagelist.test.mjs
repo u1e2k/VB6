@@ -26,6 +26,8 @@ Icons.ListImages.Clear`);if(source)p.modules[0].code=source;let linked;const fin
  vm.hook('comctl32.dll','ImageList_Copy',5,([dst,di,src,si,flags])=>{assert.deepEqual([dst,src,flags],[77,77,1]);assert.ok(di<images.length&&si<images.length);if(copyFailure&&!--copyFailure)return 0;[images[di],images[si]]=[images[si],images[di]];return 1;});
  vm.hook('comctl32.dll','ImageList_Remove',2,([h,index])=>{assert.equal(h,77);index|=0;if(index===-1)images.length=0;else{assert.ok(index>=0&&index<images.length);images.splice(index,1);}return 1;});
  vm.hook('comctl32.dll','ImageList_Destroy',1,([h])=>{assert.equal(h,77);images.length=0;return 1;});
+ // Nonvisual ImageList identities are state pointers, not HWNDs.
+ vm.hook('user32.dll','IsWindow',1,([hwnd])=>{assert.ok([100,101].includes(hwnd),'only owner-form and visual HWNDs may be validated');return 1;});
  vm.hook('user32.dll','RedrawWindow',4,()=>1);vm.hook('user32.dll','InvalidateRect',3,()=>1);
  const pic=()=>vm.invoke('native:picture:load',[vm.symbol('native:picture:data:0'),64,3,2,2]);
  const add=(name,index=0)=>{const p=pic(),text=vm.memory.string(name);try{return vm.invoke('native:imagelist:add',[s,index,text,p]);}finally{vm.memory.free(text-4);}};

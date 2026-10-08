@@ -69,6 +69,6 @@ for(const mutation of [
 for(const expression of ['cmdDigit.Caption','cmdDigit().Caption','cmdDigit(1,2).Caption'])test('indexed control access validated: '+expression,()=>{
   assert.throws(()=>code(`Private Sub Form_Load()\ntxtDisplay.Text=${expression}\nEnd Sub`),/Index/i);
 });
-test('unsupported Variant is still rejected instead of inventing native storage',()=>{
-  assert.throws(()=>code('Dim v As Variant'),/storage/);
+test('scalar Variant has Automation storage rather than pretending to be a Long',()=>{
+  const r=code('Dim v As Variant\nPrivate Sub Form_Load()\nv=12.25#\nEnd Sub');assert.ok(JSON.stringify(r.report.imports).includes('VariantCopyInd'));
 });

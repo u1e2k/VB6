@@ -1,9 +1,12 @@
+import {emitNativeStringArrayHelpers} from './string-array-kernels.js';
+import {nativeStringArrayType,nativeStringArrayBuiltin} from './string-arrays.js';
+import {emitNativeReplace} from './string-replace.js';
 import {emitNativeCountedEqual} from './string-kernels.js';
 /** Counted UTF-16/BSTR library. Strings are never scanned for NUL terminators.
  * New results transfer ownership to a per-statement BSTR owner in the caller.
  * Comparison uses installed Windows NLS for text mode, exact code units for binary.
  */
-import {planNativeArguments} from './calls.js';
+import {planNativeArguments} from './call-plan.js';
 import {mem16,mem32} from './x86-operands.js';
 import {MAX_NATIVE_STRING} from './storage.js';
 const S='native:string-library:',DLL='oleaut32.dll';
@@ -12,6 +15,7 @@ export const NATIVE_STRING_CONSTANTS=Object.freeze({vbbinarycompare:0,vbtextcomp
 const arg=argument=>({argument}),addr=address=>({address});
 const local=offset=>mem32({base:'ebp',displacement:offset});
 const specs={
+ replace:[['expression','text'],['find','text'],['replace','text'],['start','number',1],['count','number',-1],['compare','compare','option']],
  lcase:[['string','text']],ucase:[['string','text']],
  trim:[['string','text']],ltrim:[['string','text']],rtrim:[['string','text']],strreverse:[['expression','text']],
  string:[['number','number'],['character','character']],
@@ -21,6 +25,7 @@ const specs={
 for(const fields of Object.values(specs)){for(const f of fields)Object.freeze(f);Object.freeze(fields);}Object.freeze(specs);
 export const nativeStringLibraryMethods={
   stringLibraryType(node){
+    const arrayType=nativeStringArrayType(this,node);if(arrayType)return arrayType;
     if(node.kind!=='call'||node.callee.kind!=='id')return null;
     const name=node.callee.name.toLowerCase().replace(/\$$/,'');
     if(!Object.hasOwn(specs,name)||this.resolveProcedure(node.callee))return null;
@@ -37,10 +42,12 @@ export const nativeStringLibraryMethods={
     this.x.emit(0x5a,0x59).push().emit(0x52,0x51).call(S+'strcomp');
   },
   stringLibraryBuiltin(node,name){
+    if(nativeStringArrayBuiltin(this,node,name))return true;
     if(!Object.hasOwn(specs,name)||this.resolveProcedure(node.callee))return false;
     const fields=specs[name],option=this.context?.module.module.optionCompare==='text'?1:0;
     const signature={name,params:fields.map(f=>({name:f[0],optional:f.length===3}))};
     const plan=planNativeArguments(signature,node.args,message=>this.fail(name+' expects valid arguments: '+message)),slots=new Array(fields.length),x=this.x;
+    if(name==='replace')this.nativeReplaceUsed=true;
     // Named arguments retain authored evaluation order; ABI slots retain formal order.
     for(const entry of plan.order){
       const spec=fields[entry.index],expr=entry.omitted?{kind:'literal',value:spec[2]==='option'?option:spec[2]}:entry.node;
@@ -62,7 +69,9 @@ export const nativeStringLibraryMethods={
   }
 };
 export function emitNativeStringLibrary(c){
+  emitNativeStringArrayHelpers(c);
   const x=c.x;
+  if(c.nativeReplaceUsed)emitNativeReplace(c);
   for(const name of ['trim','ltrim','rtrim']){
     const begin=x.unique(),end=x.unique(),leadingDone=x.unique(),trailingDone=x.unique();
     x.label(S+name).enter().api(DLL,'SysStringLen',[arg(8)]).compare(MAX_NATIVE_STRING).branch('a','error:7').mov('edi','eax').value(arg(8)).mov('esi','eax').mov('ebx',0);
