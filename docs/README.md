@@ -70,7 +70,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),
   [calendar intervals](WIN32-CALENDAR-INTERVALS.md), [arrays](WIN32-ARRAYS.md),
-  [calls](WIN32-CALLS.md), [bindings](WIN32-BINDINGS.md),
+  [calls](WIN32-CALLS.md), [Variants and ParamArray](WIN32-VARIANTS.md),
+  [bindings](WIN32-BINDINGS.md),
   [callbacks](WIN32-CALLBACKS.md) and [String interop](WIN32-STRING-INTEROP.md).
 - [COM/OLE services and reusable packages](COM-OLE.md): portable contracts, VB GetObject,
   native data/storage services, ownership, explicit permissions and support boundaries.
