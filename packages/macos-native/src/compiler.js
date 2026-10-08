@@ -115,15 +115,20 @@ class Lowering {
     }
     return false;
   }
-  arguments(nodes){return `Args{${nodes.map(node=>{
-    const name=node.kind==='named'?node.name:'';if(node.kind==='named')node=node.expr;
-    return `Arg(${this.canReference(node)?this.reference(node):this.expression(node)},${q(name)})`;
-  }).join(',')}}`;}
+  arguments(nodes){
+    // initializer_list elements live until the call's full expression ends.
+    // Their cached Object values would retain a released ByRef argument across
+    // the entire callee. Build the vector directly and transfer sole ownership.
+    return wrapped(`Args args;args.reserve(${nodes.length});${nodes.map(node=>{
+      const name=node.kind==='named'?node.name:'';if(node.kind==='named')node=node.expr;
+      return `args.emplace_back(${this.canReference(node)?this.reference(node):this.expression(node)},${q(name)});`;
+    }).join('')}return args;`);
+  }
   call(node){
     const callee=node.callee,args=this.arguments(node.args);
     if(callee.kind==='id')return `f.call(${q(callee.name)},${args})`;
-    if(callee.kind==='member')return wrapped(`auto receiver=${this.expression(callee.object)};auto args=${args};return callMember(f.runtime,receiver,${q(callee.name)},args);`);
-    return wrapped(`auto receiver=${this.expression(callee)};auto args=${args};return callValue(f.runtime,receiver,args);`);
+    if(callee.kind==='member')return wrapped(`auto receiver=${this.expression(callee.object)};auto args=${args};return callMember(f.runtime,receiver,${q(callee.name)},std::move(args));`);
+    return wrapped(`auto receiver=${this.expression(callee)};auto args=${args};return callValue(f.runtime,receiver,std::move(args));`);
   }
   bounds(decl){return `Bounds{${(decl.bounds||[]).map(pair=>`{static_cast<int32_t>(coerce(scalar(f.runtime,${pair[0]?this.expression(pair[0]):`Value::integer(${this.module.optionBase})`}),"long").integral()),static_cast<int32_t>(coerce(scalar(f.runtime,${this.expression(pair[1])}),"long").integral())}`).join(',')}}`;}
   declaration(decl,global=false,isStatic=false){
@@ -162,7 +167,7 @@ class Lowering {
       case 'gosub':return `if(f.gosubs.size()>=f.runtime.maxCallDepth)fail(28);f.gosubs.push_back(${index+1});${go(ins.target)}`;
       case 'gosubReturn':return 'if(f.gosubs.empty())fail(3);f.pc=f.gosubs.back();f.gosubs.pop_back();goto dispatch;';
       case 'return':return 'return f.result();';
-      case 'end':return 'throw EndExecution{};';
+      case 'end':return 'f.runtime.ending=true;throw EndExecution{};';
       case 'stop':return 'throw EndExecution{};';
       case 'lineNumber':return `f.labelLine=${ins.number};`;
       case 'form':return ins.expr.kind==='call'?`auto controls=${e(ins.expr.callee)};auto args=${this.arguments(ins.expr.args)};controls.asObject()->invoke(f.runtime,${q(ins.action)},args);`:`auto object=std::dynamic_pointer_cast<Instance>(${e(ins.expr)}.asObject());if(!object)fail(424);f.runtime.${ins.action}(object);`;
