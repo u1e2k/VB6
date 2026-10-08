@@ -1,0 +1,42 @@
+name: Publish reviewed primitive presentation test
+on:
+  push:
+    branches: [feat/webgpu-ui-rendering]
+    paths: [.pr21-presentation.patch, .github/workflows/rendering-presentation-publish.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr21-presentation-publish
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install Pillow
+      - name: Apply the reviewed test-only patch and verify exact output
+        shell: bash
+        run: |
+          test "$(git ls-remote origin refs/heads/feat/webgpu-ui-rendering | cut -f1)" = '${{ github.sha }}'
+          echo '1a1f4592c7a27e0c3e84b57327503363a9e77525ee8ed75e0d792f9ade0d617b  .pr21-presentation.patch' | sha256sum --check
+          git apply --check .pr21-presentation.patch
+          git apply .pr21-presentation.patch
+          test "$(git hash-object tools/browser-rendering-tests.py)" = '5e76b01df88de5108d25ea62bb56769ba10ae130'
+          python -m py_compile tools/browser-rendering-tests.py
+          python tools/test_rendering_primitives.py
+          python tools/test_rendering_capture.py
+          python tools/test_rendering_pixels.py
+          git rm .pr21-presentation.patch
+          git add tools/browser-rendering-tests.py
+          git diff --cached --exit-code -- .github src dist
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test(rendering): separate production presentation from diagnostic framebuffer readback'
+          git push origin HEAD:refs/heads/feat/webgpu-ui-rendering
+          git rev-parse HEAD
