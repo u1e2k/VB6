@@ -93,6 +93,7 @@ export const nativeNumericMethods = {
     const x=this.x,out=this.floatWorkspace();x.push();this.rawStorageAddress(out);x.emit(0x59).push().emit(0x51).call(N+name);
   },
   numericBuiltin(node,name) {
+    if(this.nativeRichFormatNull(node,name))return true;
     const x=this.x,args=node.args;
     if(['cdbl','csng','val'].includes(name)){
       if(args.length!==1)this.fail(name+' expects one argument');

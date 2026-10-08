@@ -1,3 +1,4 @@
+import {richMethodFixture} from './win32-rich-method-fixtures.mjs';
 /** Real-Windows acceptance programs for the next AOT control increment.
  * These fixtures compile on any host; only the Windows driver can claim native
  * execution. Dialog-state checks deliberately avoid opening interactive UI.
@@ -6,7 +7,7 @@ import {nativeTestBitmap,nativeTestIcon,nativeDataUri} from '../tests/support/na
 const icon=nativeDataUri(nativeTestIcon(),'image/x-icon');
 const bitmap=nativeDataUri(nativeTestBitmap());
 export function advancedNativeControlFixtures(fixture){
- return [selectionFormats(fixture),pictureResources(fixture),imageCollections(fixture),dialogState(fixture)];
+ return [richMethodFixture(fixture),selectionFormats(fixture),pictureResources(fixture),imageCollections(fixture),dialogState(fixture)];
 }
 function selectionFormats(fixture){
  const {control,add,check,finish}=fixture('AotControlSelectionFormats');
@@ -83,7 +84,7 @@ Private Declare Function CreateCompatibleDC Lib "gdi32" (ByVal dc As Long) As Lo
 Private Declare Function CreateBitmap Lib "gdi32" (ByVal width As Long,ByVal height As Long,ByVal planes As Long,ByVal bits As Long,ByVal data As Long) As Long
 Private Declare Function SelectObject Lib "gdi32" (ByVal dc As Long,ByVal handle As Long) As Long
 Private Declare Function DeleteObject Lib "gdi32" (ByVal handle As Long) As Long
-Private Declare Function DeleteDC Lib "gdi32" (ByVal handle As Long) As Long
+Private Declare Function DeleteDC Lib "gdi32" (ByVal dc As Long) As Long
 Private Declare Function GetPixel Lib "gdi32" (ByVal dc As Long,ByVal x As Long,ByVal y As Long) As Long
 Private Declare Function GetCurrentProcess Lib "kernel32" () As Long
 Private Declare Function GetGuiResources Lib "user32" (ByVal process As Long,ByVal flags As Long) As Long`);
