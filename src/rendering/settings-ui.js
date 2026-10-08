@@ -1,6 +1,6 @@
 import {createRenderingStatus} from './settings-status.js';
 import {el} from '../core/core.js';
-import {normalizeRendering} from './policy.js';
+import {DEFAULT_RENDERING, normalizeRendering} from './policy.js';
 import {benchmarkRendering} from './benchmark.js';
 /** Classic Options tab; nothing changes until the parent dialog validates OK. */
 export function createRenderingOptions(ide) {
@@ -15,6 +15,11 @@ export function createRenderingOptions(ide) {
   const text = select('Text rendering', [['native', 'Native text (maximum font fidelity / IME)'], ['gpu', 'GPU atlas for eligible text (experimental)']], initial.text);
   const snap = el('input', {type: 'checkbox', checked: initial.pixelSnap, 'aria-label': 'Snap graphics to device pixels'});
   const exported = el('input', {type: 'checkbox', checked: false, 'aria-label': 'Use these settings in exported applications'});
+  const restore = el('button', {type: 'button'}, 'Restore Default Backends');
+  restore.addEventListener('click', () => {
+    backend.value = DEFAULT_RENDERING.backend;
+    fallbacks.forEach((select, i) => { select.value = DEFAULT_RENDERING.fallbacks[i]; });
+  });
   const status = createRenderingStatus(ide, names);
   const node = el('div', {},
     el('fieldset', {}, el('legend', {}, 'Rendering'),
@@ -22,7 +27,8 @@ export function createRenderingOptions(ide) {
         el('label', {}, 'First fallback:'), fallbacks[0], el('label', {}, 'Second fallback:'), fallbacks[1],
         el('label', {}, 'Text:'), text),
       el('label', {class: 'option-check'}, snap, 'Snap graphics to device pixels'),
-      el('label', {class: 'option-check'}, exported, 'Use these settings in exported applications')),
+      el('label', {class: 'option-check'}, exported, 'Use these settings in exported applications'),
+      restore, el('p', {class: 'tool-note'}, 'Default backends are restored in this dialog only. Press OK to apply; Cancel keeps the saved order.')),
     el('p', {class: 'tool-note'}, 'HTML / CSS is always the final safety fallback. GPU mode paints classic UI geometry; native inputs, code editing, SVG icons and unsupported effects remain browser-rendered. Text-atlas mode is experimental. No screenshot rasterization is used.'),
     status.node);
   const output = el('pre', {class:'tool-note', 'aria-live':'polite', style:'white-space:pre-wrap;max-height:150px;overflow:auto'}, 'Measure this browser and adapter without changing the project or renderer preference.');
@@ -37,6 +43,7 @@ export function createRenderingOptions(ide) {
     lifecycle.observe(doc.documentElement,{childList:true,subtree:true});
     try {
       report = await benchmarkRendering(doc, {signal:controller.signal, onProgress:backend => { output.textContent='Measuring '+backend+'...'; }});
+      status.setMeasurement(report);
       output.textContent = report.results.map(result => result.available ? result.backend+': CPU submit p50 '+result.cpuSubmission.p50Ms.toFixed(3)+' ms, p95 '+result.cpuSubmission.p95Ms.toFixed(3)+' ms; GPU pass '+(result.gpuPass ? result.gpuPass.p50Ms.toFixed(3)+' ms p50' : 'timestamps unavailable') : result.backend+': '+result.reason).join('\n')+'\n'+report.note;
       save.disabled = false;
     } catch (error) { output.textContent = error.message || String(error); }
@@ -46,8 +53,9 @@ export function createRenderingOptions(ide) {
   save.addEventListener('click', () => {
     if (!report) return;
     const view = node.ownerDocument.defaultView, url = view.URL.createObjectURL(new view.Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
-    const link=node.ownerDocument.createElement('a');link.href=url;link.download='vb6-rendering-measurements.json';link.click();
-    view.setTimeout(()=>view.URL.revokeObjectURL(url),0);
+    const link=node.ownerDocument.createElement('a');link.href=url;link.download='vb6-rendering-measurements.json';link.hidden=true;
+    try { node.ownerDocument.body.append(link); link.click(); }
+    finally { link.remove(); view.setTimeout(()=>view.URL.revokeObjectURL(url),3000); }
   });
   node.append(el('fieldset',{},el('legend',{},'Local measurement'),measure,cancel,save,output));
   return {node, dispose() { status.dispose(); controller?.abort(); }, apply() {

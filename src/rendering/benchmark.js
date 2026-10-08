@@ -109,7 +109,7 @@ export async function benchmarkRendering(document, {frames = 30, quads = 10000, 
     } finally { timer?.dispose(); painter?.dispose(); canvas.width=canvas.height=1; }
   }
   abort();
-  return {schema:1, environment:renderingEnvironment(view), frames, quads, width:512, height:512, dpr:1, userAgent:view.navigator.userAgent, results,
+  return {schema:1, completedAt:new Date().toISOString(), environment:renderingEnvironment(view), frames, quads, width:512, height:512, dpr:1, userAgent:view.navigator.userAgent, results,
     claims:{physicalHardwareCertified:false, nativeVB6PixelParityCertified:false, wholeIDEPerformanceCompared:false},
     note:'CPU submission and optional GPU pass timestamps for sealed primitives only. No presentation/FPS, input latency, power or native HTML compositor comparison. Adapter may be software. Timestamp values may be quantized.'};
 }
