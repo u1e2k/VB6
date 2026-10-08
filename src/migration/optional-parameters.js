@@ -58,9 +58,9 @@ export function optionalDefault(procedure, parameter, context) {
   return 'Nothing';
 }
 
-/** Preserve lexical evaluation order. Explicit and omitted middle arguments
- * retain their positions; absent named suffixes are appended as named values.
- * Required ByRef parameters continue to receive the original storage location. */
+/** Bind omitted arguments to declaration-scope defaults. Reordered supplied
+ * names must first pass through orderedCall: spelling named VB.NET arguments
+ * in lexical order alone does not preserve their evaluation order. */
 export function bindOptionalArguments(node, procedure, context, emit) {
   if (!optionalOverloads(procedure, context) || !node.args.some(arg => arg.kind === 'named' || arg.kind === 'missing')) return null;
   const supplied = new Set();

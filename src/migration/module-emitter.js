@@ -1,3 +1,4 @@
+import {emitCallAdapters} from './call-order.js';
 import {optionalOverloadModifier, declarationParameters, emitOptionalOverloads} from './optional-parameters.js';
 import {emitFileAdapters} from './file-records.js';
 import {propertyPlan, accessorName} from './property-plan.js';
@@ -127,7 +128,7 @@ function field(writer,decl,context) {
   }else writer.line(variable(decl,context),{source:context.source,line:decl.line||1});
 }
 export function emitModule(state,module,path) {
-  state={...state,generatedFile:path,fileAdapters:new Map()};
+  state={...state,generatedFile:path,fileAdapters:new Map(),callAdapters:new Map()};
   const writer=new CodeWriter(path),context=createContext(state,module);
   writer.line('Option Explicit On');writer.line('Option Strict '+(state.options.strict?'On':'Off'));writer.line('Option Infer On');writer.line('Option Compare '+(module.optionCompare==='text'?'Text':'Binary'));
   writer.line('Imports System');writer.line('Imports Microsoft.VisualBasic');
@@ -177,6 +178,7 @@ export function emitModule(state,module,path) {
   for(const group of propertyGroups(module).values())emitProperty(writer,group,state,module);
   if(!state.directEntry&&state.entry?.kind==='main'&&key(state.entry.module)===key(module.name)){writer.open('Friend Sub __vbStart()');writer.line('[Main]()');writer.close('End Sub');}
   emitFileAdapters(writer,context);
+  emitCallAdapters(writer,context);
   writer.close(module.kind==='module'?'End Module':'End Class');
   return finishRuntimeImports(writer,context);
 }

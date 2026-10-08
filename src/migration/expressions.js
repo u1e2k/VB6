@@ -1,3 +1,4 @@
+import {orderedCall} from './call-order.js';
 import {bindOptionalArguments, optionalDefault} from './optional-parameters.js';
 import {accessorReference, propertyPlan, defaultPropertyCall} from './property-plan.js';
 import {nativeIntrinsic, valueNeedsCopy} from './native-intrinsics.js';
@@ -138,6 +139,8 @@ export function expression(node, context, usage={}) {
         if(parameter&&arg.kind!=='missing'&&key(parameter.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+e(arg)+')':context.runtime('VbCurrency.FromObject')+'('+e(arg)+')';
         return e(arg,{argument:true});
       };
+      const ordered=orderedCall(node,symbol,context,emitArgument,e);
+      if(ordered!==null)return ordered;
       const args=bindOptionalArguments(node,symbol,context,emitArgument)||node.args.map((arg,index)=>{
         const p=arg.kind==='named'?symbol?.params?.find(param=>key(param.name)===key(arg.name)):symbol?.params?.[index];
         if(arg.kind==='missing'&&p?.optional)return optionalDefault(symbol,p,context);
