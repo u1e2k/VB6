@@ -2,7 +2,7 @@
 """Actual Chromium UI and exported-app data tests. Local HTTP service; no public API dependency."""
 from pathlib import Path
 import json, os, shutil, subprocess, time, traceback, urllib.request, re, hashlib, base64, html
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'reports/data-sources';OUT.mkdir(parents=True,exist_ok=True)
 RESULTS=[]
@@ -35,7 +35,10 @@ try:
             p=page_for(browser,'sqlite-customers');ready(p,2)
             p.locator('[data-control="txtName"] input').fill('Saved from textbox');button(p,'cmdSave').click();button(p,'cmdLoad').click()
             p.wait_for_function('vb6Application.forms[0].controlMap.get("txtname").Text==="Saved from textbox"')
-            button(p,'cmdNew').click();ready(p,3);check(p.locator('[data-control="txtName"] input').input_value()=='New customer')
+            button(p,'cmdNew').click();ready(p,3)
+            # RecordCount changes before the queued control repaint. Assert the
+            # actual visible value with polling, not a snapshot of the old frame.
+            expect(p.locator('[data-control="txtName"] input')).to_have_value('New customer')
             button(p,'cmdDelete').click();ready(p,2)
             p.get_by_role('button',name='MoveFirst',exact=True).click();p.wait_for_function('vb6Application.forms[0].controlMap.get("txtname").Text==="Saved from textbox"')
             # A new app host reopens the real SQLite bytes, not a cached recordset.
@@ -70,7 +73,10 @@ try:
             req=urllib.request.Request('http://127.0.0.1:4286/customers/1',method='PATCH',data=json.dumps({'name':'External writer'}).encode(),headers={'Content-Type':'application/json','If-Match':row['etag']})
             urllib.request.urlopen(req).close()
             p.locator('[data-control="txtName"] input').fill('Stale edit');button(p,'cmdSave').click();p.locator('.vb-modal-shade').wait_for()
-            check('3197' in button(p,'lblStatus').inner_text());check(json.load(urllib.request.urlopen('http://127.0.0.1:4286/customers/1'))['name']=='External writer')
+            # The modal can appear before the deferred label repaint completes.
+            # Keep the exact error contract, but wait for its visible rendering.
+            expect(button(p,'lblStatus')).to_contain_text('3197')
+            check(json.load(urllib.request.urlopen('http://127.0.0.1:4286/customers/1'))['name']=='External writer')
             p.locator('.vb-modal-shade button').last.click();healthy(p);p.screenshot(path=str(OUT/'rest-app.png'));p.close()
         case('Exported REST app: real HTTP paging, writes, delete and ETag conflict rejects lost updates',rest)
         def graph():

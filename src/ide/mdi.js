@@ -10,14 +10,16 @@ export class MdiHost {
   constructor(container,{onActivate,onClose,onChange}={}){
     this.onActivate=onActivate;this.onClose=onClose;this.onChange=onChange;this.windows=new Map();this.z=0;
     this.node=el('div',{class:'mdi-desktop','aria-label':'Document workspace'});container.prepend(this.node);
-    this.observer=new ResizeObserver(()=>this.reflow());this.observer.observe(this.node);
+    this.reflowFrame=null;
+    const view=this.node.ownerDocument.defaultView;
+    this.observer=new view.ResizeObserver(()=>this.scheduleReflow());this.observer.observe(this.node);
   }
   add(key,title,content,{width=660,height=470,glyph='form',bounds}={}){
     if(this.windows.has(key))return this.windows.get(key);
     const i=this.windows.size,rect=bounds||{x:8+(i%7)*24,y:8+(i%7)*24,width,height};
     const node=el('section',{class:'mdi-window','data-mdi-key':key,'aria-label':title}),header=el('div',{class:'document-title',tabindex:0,'aria-label':title+' title bar'}),label=el('strong',{},title),sys=el('button',{class:'mdi-system-menu',title:'Window menu','aria-label':'Window menu'},icon(glyph));
     const win={key,node,header,label,content,rect,minimized:false,maximized:false};
-    const commands=el('div',{class:'window-buttons'});win.minimize=el('button',{title:'Minimize document','aria-label':'Minimize document',onclick:()=>this.minimize(key)},icon('minimize'));win.maximize=el('button',{title:'Maximize document','aria-label':'Maximize document',onclick:()=>this.maximize(key)},icon('maximize'));win.close=el('button',{title:'Close current document','aria-label':'Close current document',onclick:()=>this.onClose?.(key)},icon('close'));const detach=el('button',{'data-browser-detach':'',disabled:this.browserWindows?.enabled===false,title:'Float in Browser Window','aria-label':'Float document in Browser Window',onclick:()=>this.detach?.(key)},'↗');commands.append(detach,win.minimize,win.maximize,win.close);header.append(sys,label,commands);
+    const commands=el('div',{class:'window-buttons'});win.minimize=el('button',{'data-caption-action':'minimize',title:'Minimize document','aria-label':'Minimize document',onclick:()=>this.minimize(key)},icon('minimize'));win.maximize=el('button',{'data-caption-action':'maximize',title:'Maximize document','aria-label':'Maximize document',onclick:()=>this.maximize(key)},icon('maximize'));win.close=el('button',{'data-caption-action':'close',title:'Close current document','aria-label':'Close current document',onclick:()=>this.onClose?.(key)},icon('close'));const detach=el('button',{'data-browser-detach':'',disabled:this.browserWindows?.enabled===false,title:'Float in Browser Window','aria-label':'Float document in Browser Window',onclick:()=>this.detach?.(key)},'↗');commands.append(detach,win.minimize,win.maximize,win.close);header.append(sys,label,commands);
     const client=el('div',{class:'mdi-client'});client.append(content);node.append(header,client);win.client=client;
     for(const edge of ['n','s','e','w','nw','ne','sw','se']){const h=el('div',{class:'mdi-resize mdi-resize-'+edge,'data-edge':edge});node.append(h);this.bindDrag(win,h,edge);}
     this.bindDrag(win,header,'move');header.addEventListener('dblclick',e=>{if(!e.target.closest('button'))this.maximize(key);});
@@ -33,11 +35,35 @@ export class MdiHost {
     if(this.browserWindows?.has('document:'+win.key))return;
     const {clientWidth:w,clientHeight:h}=this.node;if(w<40||h<40)return;
     let r;if(win.maximized)r={x:0,y:0,width:w,height:h};else if(win.minimized){const i=[...this.windows.values()].filter(v=>v.minimized).indexOf(win);r={x:(i%Math.max(1,Math.floor(w/170)))*170,y:Math.max(0,h-26-Math.floor(i/Math.max(1,Math.floor(w/170)))*26),width:Math.min(168,w),height:24};}else{win.rect=constrainWindow(win.rect,w,h,win.tiled?40:220,win.tiled?40:140);r=win.rect;}
-    Object.assign(win.node.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'});win.node.classList.toggle('mdi-minimized',win.minimized);win.node.classList.toggle('mdi-maximized',win.maximized);
-    win.maximize.replaceChildren(icon(win.maximized?'restore':'maximize'));win.maximize.title=win.maximized?'Restore document':'Maximize document';win.maximize.setAttribute('aria-label',win.maximize.title);
-    win.minimize.replaceChildren(icon(win.minimized?'restore':'minimize'));win.minimize.title=win.minimized?'Restore document':'Minimize document';win.minimize.setAttribute('aria-label',win.minimize.title);
+    // Retain unchanged caption glyphs and attributes. Replacing observed SVGs
+    // during every reflow caused WebKit's undelivered ResizeObserver error and
+    // needless scene invalidation. Explicit user actions still layout at once.
+    for(const [name,value] of Object.entries({left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px'}))if(win.node.style[name]!==value)win.node.style[name]=value;
+    if(win.paintedMaximized!==win.maximized){
+      win.node.classList.toggle('mdi-maximized',win.maximized);
+      win.maximize.replaceChildren(icon(win.maximized?'restore':'maximize'));win.maximize.title=win.maximized?'Restore document':'Maximize document';win.maximize.setAttribute('aria-label',win.maximize.title);
+      win.paintedMaximized=win.maximized;
+    }
+    if(win.paintedMinimized!==win.minimized){
+      win.node.classList.toggle('mdi-minimized',win.minimized);
+      win.minimize.replaceChildren(icon(win.minimized?'restore':'minimize'));win.minimize.title=win.minimized?'Restore document':'Minimize document';win.minimize.setAttribute('aria-label',win.minimize.title);
+      win.paintedMinimized=win.minimized;
+    }
   }
-  reflow(){for(const win of this.windows.values())this.layout(win);}
+  cancelReflow(){
+    if(this.reflowFrame!==null){this.reflowView.cancelAnimationFrame(this.reflowFrame);this.reflowFrame=null;}
+  }
+  scheduleReflow(){
+    if(this.disposed)return;
+    const view=this.node.ownerDocument.defaultView;
+    if(this.reflowFrame!==null&&this.reflowView===view)return;
+    this.cancelReflow();this.reflowView=view;
+    // Layout writes must not run inside ResizeObserver's depth-limited delivery
+    // loop. Coalesce them into the owning window's next animation frame.
+    // Source: https://www.w3.org/TR/resize-observer/#html-event-loop
+    this.reflowFrame=view.requestAnimationFrame(()=>{this.reflowFrame=null;if(!this.disposed)this.reflow();});
+  }
+  reflow(){this.cancelReflow();if(!this.disposed)for(const win of this.windows.values())this.layout(win);}
   restore(key){if(this.browserWindows?.has('document:'+key))return;const win=this.windows.get(key);if(!win)return;win.minimized=win.maximized=false;win.tiled=false;this.layout(win);this.activate(key);this.onChange?.();}
   minimize(key){if(this.browserWindows?.has('document:'+key))return;const win=this.windows.get(key);if(!win)return;if(win.minimized){this.restore(key);return;}win.minimized=true;win.maximized=false;this.layout(win);this.onChange?.();}
   maximize(key){if(this.browserWindows?.has('document:'+key))return;const win=this.windows.get(key);if(!win)return;win.maximized=!win.maximized;win.minimized=false;this.layout(win);this.activate(key);this.onChange?.();}
@@ -67,5 +93,5 @@ export class MdiHost {
   }
   snapshot(){return [...this.windows.values()].map(w=>({key:w.key,rect:{...w.rect},minimized:w.minimized,maximized:w.maximized,tiled:!!w.tiled}));}
   restoreSnapshot(states){for(const state of states||[]){const win=this.windows.get(state.key);if(!win)continue;if(state.rect&&Object.values(state.rect).every(v=>Number.isFinite(v)))win.rect=state.rect;win.tiled=!!state.tiled;win.minimized=!!state.minimized;win.maximized=!!state.maximized&&!win.minimized;this.layout(win);}}
-  dispose(){this.observer.disconnect();this.clear();this.node.remove();}
+  dispose(){this.disposed=true;this.cancelReflow();this.observer.disconnect();this.clear();this.node.remove();}
 }

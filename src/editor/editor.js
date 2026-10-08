@@ -1,14 +1,17 @@
+import {themedIndicator} from '../theme/icons.js';
+import {referenceSnapshot} from './reference-metadata.js';
+import {declarationTargets} from './event-completion.js';
 import {FindIndex,replaceMatches} from './find-index.js';
 import {VirtualTextInput} from './virtual-input.js';
 import {updateSourceIndex,replacementChange,inputChange,HighlightCache} from './incremental.js';
 import {EditorIntelligence,wordAt} from './intelligence.js';
-import {completionSpan,statementBefore} from './source-context.js';
+import {completionSpan,statementBefore,completionMatches} from './source-context.js';
 let completionSerial=0;
 import {tokenize} from '../language/lexer.js';
 import {DEFAULT_EVENTS,CONTROL_EVENTS} from '../controls/controls.js';
 import {Signal,el,lower} from '../core/core.js';
 import {icon} from '../theme/icons.js';
-import {normalizeAppearance} from '../theme/theme.js';
+import {normalizeIdeAppearance as normalizeAppearance} from '../theme/ide-appearance.js';
 import {indexSource,positionAt,offsetAt,sourceRange,replaceRange,textChange,mapOffset} from './projection.js';
 import {KEYWORDS,BUILTINS,MEMBERS,highlightLine,procedures,formatCode} from './language-service.js';
 
@@ -51,21 +54,17 @@ export class SourceEditor extends Signal {
     pane.procedureButton.setAttribute('aria-pressed',String(pane.mode==='procedure'));pane.moduleButton.setAttribute('aria-pressed',String(pane.mode==='module'));pane.node.dataset.viewMode=pane.mode;
   }
   assignSource(value,selection=null,hint=null){
-    const next=String(value),change=hint||textChange(this.text,next),states=this.panes.map(p=>({pane:p,start:mapOffset(change,this.selectionBounds(p).start),end:mapOffset(change,this.selectionBounds(p).end)}));const indexed=updateSourceIndex(this.index,next,change);this.metrics.indexedLines+=indexed.scannedLines;this.selectorDirty ||= indexed.changedProcedures;this.text=next;this.lastValue=next;this.index=indexed.index;this.lines=this.index.lines;this.lineStarts=this.index.starts;this.procedureIndex=this.index.procedures;
+    const next=String(value),change=hint||textChange(this.text,next),states=this.panes.map(p=>({pane:p,start:mapOffset(change,this.selectionBounds(p).start),end:mapOffset(change,this.selectionBounds(p).end)}));const indexed=updateSourceIndex(this.index,next,change);this.metrics.indexedLines+=indexed.scannedLines;this.selectorDirty ||= indexed.changedProcedures||/\b(?:WithEvents|Implements)\b/i.test(this.text.slice(this.text.lastIndexOf('\n',Math.max(0,change.start-1))+1,this.text.indexOf('\n',change.oldEnd)<0?this.text.length:this.text.indexOf('\n',change.oldEnd))+next.slice(next.lastIndexOf('\n',Math.max(0,change.start-1))+1,next.indexOf('\n',change.newEnd)<0?next.length:next.indexOf('\n',change.newEnd)));this.text=next;this.lastValue=next;this.index=indexed.index;this.lines=this.index.lines;this.lineStarts=this.index.starts;this.procedureIndex=this.index.procedures;
     for(const state of states){if(selection&&state.pane===this.activePane)Object.assign(state,selection);this.syncPane(state.pane,state.start,state.end);}
   }
-  setDocument(module,project){this.closeCompletion();this.closeInfo();const changed=this.module?.id!==module.id;this.module=module;this.project=project;this.root.style.setProperty('--editor-tab-width',String(project.settings.tabWidth||4));if(changed&&!this.appearance.fullModule)this.primary.mode='procedure';if(changed){this.selectedObject='(General)';this.objectEntries=null;this.objectSignature=null;}this.assignSource(module.code||'',changed?{start:0,end:0}:null);if(changed)for(const pane of this.panes){pane.input.scrollTop=pane.input.scrollLeft=0;}this.updateSelectors();this.paint();this.cursorChanged();}
-  // Form-only edits do not replace source buffers, caret positions, or split-pane state.
+  setDocument(module,project){this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();const changed=this.module?.id!==module.id;this.module=module;this.project=project;this.root.style.setProperty('--editor-tab-width',String(project.settings.tabWidth||4));if(changed&&!this.appearance.fullModule)this.primary.mode='procedure';if(changed){this.selectedObject='(General)';this.objectEntries=null;this.objectSignature=null;}this.assignSource(module.code||'',changed?{start:0,end:0}:null);if(changed)for(const pane of this.panes){pane.input.scrollTop=pane.input.scrollLeft=0;}this.updateSelectors();this.paint();this.cursorChanged();}
+  // Keep current main's identity-preserving designer refresh; typed declarations
+  // add event/interface targets without resetting source, selection or split panes.
   refreshObjects(refreshEvents=true){
     if(!this.module)return false;
-    const entries=[{id:'$general',name:'(General)',type:''}],names=new Set();
-    if(this.module.form){
-      entries.push({id:'$form',name:'Form',type:this.module.form.type});
-      for(const control of this.module.form.controls){
-        const name=lower(control.name);if(names.has(name))continue;names.add(name);
-        entries.push({id:control.id,name:control.name,type:control.type,index:control.properties.Index});
-      }
-    }
+    const live={...this.module,code:this.text},targets=declarationTargets(this.project,live,this.intelligence,this.controlRegistry);
+    const entries=[{id:'$general',name:'(General)',type:''},...targets.map(t=>({id:t.id||t.kind+':'+t.name,name:t.name,type:t.type||t.kind,members:t.members}))];
+    this.declarationTargets=targets;
     const signature=JSON.stringify(entries);if(signature===this.objectSignature){this.objects.value=this.selectedObject||'(General)';return false;}
     const selected=this.selectedObject||'(General)',previous=this.objectEntries?.find(entry=>lower(entry.name)===lower(selected));
     const current=entries.find(entry=>entry.id===previous?.id)||entries.find(entry=>lower(entry.name)===lower(selected));
@@ -75,18 +74,25 @@ export class SourceEditor extends Signal {
     if(refreshEvents)this.updateSelectors(false,true);
     return true;
   }
+  activateProcedureSelection(){return this.activateProcedure();}
   updateSelectors(includeObjects=true,force=false){
     if(!this.module)return;
-    if(includeObjects)this.refreshObjects(false);
+    if(includeObjects||force||this.selectorDirty)this.refreshObjects(false);
     const selected=this.selectedObject||'(General)';
     if(selected!=='(General)'){
-      const control=this.module.form?.controls.find(c=>c.name===selected),type=control?.type||'Form';
-      const events=type==='Form'?['Initialize','Load','Activate','Deactivate','Resize','QueryUnload','Unload',...CONTROL_EVENTS]:[DEFAULT_EVENTS[type]||'Click',...(type==='Timer'?[]:CONTROL_EVENTS)];
-      const previousEvent=this.eventObject===selected?this.procedures.selectedOptions[0]?.dataset.event:null;
-      const options=[...new Set(events)].sort().map(event=>{const existing=this.procedureIndex.find(p=>lower(p.name)===lower(selected+'_'+event));return el('option',{value:existing?existing.line:'event:'+event,'data-event':event},event+(existing?'':' '));});
+      if(!force&&!includeObjects&&!this.selectorDirty)return;
+      const target=this.declarationTargets?.find(t=>lower(t.name)===lower(selected)),previousEvent=this.eventObject===selected?this.procedures.selectedOptions[0]?.dataset.event:null;
+      const idx=this.intelligence.index({...this.module,code:this.text},this.project);
+      const options=(target?.members||[]).map(member=>{
+        const key=member.key||member.name;
+        const existing=idx.procedures.find(p=>lower(p.name)===lower(selected+'_'+member.name)&&p.accessor===(member.accessor||null));
+        return el('option',{value:existing?existing.line:'event:'+key,'data-event':key,...(existing?{'data-offset':existing.offset}:{})},member.label||member.name);
+      }).sort((a,b)=>a.textContent.localeCompare(b.textContent));
       this.procedures.replaceChildren(...options);this.eventObject=selected;
-      // Native selects otherwise preselect their only item and never emit change.
-      this.procedures.selectedIndex=previousEvent?options.findIndex(option=>option.dataset.event===previousEvent&&!option.value.startsWith('event:')):-1;return;
+      // Missing sole events must remain unselected so both selection and Enter
+      // can explicitly create them; never create code while populating a list.
+      this.procedures.selectedIndex=previousEvent?options.findIndex(option=>option.dataset.event===previousEvent&&!option.value.startsWith('event:')):-1;
+      this.selectorDirty=false;return;
     }
     if(!force&&!includeObjects&&!this.selectorDirty)return;
     this.selectorDirty=false;const previous=this.procedures.value;this.procedures.replaceChildren(el('option',{value:''},'(Declarations)'),...[...this.procedureIndex].sort((a,b)=>a.name.localeCompare(b.name)).map(p=>el('option',{value:p.line},p.name+(p.kind==='Sub'?'':` [${p.kind}]`))));this.procedures.value=previous;
@@ -108,7 +114,7 @@ export class SourceEditor extends Signal {
     clearTimeout(this.infoTimer);if(this.appearance.autoQuickInfo&&!this.composing&&!this.acceptingCompletion)this.infoTimer=setTimeout(()=>this.showInfo('parameter',true),160);
   }
   prepareDocumentTransfer(){
-    if(this.disposed||this.transferState)return;this.closeCompletion();this.closeInfo();
+    if(this.disposed||this.transferState)return;this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();
     this.transferState={text:this.text,panes:this.panes.map(p=>({pane:p,selection:{...this.selectionBounds(p)},direction:p.input.selectionDirection,first:p.virtualizer.first,top:p.input.scrollTop,left:p.input.scrollLeft,rail:p.virtualizer.rail.scrollTop}))};
     // Adoption and unstyled layout can emit scroll/select events with zero geometry.
     for(const pane of this.panes)pane.virtualizer.syncing=true;
@@ -130,7 +136,7 @@ export class SourceEditor extends Signal {
   schedulePaint(){if(this.paintFrame||this.disposed)return;this.paintWindow=this.root.ownerDocument.defaultView;this.paintFrame=this.paintWindow.requestAnimationFrame(()=>{this.paintFrame=0;this.paint();});}
   paint(){if(!this.module||this.disposed)return;this.metrics.paints++;this.root.style.setProperty('--editor-gutter',this.appearance.margin===false?'0px':this.showLineNumbers?'32px':'18px');const breakpoints=new Set(this.breakpoints.filter(b=>lower(b.module)===lower(this.module.name)).map(b=>b.line)),separators=new Set(this.procedureIndex.map(p=>p.line)),bookmarks=new Set(this.module.bookmarks||[]);
     for(const pane of this.panes){const {input,viewport,syntax,gutter,lines,range}=pane,top=input.scrollTop,left=input.scrollLeft,first=Math.max(0,Math.floor((top-4)/this.lineHeight)),count=Math.ceil(viewport.clientHeight/this.lineHeight)+3,last=Math.min(lines.length,first+count),selection=this.selectionBounds(pane),select=this.root.ownerDocument.activeElement===input&&selection.start!==selection.end,selectionStart=selection.start-range.start,selectionEnd=selection.end-range.start;
-      syntax.style.transform=`translate(${-left}px,${first*this.lineHeight-top}px)`;const html=lines.slice(first,last).map((line,i)=>{const n=range.firstLine+i+first+1,bp=breakpoints.has(n),exec=this.execution?.module===this.module.name&&this.execution.line===n,separator=this.appearance.procedureSeparators&&separators.has(n)&&n>1,start=this.lineStarts[n-1]-range.start;return `<div class="syntax-line${bp?' breakpoint-line':''}${exec?' execution-line':''}${separator?' procedure-start':''}">${this.highlightCache.get(line+'\0'+(select?Math.max(-1,selectionStart-start):-1)+':'+(select?Math.min(line.length+1,selectionEnd-start):-1),()=>highlightLine(line,select?selectionStart-start:-1,select?selectionEnd-start:-1))}</div>`;}).join('');if(pane.lastHTML!==html){syntax.innerHTML=html;pane.lastHTML=html;this.metrics.domUpdates++;}const gutterKey=[first,last,this.showLineNumbers,[...breakpoints].join(','),[...bookmarks].join(','),this.execution?.line,this.execution?.module,this.diagnosticRevision].join('|');if(pane.gutterKey===gutterKey){for(const child of gutter.children)child.style.top=(4+(Number(child.dataset.line)-range.firstLine-1)*this.lineHeight-top)+'px';continue;}pane.gutterKey=gutterKey;gutter.replaceChildren();this.metrics.domUpdates++;for(let i=first;i<last;i++){const line=range.firstLine+i+1,bp=breakpoints.has(line),error=this.diagnosticMap?.get(lower(this.module.name)+':'+line),exec=this.execution?.module===this.module.name&&this.execution.line===line;gutter.append(el('div',{class:'gutter-line'+(bp?' has-breakpoint':'')+(error?' has-error':'')+(exec?' has-execution':'')+(bookmarks.has(line)?' has-bookmark':''),'data-line':line,title:error?.message||(bp?'Remove breakpoint':'Set breakpoint'),style:{top:(4+i*this.lineHeight-top)+'px'}},exec?icon('arrow-right',12):bp?el('span',{class:'breakpoint-dot'}):bookmarks.has(line)?el('span',{class:'bookmark-symbol',title:'Bookmark — Ctrl+click to remove'}):this.showLineNumbers?String(line):''));}}
+      syntax.style.transform=`translate(${-left}px,${first*this.lineHeight-top}px)`;const html=lines.slice(first,last).map((line,i)=>{const n=range.firstLine+i+first+1,bp=breakpoints.has(n),exec=this.execution?.module===this.module.name&&this.execution.line===n,execStart=exec&&this.execution.column?this.execution.column-1:-1,execEnd=exec&&this.execution.endColumn?this.execution.endColumn-1:-1,separator=this.appearance.procedureSeparators&&separators.has(n)&&n>1,start=this.lineStarts[n-1]-range.start;return `<div class="syntax-line${bp?' breakpoint-line':''}${exec?' execution-line'+(execStart>=0?' execution-range':''):''}${separator?' procedure-start':''}">${this.highlightCache.get(line+'\0'+(select?Math.max(-1,selectionStart-start):-1)+':'+(select?Math.min(line.length+1,selectionEnd-start):-1)+':'+execStart+':'+execEnd,()=>highlightLine(line,select?selectionStart-start:-1,select?selectionEnd-start:-1,execStart,execEnd))}</div>`;}).join('');if(pane.lastHTML!==html){syntax.innerHTML=html;pane.lastHTML=html;this.metrics.domUpdates++;}const gutterKey=[first,last,this.showLineNumbers,[...breakpoints].join(','),[...bookmarks].join(','),this.execution?.line,this.execution?.module,this.diagnosticRevision].join('|');if(pane.gutterKey===gutterKey){for(const child of gutter.children)child.style.top=(4+(Number(child.dataset.line)-range.firstLine-1)*this.lineHeight-top)+'px';continue;}pane.gutterKey=gutterKey;gutter.replaceChildren();this.metrics.domUpdates++;for(let i=first;i<last;i++){const line=range.firstLine+i+1,bp=breakpoints.has(line),error=this.diagnosticMap?.get(lower(this.module.name)+':'+line),exec=this.execution?.module===this.module.name&&this.execution.line===line;gutter.append(el('div',{class:'gutter-line'+(bp?' has-breakpoint':'')+(error?' has-error':'')+(exec?' has-execution':'')+(bookmarks.has(line)?' has-bookmark':''),'data-line':line,title:error?.message||(bp?'Remove breakpoint':'Set breakpoint'),style:{top:(4+i*this.lineHeight-top)+'px'}},exec?icon('arrow-right',12):bp?el('span',{class:'breakpoint-dot'}):bookmarks.has(line)?el('span',{class:'bookmark-symbol',title:'Bookmark — Ctrl+click to remove'}):this.showLineNumbers?String(line):''));}}
   }
   selectionBounds(pane=this.activePane){return pane.virtualizer?.selection()||{start:pane.range.start+pane.input.selectionStart,end:pane.range.start+pane.input.selectionEnd};}
   cursor(){return positionAt(this.index,this.selectionBounds().start);}
@@ -138,7 +144,7 @@ export class SourceEditor extends Signal {
   goToLine(line,column=1){const offset=offsetAt(this.index,line,column),pane=this.activePane;pane.explicitDeclarations=false;this.syncPane(pane,offset);this.input.focus();const y=(positionAt(this.index,offset).line-1-pane.range.firstLine)*this.lineHeight;if(y<this.input.scrollTop||y>this.input.scrollTop+this.viewport.clientHeight-50)this.input.scrollTop=Math.max(0,y-this.viewport.clientHeight*.35);this.cursorChanged();}
   setViewMode(mode){const cursor=this.cursor();this.activePane.mode=mode==='procedure'?'procedure':'module';this.syncPane(this.activePane,cursor.offset,cursor.offset,{scroll:false});this.goToLine(cursor.line,cursor.column);}
   setValue(value){if(this.readOnly||String(value)===this.text)return;this.closeCompletion();this.closeInfo();const oldText=this.text;this.assignSource(value);this.emit('change',{module:this.module,oldText,newText:this.text,kind:'command'});this.updateSelectors(false);this.cursorChanged();}
-  setReadOnly(value){if(value){this.closeCompletion();this.closeInfo();}this.readOnly=!!value;for(const pane of this.panes)pane.input.readOnly=this.readOnly;this.root.classList.toggle('read-only',this.readOnly);}
+  setReadOnly(value){if(value){this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();}this.readOnly=!!value;for(const pane of this.panes)pane.input.readOnly=this.readOnly;this.root.classList.toggle('read-only',this.readOnly);}
   setBreakpoints(values){this.breakpoints=values;this.paint();}setDiagnostics(values){this.diagnostics=values;this.diagnosticRevision=(this.diagnosticRevision||0)+1;this.diagnosticMap=new Map();for(const d of values){const key=lower(d.source)+':'+d.line;if(!this.diagnosticMap.has(key))this.diagnosticMap.set(key,d);}this.paint();}setExecution(value){this.execution=value;this.paint();}
   replaceSelection(text,start=undefined,end=undefined,kind='command'){if(this.input.readOnly)return;if(this.activePane.virtualizer?.active){const bounds=this.selectionBounds();return this.replaceGlobal(text,start===undefined?bounds.start:this.activePane.range.start+start,end===undefined?bounds.end:this.activePane.range.start+end,kind);}start??=this.input.selectionStart;end??=this.input.selectionEnd;this.input.focus();this.activePane.editKind=kind;this.activePane.editHint=replacementChange(start,end,String(text).length);this.input.setRangeText(text,start,end,'end');this.changed();}
   replaceGlobal(text,start,end,kind='command'){
@@ -172,11 +178,11 @@ export class SourceEditor extends Signal {
     if(command==='format'){const offset=this.cursor().offset;this.setValue(formatCode(this.text,this.project.settings.tabWidth||4));const position=positionAt(this.index,Math.min(offset,this.text.length));this.goToLine(position.line,position.column);return;}
     if(command==='comment'||command==='uncomment')this.transformBlock(line=>command==='comment'?"'"+line:line.replace(/^(\s*)' ?/,'$1'));
   }
-  keydown(e){if(e.isComposing||this.composing)return;const ctrl=e.ctrlKey||e.metaKey;
+  keydown(e){if(e.isComposing||this.composing)return;this.resumeCompositionAssistance();const ctrl=e.ctrlKey||e.metaKey;
     if(this.completion&&!ctrl&&!e.altKey){
       if(['ArrowDown','ArrowUp','PageDown','PageUp','Home','End','Enter','Tab','Escape'].includes(e.key)){
         e.preventDefault();
-        if(e.key==='Escape'){this.closeCompletion();this.closeInfo();}
+        if(e.key==='Escape'){this.cancelCompositionAssistance();this.closeCompletion();this.closeInfo();}
         else if(e.key==='Enter'||e.key==='Tab')this.acceptCompletion(e.key==='Enter'?'\n':'');
         else {const count=this.completionItems.length;this.completionIndex=e.key==='Home'?0:e.key==='End'?count-1:Math.max(0,Math.min(count-1,this.completionIndex+({ArrowDown:1,ArrowUp:-1,PageDown:9,PageUp:-9}[e.key])));this.scrollCompletion();}
         return;
@@ -184,11 +190,11 @@ export class SourceEditor extends Signal {
       if(['.','(',',',' ',')'].includes(e.key)&&!this.input.readOnly){e.preventDefault();this.acceptCompletion(e.key);return;}
       if(['ArrowLeft','ArrowRight'].includes(e.key))this.closeCompletion();
     }
-    if(ctrl&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const line=this.cursor().line,proc=e.key==='ArrowDown'?this.procedureIndex.find(p=>p.line>line):[...this.procedureIndex].reverse().find(p=>p.line<line);if(proc)this.goToLine(proc.line);return;}if(ctrl&&e.key.toLowerCase()==='y'&&!this.input.readOnly){e.preventDefault();this.cutLine();return;}if(ctrl&&e.code==='Space'){e.preventDefault();this.completeWord();return;}if(ctrl&&!e.shiftKey&&['f','h'].includes(e.key.toLowerCase())){e.preventDefault();this.showFind(e.key.toLowerCase()==='h');return;}if(e.key==='F3'||e.key==='F4'&&e.shiftKey){e.preventDefault();this.find(e.key==='F4'?1:e.shiftKey?-1:1);return;}if(e.key==='Escape'){this.findBar.hidden=true;this.closeCompletion();this.closeInfo();}
+    if(ctrl&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const line=this.cursor().line,proc=e.key==='ArrowDown'?this.procedureIndex.find(p=>p.line>line):[...this.procedureIndex].reverse().find(p=>p.line<line);if(proc)this.goToLine(proc.line);return;}if(ctrl&&e.key.toLowerCase()==='y'&&!this.input.readOnly){e.preventDefault();this.cutLine();return;}if(ctrl&&e.code==='Space'){e.preventDefault();this.completeWord();return;}if(ctrl&&!e.shiftKey&&['f','h'].includes(e.key.toLowerCase())){e.preventDefault();this.showFind(e.key.toLowerCase()==='h');return;}if(e.key==='F3'||e.key==='F4'&&e.shiftKey){e.preventDefault();this.find(e.key==='F4'?1:e.shiftKey?-1:1);return;}if(e.key==='Escape'){this.cancelCompositionAssistance();this.findBar.hidden=true;this.closeCompletion();this.closeInfo();}
     if(e.key==='Tab'&&!this.input.readOnly){e.preventDefault();const bounds=this.selectionBounds();if(bounds.start!==bounds.end||e.shiftKey)this.indentBlock(e.shiftKey);else this.replaceSelection(' '.repeat(this.project.settings.tabWidth||4));return;}
     if(e.key==='Enter'&&!this.input.readOnly){e.preventDefault();const previous=this.input.value.slice(0,this.input.selectionStart).split('\n').at(-1),indent=this.appearance.autoIndent?previous.match(/^\s*/)[0]:'';this.replaceSelection('\n'+indent,undefined,undefined,'typing');return;}
   }
-  completionSnapshot(){return {project:this.project,module:this.module.id,library:this.intelligence.libraryRevision,references:JSON.stringify([this.project.references||[],this.project.typeLibraries||[]]),dataSources:JSON.stringify(this.project.dataSources||{}),modules:this.project.modules.map(m=>({id:m.id,name:m.name,kind:m.kind,code:m.id===this.module.id?null:m.code,metadata:JSON.stringify([m.form?.controls?.map(c=>[c.name,c.type,c.properties?.Index]),m.form?.menus,m.attributes])})),conditions:JSON.stringify(this.project.settings?.conditionalConstants||{})};}
+  completionSnapshot(){return {project:this.project,module:this.module.id,library:this.intelligence.libraryRevision,references:referenceSnapshot(this.project).key,dataSources:JSON.stringify(this.project.dataSources||{}),modules:this.project.modules.map(m=>({id:m.id,name:m.name,kind:m.kind,code:m.id===this.module.id?null:m.code,metadata:JSON.stringify([m.form?.controls?.map(c=>[c.name,c.type,c.properties?.Index]),m.form?.menus,m.attributes])})),conditions:JSON.stringify(this.project.settings?.conditionalConstants||{})};}
   sameCompletionSnapshot(a,b){return a&&a.project===b.project&&a.module===b.module&&a.library===b.library&&a.references===b.references&&a.dataSources===b.dataSources&&a.conditions===b.conditions&&a.modules.length===b.modules.length&&a.modules.every((m,i)=>Object.keys(m).every(k=>m[k]===b.modules[i][k]));}
   complete(mode='members',reuse=false){
     if(!this.module||this.composing||this.input.readOnly)return;
@@ -200,7 +206,7 @@ export class SourceEditor extends Signal {
     }
     this.completionStart=span.start;this.completionEnd=span.end;this.completionCaret=cursor.offset;this.completionMode=mode;
     const prefix=span.prefix.replace(/^\[/,'').toLowerCase();
-    this.completionDetails=this.completionCandidates.filter(s=>lower(s.name).startsWith(prefix));
+    this.completionDetails=this.completionCandidates.filter(s=>completionMatches(s.name,span.prefix));
     this.completionItems=this.completionDetails.map(s=>s.name);if(!this.completionItems.length){this.closeCompletion();return;}
     this.completionIndex=Math.max(0,reuse?this.completionItems.indexOf(previous):0);
     if(!this.completion){
@@ -224,7 +230,7 @@ export class SourceEditor extends Signal {
   renderCompletion(){if(!this.completion)return;const rowHeight=19,count=this.completionItems.length,start=Math.max(0,Math.floor(this.completion.scrollTop/rowHeight)-1),end=Math.min(count,start+13);const spacer=el('div',{'aria-hidden':'true',style:{height:count*rowHeight+'px',pointerEvents:'none'}}),rows=[];
     for(let i=start;i<end;i++){
       const item=this.completionDetails[i],name=item.name;
-      rows.push(el('div',{id:this.completion.id+'-'+i,class:'completion-item'+(i===this.completionIndex?' selected':''),role:'option','aria-selected':i===this.completionIndex,'aria-posinset':i+1,'aria-setsize':count,title:[item.signature||name,item.description].filter(Boolean).join(' — '),style:{position:'absolute',top:i*rowHeight+'px',height:rowHeight+'px',left:0,right:0},onpointerdown:e=>{e.preventDefault();this.completionIndex=i;this.acceptCompletion();}},el('span',{class:'completion-icon'},icon(['function','method','sub'].includes(item.kind)?'code':'properties',12)),name));
+      rows.push(el('div',{id:this.completion.id+'-'+i,class:'completion-item'+(i===this.completionIndex?' selected':''),role:'option','aria-selected':i===this.completionIndex,'aria-posinset':i+1,'aria-setsize':count,title:[item.signature||name,item.description].filter(Boolean).join(' — '),style:{position:'absolute',top:i*rowHeight+'px',height:rowHeight+'px',left:0,right:0},ondblclick:e=>{e.preventDefault();this.completionIndex=i;this.acceptCompletion();},onpointerdown:e=>{e.preventDefault();this.completionIndex=i;{for(const row of this.completion.querySelectorAll('[role=option]')){const active=row.id===this.completion.id+'-'+i;row.classList.toggle('selected',active);row.setAttribute('aria-selected',String(active));}this.input.setAttribute('aria-activedescendant',this.completion.id+'-'+i);}}},el('span',{class:'completion-icon'},icon(['function','method','sub'].includes(item.kind)?'code':'properties',12)),name));
     }
     this.completion.replaceChildren(spacer,...rows);this.input.setAttribute('aria-activedescendant',this.completion.id+'-'+this.completionIndex);
   }
@@ -255,22 +261,33 @@ export class SourceEditor extends Signal {
     if(!this.info){this.info=el('div',{class:'source-info',role:'tooltip','aria-label':'Code information'});this.viewport.append(this.info);}
     const doc=this.root.ownerDocument;
     if(info.params){
-      this.info.replaceChildren(doc.createTextNode(info.name+'('),...info.params.flatMap((p,i)=>[i?', ':'',el(i===info.active?'strong':'span',{},/^Optional\s+/i.test(p)?'['+p.replace(/^Optional\s+/i,'')+']':p.endsWith('?')?'['+p.slice(0,-1)+']':p)]),doc.createTextNode(')'+(info.type&&info.type!=='Void'?' As '+info.type:'')));
+      this.info.replaceChildren(doc.createTextNode(info.name+'('),...(info.displayParams||info.params).flatMap((p,i)=>[i?', ':'',el(i===info.active?'strong':'span',{},/^Optional\s+/i.test(p)?'['+p.replace(/^Optional\s+/i,'')+']':p.endsWith('?')?'['+p.slice(0,-1)+']':p)]),doc.createTextNode(')'+(info.type&&info.type!=='Void'?' As '+info.type:'')));
       this.info.dataset.parameter=String(info.active??-1);
     }else{this.info.textContent=info.signature||info.name+' As '+(info.type||'Variant');delete this.info.dataset.parameter;}
     if(info.description)this.info.append(el('div',{class:'source-info-description'},info.description));
     this.infoOffset=cursor.offset;this.positionPopup(this.info);this.lastInfo=info;
   }
   closeInfo(){this.info?.remove();this.info=null;clearTimeout(this.infoTimer);}
-  definition(){const c=this.cursor(),text=this.input.value.slice(this.input.selectionStart,this.input.selectionEnd)||wordAt(this.text,c.offset).text;return this.intelligence.resolve(this.project,{...this.module,code:this.text},c.line,text);}
+  definition(){const c=this.cursor(),text=this.input.value.slice(this.input.selectionStart,this.input.selectionEnd)||wordAt(this.text,c.offset).text;return this.intelligence.definition(this.project,{...this.module,code:this.text},c.line,this.text,c.offset,text);}
+  cancelCompositionAssistance(){clearTimeout(this.compositionTimer);this.compositionTimer=null;this.compositionResume=null;this.compositionMode=null;}
+  resumeCompositionAssistance(){
+    const pending=this.compositionResume;if(!pending)return;
+    this.cancelCompositionAssistance();
+    const {input,mode,module,project}=pending;
+    if(this.disposed||this.composing||this.module!==module||this.project!==project||this.input!==input||input.readOnly||input.ownerDocument.activeElement!==input)return;
+    if(mode)this.complete(mode);
+    if(this.appearance.autoQuickInfo)this.showInfo('parameter',true);
+  }
   bindAdvancedInput(pane){
     const input=pane.input;
     input.addEventListener('beforeinput',e=>{pane.beforeInput={start:input.selectionStart,end:input.selectionEnd,type:e.inputType,composing:e.isComposing};if(this.overwrite&&!e.isComposing&&e.inputType==='insertText'&&e.data&&input.selectionStart===input.selectionEnd&&!input.readOnly){const start=input.selectionStart,lineEnd=input.value.indexOf('\n',start),limit=lineEnd<0?input.value.length:lineEnd;const end=Math.min(limit,start+[...e.data].reduce((n,c)=>n+(input.value.codePointAt(start+n)>65535?2:1),0));e.preventDefault();this.activatePane(pane);this.replaceSelection(e.data,start,end);}});
-    input.addEventListener('compositionstart',()=>{clearTimeout(this.compositionTimer);this.compositionMode=this.completion?this.completionMode:null;this.composing=true;this.closeCompletion();this.closeInfo();});input.addEventListener('compositionend',()=>{
+    input.addEventListener('compositionstart',()=>{this.cancelCompositionAssistance();this.compositionMode=this.completion?this.completionMode:null;this.composing=true;this.closeCompletion();this.closeInfo();});input.addEventListener('compositionend',()=>{
       this.composing=false;const mode=this.compositionMode||(this.appearance.autoListMembers?'auto':null);this.compositionMode=null;this.cursorChanged();
-      // Firefox text insertion and IMEs can end composition after the final
-      // input event. Resume the hidden list only after committed text settles.
-      this.compositionTimer=setTimeout(()=>{if(this.disposed||this.composing||this.input!==input||input.ownerDocument.activeElement!==input)return;if(mode)this.complete(mode);if(this.appearance.autoQuickInfo)this.showInfo('parameter',true);},0);
+      // Usually resume after the committed input event. A following key can
+      // arrive before this timer (Firefox/IME): keydown drains the same task
+      // first so Tab commits and Escape cancels, without reopening afterward.
+      this.compositionResume={input,mode,module:this.module,project:this.project};
+      this.compositionTimer=setTimeout(()=>this.resumeCompositionAssistance(),0);
     });
     input.addEventListener('keydown',e=>{
       if(e.defaultPrevented||e.isComposing)return;const ctrl=e.ctrlKey||e.metaKey;
@@ -290,10 +307,10 @@ export class SourceEditor extends Signal {
   }
   indentBlock(outdent=false){if(this.readOnly)return;const width=this.project.settings.tabWidth||4;this.transformBlock(line=>outdent?line.replace(new RegExp('^ {1,'+width+'}|^\\t'),''):' '.repeat(width)+line);}
   transformBlock(transform){if(this.readOnly)return;const selection=this.selectionBounds(),startLine=positionAt(this.index,selection.start).line,endLine=positionAt(this.index,Math.max(selection.start,selection.end-(selection.end>selection.start&&this.text[selection.end-1]==='\n'?1:0))).line,start=offsetAt(this.index,startLine),end=offsetAt(this.index,endLine,1e9),text=this.text.slice(start,end).split('\n').map(transform).join('\n');this.replaceGlobal(text,start,end);this.selectGlobal(start,start+text.length);}
-  buildFind(){const box=el('div',{class:'editor-find',hidden:true});this.findInput=el('input',{placeholder:'Find what','aria-label':'Find what'});this.replaceInput=el('input',{placeholder:'Replace with','aria-label':'Replace with'});this.caseBox=el('input',{type:'checkbox'});this.wholeBox=el('input',{type:'checkbox'});this.findResult=el('span',{class:'find-result'});box.append(this.findInput,el('button',{onclick:()=>this.find(-1),title:'Find previous'},'↑'),el('button',{onclick:()=>this.find(1),title:'Find next'},'↓'),this.replaceInput,el('button',{class:'replace-command',onclick:()=>this.replace(false)},'Replace'),el('button',{class:'replace-command',onclick:()=>this.replace(true)},'All'),el('label',{},this.caseBox,'Aa'),el('label',{},this.wholeBox,'Word'),this.findResult,el('button',{onclick:()=>{box.hidden=true;this.input.focus();},title:'Close find'},'×'));this.findInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();this.find(e.shiftKey?-1:1);}if(e.key==='Escape'){box.hidden=true;this.input.focus();}});return box;}
+  buildFind(){const box=el('div',{class:'editor-find',hidden:true});this.findInput=el('input',{placeholder:'Find what','aria-label':'Find what'});this.replaceInput=el('input',{placeholder:'Replace with','aria-label':'Replace with'});this.caseBox=el('input',{type:'checkbox'});this.wholeBox=el('input',{type:'checkbox'});this.findResult=el('span',{class:'find-result'});box.append(this.findInput,el('button',{onclick:()=>this.find(-1),title:'Find previous'},themedIndicator('up','↑')),el('button',{onclick:()=>this.find(1),title:'Find next'},themedIndicator('down','↓')),this.replaceInput,el('button',{class:'replace-command',onclick:()=>this.replace(false)},'Replace'),el('button',{class:'replace-command',onclick:()=>this.replace(true)},'All'),el('label',{},this.caseBox,'Aa'),el('label',{},this.wholeBox,'Word'),this.findResult,el('button',{onclick:()=>{box.hidden=true;this.input.focus();},title:'Close find'},themedIndicator('close','×')));this.findInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();this.find(e.shiftKey?-1:1);}if(e.key==='Escape'){box.hidden=true;this.input.focus();}});return box;}
   showFind(replace=false){this.findBar.hidden=false;this.findBar.classList.toggle('replace-visible',replace);const selected=this.input.value.slice(this.input.selectionStart,this.input.selectionEnd);if(selected&&!selected.includes('\n'))this.findInput.value=selected;this.findInput.focus();this.findInput.select();}
   matches(){return this.findIndex.search(this.text,this.findInput.value,{matchCase:this.caseBox.checked,wholeWord:this.wholeBox.checked});}
   find(direction=1){this.matches();const bounds=this.selectionBounds(),match=this.findIndex.next(direction>0?bounds.end:bounds.start,direction);if(!match){this.findResult.textContent='No matches';return;}const pos=positionAt(this.index,match.start);this.goToLine(pos.line,pos.column);if(match.end>this.activePane.range.end&&!this.activePane.virtualizer?.active){this.setViewMode('module');this.goToLine(pos.line,pos.column);}this.selectGlobal(match.start,match.end);this.paint();this.findResult.textContent=(match.index+1)+' of '+match.count;}
   replace(all){if(this.input.readOnly)return;const matches=this.matches();if(all){this.setValue(replaceMatches(this.text,matches,this.replaceInput.value));this.findResult.textContent=matches.length+' replaced';}else{const bounds=this.selectionBounds(),selected=matches.find(m=>m.start===bounds.start&&m.end===bounds.end);if(selected)this.replaceGlobal(this.replaceInput.value,bounds.start,bounds.end);this.find();}}
-  dispose(){this.disposed=true;this.assistance?.dispose();this.findIndex.clear();(this.paintWindow||this.root.ownerDocument.defaultView).cancelAnimationFrame(this.paintFrame);this.closeInfo();this.highlightCache.clear();for(const pane of this.panes){pane.observer.disconnect();pane.virtualizer?.dispose();}this.closeCompletion();this.root.remove();}
+  dispose(){this.disposed=true;this.cancelCompositionAssistance();this.assistance?.dispose();this.findIndex.clear();(this.paintWindow||this.root.ownerDocument.defaultView).cancelAnimationFrame(this.paintFrame);this.closeInfo();this.highlightCache.clear();for(const pane of this.panes){pane.observer.disconnect();pane.virtualizer?.dispose();}this.closeCompletion();this.root.remove();}
 }

@@ -67,6 +67,78 @@ with sync_playwright() as pw:
             check('unchanged Calculator exports from File Make EXE', calculator_download.suggested_filename == 'Calculator.exe')
             calculator_download.save_as(OUT / 'Calculator.exe')
             check('Calculator IDE export matches Node native compiler', (OUT / 'Calculator.exe').read_bytes() == (numeric_dir / 'Calculator.exe').read_bytes())
+        currency_dir = ROOT / 'validation/currency'
+        if currency_dir.exists():
+            money = json.loads((currency_dir / 'AotCurrency.vb6web').read_text())
+            page.evaluate('p => vb6Studio.loadProject(p)', money)
+            before = page.evaluate('JSON.stringify(vb6Studio.project.modules)')
+            with page.expect_download() as pending:
+                page.evaluate('vb6Studio.command("exportWin32")')
+            downloaded = pending.value
+            downloaded.save_as(OUT / 'AotCurrency.exe')
+            check('Currency File Make EXE preserves original source', before == page.evaluate('JSON.stringify(vb6Studio.project.modules)'))
+            check('Currency File Make EXE output equals Node', downloaded.suggested_filename == 'AotCurrency.exe' and (OUT / 'AotCurrency.exe').read_bytes() == (currency_dir / 'AotCurrency.exe').read_bytes())
+            check('Currency export has no network requests or page errors', not errors and not requests)
+        date_dir = ROOT / 'validation/dates'
+        if date_dir.exists():
+            dates = json.loads((date_dir / 'AotDates.vb6web').read_text())
+            page.evaluate('p => vb6Studio.loadProject(p)', dates)
+            before = page.evaluate('JSON.stringify(vb6Studio.project.modules)')
+            with page.expect_download() as pending:
+                page.evaluate('vb6Studio.command("exportWin32")')
+            downloaded = pending.value
+            downloaded.save_as(OUT / 'AotDates.exe')
+            check('Date File Make EXE preserves original source', before == page.evaluate('JSON.stringify(vb6Studio.project.modules)'))
+            check('Date File Make EXE output equals Node', downloaded.suggested_filename == 'AotDates.exe' and (OUT / 'AotDates.exe').read_bytes() == (date_dir / 'AotDates.exe').read_bytes())
+            check('Date export has no page or network errors', not errors and not requests)
+        calls_dir = ROOT / 'validation/calls'
+        if calls_dir.exists():
+            original = json.loads((calls_dir / 'AotCalls.vb6web').read_text())
+            page.evaluate('p => vb6Studio.loadProject(p)', original)
+            before = page.evaluate('JSON.stringify(vb6Studio.project.modules)')
+            with page.expect_download() as pending:
+                page.evaluate('vb6Studio.command("exportWin32")')
+            downloaded = pending.value
+            downloaded.save_as(OUT / 'AotCalls.exe')
+            check('typed Optional and named calls export without rewriting source', before == page.evaluate('JSON.stringify(vb6Studio.project.modules)'))
+            check('call-argument File Make EXE equals Node output', downloaded.suggested_filename == 'AotCalls.exe' and (OUT / 'AotCalls.exe').read_bytes() == (calls_dir / 'AotCalls.exe').read_bytes())
+            check('call export has no network or page errors', not errors and not requests)
+        for folder, name in [('interval-contract', 'AotIntervalContract'), ('large-arrays', 'AotLargeArrays'), ('callbacks', 'AotCallbacks'), ('string-interop', 'AotStringInterop'), ('string-interop', 'AotWin32Strings'), ('string-interop', 'AotStringOwnership')]:
+            extra = ROOT / 'validation' / folder
+            if not (extra / f'{name}.vb6web').exists():
+                continue
+            # Isolate each export in a fresh document. Chromium limits bursts
+            # of downloads from one frame even when the menu click is real;
+            # the fixture matrix must not depend on the runner's speed.
+            page.close()
+            page = browser.new_page(accept_downloads=True, viewport={'width': 1440, 'height': 960})
+            page.set_default_timeout(15000)
+            page.on('request', lambda request: requests.append(request.url) if request.url.startswith(('https:', 'http:')) else None)
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.set_content((ROOT / 'dist/VB6-Studio-Web.html').read_text())
+            page.wait_for_function('!!globalThis.vb6Studio?.project')
+            original = json.loads((extra / f'{name}.vb6web').read_text())
+            page.evaluate('p => vb6Studio.loadProject(p)', original)
+            before = page.evaluate('JSON.stringify(vb6Studio.project.modules)')
+            # Exercise the user path rather than issuing an unbounded burst of
+            # script-only downloads (which Chromium may throttle per frame).
+            page.get_by_role('menubar', name='Main menu').get_by_role('menuitem', name='File', exact=True).click()
+            try:
+                with page.expect_download() as pending:
+                    page.locator('.classic-menu [data-command="exportWin32"]').click()
+                downloaded = pending.value
+            except Exception:
+                (OUT / f'{name}-failure.json').write_text(json.dumps({
+                    'build': page.evaluate('vb6Studio.lastNativeBuild || null'),
+                    'output': page.evaluate('vb6Studio.output'),
+                    'pageErrors': errors, 'requests': requests,
+                }, indent=2))
+                page.screenshot(path=str(OUT / f'{name}-failure.png'))
+                raise
+            downloaded.save_as(OUT / f'{name}.exe')
+            check(f'{name}: Make EXE preserves source', before == page.evaluate('JSON.stringify(vb6Studio.project.modules)'))
+            check(f'{name}: Make EXE equals Node', (OUT / f'{name}.exe').read_bytes() == (extra / f'{name}.exe').read_bytes())
+            check(f'{name}: no page/network errors', not errors and not requests)
         page.close()
         page = browser.new_page()
         page.add_script_tag(content=SDK)
@@ -74,6 +146,18 @@ with sync_playwright() as pw:
         fixtures = [(ROOT / 'validation/win32', name) for name in ('AotWindows', 'AotDynamicArrays', 'AotStorage', 'AotErrors')]
         if numeric_dir.exists():
             fixtures.extend((numeric_dir, name) for name in ('Calculator', 'AotNumbers', 'AotIndexedControls'))
+        if currency_dir.exists():
+            fixtures.append((currency_dir, 'AotCurrency'))
+            if (currency_dir / 'AotCurrencyBindings.vb6web').exists():
+                fixtures.append((currency_dir, 'AotCurrencyBindings'))
+        if calls_dir.exists():
+            fixtures.extend((calls_dir, name) for name in ('AotCalls', 'AotCallProperties'))
+        if date_dir.exists():
+            fixtures.extend((date_dir, name) for name in ('AotDates', 'AotDateABI', 'AotDateCalls') if (date_dir / f'{name}.vb6web').exists())
+        for folder, name in [('interval-contract','AotIntervalContract'), ('large-arrays','AotLargeArrays'), ('callbacks','AotCallbacks'), ('callbacks','AotCallbackThreadGuard'), ('string-interop','AotStringInterop'), ('string-interop','AotWin32Strings'), ('string-interop','AotStringOwnership')]:
+            extra = ROOT / 'validation' / folder
+            if (extra / f'{name}.vb6web').exists():
+                fixtures.append((extra, name))
         for fixture_dir, fixture_name in fixtures:
             fixture_project = json.loads((fixture_dir / f'{fixture_name}.vb6web').read_text())
             fixture_expected = (fixture_dir / f'{fixture_name}.exe').read_bytes()

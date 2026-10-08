@@ -15,6 +15,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Archive exact source for reproducible validation
+        run: git archive --format=zip HEAD -o /tmp/vb6-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.sha }}
+          path: /tmp/vb6-source.zip
+          retention-days: 7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,7 +29,40 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm run build
-      - run: npm test
+      - name: Complete Node suite with preserved failure output
+        run: |
+          set -o pipefail
+          mkdir -p reports/core-validation
+          npm test 2>&1 | tee reports/core-validation/node-tests.log
+      - name: Verify checked IA-32 encodings against GNU assembler
+        run: |
+          node tools/verify-x86-encodings.mjs
+          node tools/test-x86-cpu.mjs
+          node tools/test-native-optimizer-cpu.mjs
+      - name: Independently installed COM and Automation packages
+        run: node tools/test-com-ole-packages.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: com-ole-packages
+          path: artifacts/com-ole
+          retention-days: 7
+      - name: Independently extracted layout package and labelled solver benchmarks
+        run: |
+          npm run pack:layout
+          npm run bench:layout
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: auto-layout-package-and-benchmarks
+          path: |
+            release/vb6-auto-layout-*.tgz
+            reports/layout/benchmark.json
+            reports/auto-layout/benchmark.json
+          retention-days: 7
+      - name: Report retention and packaging regressions
+        run: |
+          python tools/test-report-retention.py
+          python tools/test-package-notices.py
       - run: python -m pip install playwright==1.57.0
       - run: python -m playwright install --with-deps chromium
       - name: Resolve browser executable
@@ -42,6 +82,13 @@ jobs:
           python tools/browser-boundaries-06.py
       - name: Verify reproducible generated bundles
         run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-validation-reports
+          path: reports
+          if-no-files-found: ignore
+          retention-days: 7
   browser-windows:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -58,16 +105,261 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm run build
-      - run: python -m pip install playwright==1.57.0
+      - run: python -m pip install playwright==1.57.0 Pillow
       - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: HTML retention, selection batching and stable presentation
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-html-retention.py
+      - name: Microsoft runtime EXE dialog, downloads and cancellation (synthetic compiler)
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-classic-export-tests.py
+      - name: Portable COM/OLE source and bundled runtime contracts
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-com-ole-tests.py
+      - name: Common HTTP, XML, ADO streams and DataEnvironment end-to-end contracts
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-common-automation-tests.py
       - name: Detached browser windows over HTTP and file origins
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: npm run test:windows
+      - name: Optional IDE themes, runtime isolation and appearance persistence
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:themes:browser
+      - name: Resolve Chromium for the existing layout harness
+        if: matrix.browser == 'chromium'
+        run: |
+          python - <<'PYTHON' >> "$GITHUB_ENV"
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              print('CHROMIUM_PATH=' + p.chromium.executable_path)
+          PYTHON
+      - name: Opt-in layout panel, canvas transactions and advanced runtime exports
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: |
+          set -o pipefail
+          mkdir -p "reports/auto-layout/${VB6_BROWSER}"
+          npm run test:layout:browser 2>&1 | tee "reports/auto-layout/${VB6_BROWSER}/anchoring-tests.log"
+          npm run test:layout:designer 2>&1 | tee "reports/auto-layout/${VB6_BROWSER}/designer-tests.log"
+      - name: Application themes, control state and complete matching icon packs
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:application-themes:browser
+      - name: Application caption popups, OS-state bridge and themed dialog focus
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-native-caption-tests.py
+      - name: Download every sample from the IDE and reopen exact HTML bytes
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:sample-exports
+      - name: Modular deployment exports, startup failures, persistence and CSP
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: npm run test:exporter:browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-windows-${{ matrix.browser }}
-          path: reports/browser-windows
+          path: |
+            reports/html-retention/${{ matrix.browser }}
+            reports/browser-windows
+            reports/ide-themes
+            reports/application-themes/${{ matrix.browser }}
+            reports/win32-exports
+            reports/layout
+            reports/auto-layout
+            reports/exporter
+            reports/com-ole
+            reports/classic-export
           if-no-files-found: ignore
           retention-days: 7
+  win32-system-contracts:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Classic compiler bridge, source and archive contracts (synthetic compiler)
+        run: npm run test:classic
+      - name: Validate existing native layout exports against Windows Forms and HWND bounds
+        shell: pwsh
+        run: |
+          node tools/win32-layout-fixtures.mjs
+          powershell -NoProfile -File tools/test-winforms-anchors.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tools/test-win32-layout.ps1
+      - name: Build actual Electron hosts with application and operating-system captions
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix desktop ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/native-fixtures.mjs
+          node tools/build-windows.mjs --project validation/NativeSmoke.vb6web --name CaptionSmoke --graphics canvas2d --stage-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-native-host.mjs .native-build/captionsmoke-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import fs from 'node:fs';const f='validation/NativeSmoke.vb6web',p=JSON.parse(fs.readFileSync(f));p.settings.themeOptions={systemCaption:true};fs.writeFileSync(f,JSON.stringify(p));"
+          node tools/build-windows.mjs --project validation/NativeSmoke.vb6web --name OSCaptionSmoke --graphics canvas2d --stage-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tools/test-native-host.mjs .native-build/oscaptionsmoke-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: application-native-caption-hosts
+          path: |
+            validation/*captionsmoke-x64.host.json*
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Record installed Windows calendar and formatting contracts
+        shell: pwsh
+        run: ./tools/win32-system-oracle.ps1
+      - name: Compare every native field to the standalone browser package
+        run: node tools/compare-win32-system.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win32-system-contracts
+          path: |
+            reports/win32-system
+            reports/layout/native
+          retention-days: 7
+
+  native-com-ole:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x86, x64]
+    env:
+      VB6_COM_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Real system Automation and typed VARIANT regression
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-native.mjs
+      - name: Native and portable common HTTP and ADO Stream differential recipes
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-automation.mjs
+      - name: Real MSXML DOM identity, XPath, binary data and compiled enumeration
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-common-xml.mjs
+      - name: Native COM identity, OLE data, advisories and compound files
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-com-ole.mjs
+      - name: Native OCX container and OLE contract fixtures
+        if: ${{ !cancelled() }}
+        run: node tools/interop/test-container-contracts.mjs
+      - name: Offline installed native package consumer
+        if: ${{ !cancelled() }}
+        run: node tools/test-com-ole-packages.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-com-ole-${{ matrix.architecture }}
+          path: reports/native-interop
+          if-no-files-found: warn
+          retention-days: 7
+
+  native-compiler:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build self-checking native executables at every optimization level
+        run: node tools/win32-speed-size-fixtures.mjs
+      - name: Execute x86 compiler and assembler fixtures on Windows
+        shell: pwsh
+        run: ./tools/test-win32-optimizer.ps1
+      - name: Build freestanding native control behavior fixtures
+        run: node tools/win32-control-fixtures.mjs
+      - name: Execute real HWND, input, font, file and GDI control assertions
+        shell: pwsh
+        run: ./tools/test-win32-controls.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-control-execution
+          path: reports/native-controls
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-optimizer-execution
+          path: reports/native-optimizer
+          retention-days: 7
+  rendering-qualification:
+    # WebGPU is the default UI backend: keep its regressions in the existing
+    # read-only test workflow, without reintroducing separate workflow files.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl2]
+        display: [headless, headed]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build && npm run test:rendering
+      # Use the current stable Chromium oracle, not a replacement reference image.
+      # Preserve the complete 40-case suite and exact pixel thresholds. Native
+      # HTML captures in Chromium 144 alternated before any renderer comparison.
+      # https://github.com/microsoft/playwright-python/releases/tag/v1.63.0
+      - run: python -m pip install playwright==1.63.0 Pillow
+      - run: python tools/test_rendering_pixels.py
+      - run: python tools/test_rendering_capture.py
+      - run: python -m playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+      - name: Verify and select the installed browser for this display mode
+        run: |
+          python tools/test_rendering_browser.py
+          python tools/rendering_browser.py --display ${{ matrix.display }} >> "$GITHUB_ENV"
+      - name: Actual GPU API execution and exact theme pixels
+        env:
+          DISPLAY_MODE: ${{ matrix.display }}
+          REQUIRED_BACKEND: ${{ matrix.backend }}
+          # Software-driver correctness profile: use Vulkan presentation with
+          # no native Vulkan surface. Raster native HTML tiles on the CPU to
+          # avoid unstable fractional native control edges; the WebGPU/WebGL2
+          # painters, framebuffer readback and exact pixel gates still execute.
+          # These flags never ship in the IDE or physical-device measurements.
+          # https://github.com/vercel-labs/vgpu/issues/109
+          RENDERING_BROWSER_FLAGS: --enable-gpu --ignore-gpu-blocklist --enable-features=Vulkan --use-webgpu-adapter=swiftshader --disable-vulkan-surface --disable-gpu-rasterization
+        run: |
+          args=()
+          if [ "$DISPLAY_MODE" = headed ]; then args+=(--headed); fi
+          xvfb-run -a python tools/browser-rendering-tests.py --require-$REQUIRED_BACKEND --software-gpu "${args[@]}"
+      - name: Require every case and reproducible outputs
+        run: |
+          python tools/verify-rendering-report.py reports/rendering/report.json --backend ${{ matrix.backend }}
+          git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-themes-${{ matrix.backend }}-${{ matrix.display }}
+          path: reports/rendering
+          retention-days: 14

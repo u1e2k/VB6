@@ -1,3 +1,4 @@
+import {decodeLayoutSidecar} from '../src/layout/project-sidecar.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -5,11 +6,13 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { productName } from './build-windows.mjs';
 import { inspectPE, verifyClassicExecutable } from './pe.mjs';
-import { encodeANSI, decodeANSI } from '../src/runtime/binary-codec.js';
+import {bytesOf, decodeNativeText} from '../src/project/native-text.js';
+import {classicFields as fields, classicField as field, configureClassicVBP} from '../src/exporter/classic-vbp.js';
+import {classicProjectEncoding} from '../src/exporter/classic-sources.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function parseClassicOptions(args) {
-  const result = { out: path.join(root, 'release', 'classic'), codegen: 'preserve', timeout: 120000 };
-  const keys = { '--project': 'project', '--out': 'out', '--compiler': 'compiler', '--codegen': 'codegen', '--source-root': 'sourceRoot', '--name': 'name', '--timeout': 'timeout', '--inspect': 'inspect' };
+  const result = { out: path.join(root, 'release', 'classic'), codegen: 'preserve', encoding: 'windows-1252', timeout: 120000 };
+  const keys = { '--project': 'project', '--out': 'out', '--compiler': 'compiler', '--codegen': 'codegen', '--source-root': 'sourceRoot', '--name': 'name', '--timeout': 'timeout', '--inspect': 'inspect', '--encoding': 'encoding' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--stage-only') result.stageOnly = true;
     else if (args[i] === '--help') result.help = true;
@@ -20,50 +23,18 @@ export function parseClassicOptions(args) {
     } else throw new Error('Unknown classic option: ' + args[i] + '. Classic VB6 uses the external 32-bit runtime, not WebGPU or an embedded runtime.');
   }
   if (!['preserve', 'native', 'pcode'].includes(result.codegen)) throw new Error('--codegen must be preserve, native, or pcode');
+  result.encoding = classicProjectEncoding({nativeProject: {document: {encoding: result.encoding}}});
   result.timeout = Number(result.timeout);
   if (!Number.isInteger(result.timeout) || result.timeout < 1000 || result.timeout > 3600000) throw new Error('--timeout must be 1000..3600000 milliseconds');
   if (!result.help && !result.inspect && !result.project) throw new Error('--project is required');
   if (result.inspect && result.project) throw new Error('--inspect cannot be combined with --project');
   return result;
 }
-// Keep the document byte-preserving; decode only values used as filesystem paths.
-const decodeVBP = bytes => Buffer.from(bytes).toString('latin1');
-const ansiValue = value => decodeANSI(Buffer.from(value, 'latin1'));
-function fields(text) {
-  const entries = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*\[/.test(line)) break;
-    const match = line.match(/^\s*([^=]+?)\s*=\s*(.*)$/);
-    if (match) entries.push({ key: match[1], value: match[2] });
-  }
-  return entries;
-}
+// Keep original VBP bytes; the same staged-settings implementation is used by
+// the IDE and standalone archives. Existing host callers still receive Buffer.
 const unquote = value => value?.trim().replace(/^"|"$/g, '') || '';
-function field(text, key) {
-  const values = fields(text).filter(e => e.key.toLowerCase() === key.toLowerCase());
-  if (values.length > 1) throw new Error('Duplicate VBP field: ' + key);
-  return unquote(values[0]?.value);
-}
-export function configureVBP(bytes, name, codegen = 'preserve') {
-  const text = decodeVBP(bytes), type = field(text, 'Type').toLowerCase();
-  if (!['exe', 'oleexe'].includes(type)) throw new Error('Classic target requires Type=Exe or Type=OleExe; DLL/OCX projects are not EXEs');
-  productName(name);
-  const patch = new Map([['exename32', `ExeName32="${name}.exe"`], ['path32', 'Path32="."'], ['autoincrementver', 'AutoIncrementVer=0']]);
-  if (codegen !== 'preserve') {
-    if (!['native', 'pcode'].includes(codegen)) throw new Error('Invalid code generation mode');
-    patch.set('compilationtype', 'CompilationType=' + (codegen === 'native' ? 0 : 1));
-  }
-  for (const key of patch.keys()) field(text, key);
-  const lines = [], seen = new Set(); let section = false;
-  function appendMissing() { for (const [key, value] of patch) if (!seen.has(key)) { lines.push(value); seen.add(key); } }
-  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
-    if (!section && /^\s*\[/.test(line)) { appendMissing(); section = true; }
-    const key = !section && line.match(/^\s*([^=]+?)\s*=/)?.[1].toLowerCase();
-    if (key && patch.has(key)) { lines.push(patch.get(key)); seen.add(key); } else lines.push(line);
-  }
-  appendMissing();
-  const encodedName = Buffer.from(encodeANSI(name)).toString('latin1');
-  return Buffer.from(lines.join('\r\n').replace(`ExeName32="${name}.exe"`, `ExeName32="${encodedName}.exe"`), 'latin1');
+export function configureVBP(bytes, name, codegen = 'preserve', encoding = 'windows-1252') {
+  return Buffer.from(configureClassicVBP(bytes, name, codegen, encoding));
 }
 function inside(base, file) { const relative = path.relative(base, file); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); }
 async function copySources(source, destination) {
@@ -92,46 +63,57 @@ export async function stageClassic(options) {
   const original = await fs.readFile(input);
   const native = /\.vbp$/i.test(input);
   if (!native && !/\.(vb6web|vb6proj|json)$/i.test(input)) throw new Error('Expected .vbp or .vb6web project');
+  const document = native ? decodeNativeText(original, {encoding: options.encoding || 'windows-1252'}) : null;
+  const encoding = native ? classicProjectEncoding({nativeProject: {document}}) : null;
   const project = native ? null : JSON.parse(original.toString('utf8'));
-  const name = productName(options.name || (native ? ansiValue(field(decodeVBP(original), 'ExeName32')).replace(/\.exe$/i, '') || path.basename(input, path.extname(input)) : project.name));
+  let anchoring=project?.settings?.anchoring===true;
+  if(native){try{const companion=await fs.readFile(input+'.vb6layout.json');anchoring=decodeLayoutSidecar(companion).enabled;}catch(error){if(error.code!=='ENOENT')throw error;}}
+  if(anchoring)throw new Error('The licensed classic VB6 compiler does not support the optional anchoring/layout extension. Use the HTML/Electron Windows target, or disable anchoring and implement explicit classic Form_Resize code. Layout metadata will not be silently discarded.');
+  const name = productName(options.name || (native ? field(document.text, 'ExeName32').replace(/\.exe$/i, '') || path.basename(input, path.extname(input)) : project.name));
+  // Validate browser projects before allocating a staging directory. The IDE,
+  // bridge, archive and CLI must all reject the same lossy exports.
+  const prepared = native ? null : (await import('../src/exporter/classic-project.js')).prepareClassicProject(project, {name, codegen: options.codegen || 'preserve'});
   const buildBase = path.join(root, '.native-build'); await fs.mkdir(buildBase, { recursive: true });
   const stage = await fs.mkdtemp(path.join(buildBase, 'classic-'));
-  const source = path.join(stage, 'source'), output = path.resolve(options.out), bin = path.join(stage, 'bin');
-  if (inside(stage, output)) throw new Error('Output must not be in the staging directory');
-  await fs.mkdir(bin, { recursive: true }); let vbp;
-  if (native) {
-    const sourceRoot = await fs.realpath(path.resolve(options.sourceRoot || path.dirname(input)));
-    if (!inside(sourceRoot, input)) throw new Error('Project must be inside --source-root');
-    for (const entry of fields(decodeVBP(original))) {
-      if (!['form', 'module', 'class', 'usercontrol', 'propertypage', 'userdocument', 'designer', 'resfile32'].includes(entry.key.toLowerCase())) continue;
-      const relative = ansiValue(unquote(['module', 'class'].includes(entry.key.toLowerCase()) ? entry.value.slice(entry.value.indexOf(';') + 1) : entry.value));
-      const candidate = path.resolve(path.dirname(input), relative.replace(/\\/g, '/'));
-      if (path.win32.isAbsolute(relative) || !inside(sourceRoot, candidate)) throw new Error('Source reference escapes --source-root: ' + relative);
-      if (!inside(sourceRoot, await fs.realpath(candidate))) throw new Error('Source reference escapes through a symlink');
+  try {
+    const source = path.join(stage, 'source'), output = path.resolve(options.out), bin = path.join(stage, 'bin');
+    if (inside(stage, output)) throw new Error('Output must not be in the staging directory');
+    await fs.mkdir(bin, { recursive: true }); let vbp;
+    if (native) {
+      const sourceRoot = await fs.realpath(path.resolve(options.sourceRoot || path.dirname(input)));
+      if (!inside(sourceRoot, input)) throw new Error('Project must be inside --source-root');
+      for (const entry of fields(document.text)) {
+        if (!['form', 'module', 'class', 'usercontrol', 'propertypage', 'userdocument', 'designer', 'resfile32'].includes(entry.key.toLowerCase())) continue;
+        const relative = unquote(['module', 'class'].includes(entry.key.toLowerCase()) ? entry.value.slice(entry.value.indexOf(';') + 1) : entry.value);
+        const candidate = path.resolve(path.dirname(input), relative.replace(/\\/g, '/'));
+        if (path.win32.isAbsolute(relative) || !inside(sourceRoot, candidate)) throw new Error('Source reference escapes --source-root: ' + relative);
+        if (!inside(sourceRoot, await fs.realpath(candidate))) throw new Error('Source reference escapes through a symlink');
+      }
+      await copySources(sourceRoot, source);
+      vbp = path.join(source, path.relative(sourceRoot, input));
+    } else {
+      const files = prepared.files;
+      for (const [relative, content] of Object.entries(files)) {
+        const destination = path.resolve(source, relative.replace(/\\/g, '/'));
+        if (!inside(source, destination) || destination === source) throw new Error('Unsafe exported source path');
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, bytesOf(content));
+        if (/\.vbp$/i.test(relative)) { if (vbp) throw new Error('Multiple project files in export'); vbp = destination; }
+      }
+      if (!vbp) throw new Error('Export did not produce a VBP');
     }
-    await copySources(sourceRoot, source);
-    vbp = path.join(source, path.relative(sourceRoot, input));
-  } else {
-    const { normalizeProject } = await import('../src/project/model.js');
-    const { sourceFiles } = await import('../src/project/formats.js');
-    const files = sourceFiles(normalizeProject(project));
-    for (const [relative, content] of Object.entries(files)) {
-      const destination = path.resolve(source, relative.replace(/\\/g, '/'));
-      if (!inside(source, destination) || destination === source) throw new Error('Unsafe exported source path');
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      await fs.writeFile(destination, typeof content === 'string' ? encodeANSI(content) : content);
-      if (/\.vbp$/i.test(relative)) { if (vbp) throw new Error('Multiple project files in export'); vbp = destination; }
-    }
-    if (!vbp) throw new Error('Export did not produce a VBP');
+    const bytes = await fs.readFile(vbp);
+    const references = fields(decodeNativeText(bytes, {encoding: encoding || prepared.manifest.encoding}).text).filter(e => ['reference', 'object'].includes(e.key.toLowerCase()));
+    if (native) await fs.writeFile(vbp, configureVBP(bytes, name, options.codegen, encoding));
+    const result = { stage, vbp, bin, output, name, executable: path.join(bin, name + '.exe'), log: path.join(stage, 'compiler.log'),
+      target: 'classic-vb6', arch: 'x86', encoding: encoding || prepared.manifest.encoding, codegen: options.codegen, runtime: 'MSVBVM60.DLL (external Windows component)', references,
+      compiled: false, notes: ['Requires a separately installed licensed VB6 compiler and the project’s registered dependencies.', 'No compiler, Microsoft runtime, or third-party OCX is bundled or registered by this tool.', 'Classic executables do not use the JavaScript/WebGPU renderer.'] };
+    await fs.writeFile(path.join(stage, 'build-plan.json'), JSON.stringify(result, null, 2));
+    return result;
+  } catch (error) {
+    await fs.rm(stage, {recursive: true, force: true});
+    throw error;
   }
-  const bytes = await fs.readFile(vbp);
-  const references = fields(decodeVBP(bytes)).filter(e => ['reference', 'object'].includes(e.key.toLowerCase()));
-  await fs.writeFile(vbp, configureVBP(bytes, name, options.codegen));
-  const result = { stage, vbp, bin, output, name, executable: path.join(bin, name + '.exe'), log: path.join(stage, 'compiler.log'),
-    target: 'classic-vb6', arch: 'x86', codegen: options.codegen, runtime: 'MSVBVM60.DLL (external Windows component)', references,
-    compiled: false, notes: ['Requires a separately installed licensed VB6 compiler and the project’s registered dependencies.', 'No compiler, Microsoft runtime, or third-party OCX is bundled or registered by this tool.', 'Classic executables do not use the JavaScript/WebGPU renderer.'] };
-  await fs.writeFile(path.join(stage, 'build-plan.json'), JSON.stringify(result, null, 2));
-  return result;
 }
 export async function findCompiler(options, env = process.env) {
   const explicit = options.compiler || env.VB6_COMPILER;
@@ -178,7 +160,7 @@ export async function buildClassic(options, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const options = parseClassicOptions(process.argv.slice(2));
-    if (options.help) console.log('Classic 32-bit VB6 runtime target:\n  npm run build:classic -- --project file.vbp [--codegen preserve|native|pcode]\n    [--compiler C:\\...\\VB6.EXE] [--source-root directory] [--out directory] [--stage-only]\n  npm run build:classic -- --inspect file.exe\nVB6_COMPILER may specify the licensed compiler. No proprietary runtime/compiler is bundled.');
+    if (options.help) console.log('Classic 32-bit VB6 runtime target:\n  npm run build:classic -- --project file.vbp [--codegen preserve|native|pcode]\n    [--compiler C:\\...\\VB6.EXE] [--source-root directory] [--out directory] [--stage-only] [--encoding windows-1252]\n  npm run build:classic -- --inspect file.exe\nVB6_COMPILER may specify the licensed compiler. No proprietary runtime/compiler is bundled.');
     else console.log(JSON.stringify(options.inspect ? inspectPE(await fs.readFile(path.resolve(options.inspect))) : await buildClassic(options), null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

@@ -1,8 +1,11 @@
+import {STREAM_CONSTANTS} from '../automation/constants.js';
+import {normalizeServiceDefinitions} from './service-definitions.js';
 import {VBError} from '../language/lexer.js';
 import {VBArray, VBCurrency, VBDecimal} from '../runtime/values.js';
 
 export const DATA_LIMITS = Object.freeze({rows:100000, cells:1000000, bytes:20*1024*1024, pages:100});
 export const DATA_CONSTANTS = Object.freeze({
+  ...STREAM_CONSTANTS,
   adStateClosed:0, adStateOpen:1, adStateConnecting:2, adStateExecuting:4,
   adOpenForwardOnly:0, adOpenKeyset:1, adOpenDynamic:2, adOpenStatic:3,
   adLockReadOnly:1, adLockPessimistic:2, adLockOptimistic:3, adLockBatchOptimistic:4,
@@ -11,7 +14,7 @@ export const DATA_CONSTANTS = Object.freeze({
   adParamReturnValue:4, adSchemaTables:20, adSchemaColumns:4,
   adModeRead:1, adModeWrite:2, adModeReadWrite:3,
   adSmallInt:2, adInteger:3, adSingle:4, adDouble:5, adCurrency:6,
-  adDate:7, adBoolean:11, adVariant:12, adDecimal:14, adGUID:72, adNumeric:131, adDBDate:133, adDBTime:134, adDBTimeStamp:135, adUnsignedTinyInt:17, adBigInt:20,
+  adDate:7, adBoolean:11, adVariant:12, adDecimal:14, adGUID:72, adNumeric:131, adDBDate:133, adDBTime:134, adDBTimeStamp:135, adTinyInt:16, adUnsignedTinyInt:17, adUnsignedSmallInt:18, adUnsignedInt:19, adUnsignedBigInt:21, adBigInt:20,
   adBinary:128, adChar:129, adWChar:130, adVarChar:200, adLongVarChar:201,
   adVarWChar:202, adLongVarWChar:203, adVarBinary:204, adLongVarBinary:205,
   adAffectCurrent:1, adAffectGroup:2, adAffectAll:3, adLockUnspecified:-1,
@@ -47,6 +50,8 @@ export function sqlValue(value){
 }
 export function quoteIdentifier(value){return '"'+String(value).replace(/"/g,'""')+'"';}
 export function sameValue(a,b){
+  if(a instanceof VBDecimal&&b instanceof VBDecimal)return a.compare(b)===0;
+  if(a instanceof VBCurrency&&b instanceof VBCurrency)return a.raw===b.raw;
   if(a instanceof Uint8Array&&b instanceof Uint8Array)return a.length===b.length&&a.every((v,i)=>v===b[i]);
   if(a instanceof Date&&b instanceof Date)return +a===+b;
   return Object.is(a,b);
@@ -129,7 +134,7 @@ export function normalizeDataSources(value){
     if(connection.fields){assertData(Array.isArray(connection.fields)&&connection.fields.length<=1024,'Invalid field mapping');const fields=new Set();for(const f of connection.fields){assertData(typeof f.name==='string'&&f.name&&!fields.has(f.name.toLowerCase()),'Duplicate or empty field mapping');fields.add(f.name.toLowerCase());pathValue({},f.path||f.name);}}
     if(connection.timeout!=null)assertData(Number.isFinite(Number(connection.timeout))&&Number(connection.timeout)>0&&Number(connection.timeout)<=600,'Invalid connection timeout');
   }
-  return assertPublicConfiguration(result);
+  return normalizeServiceDefinitions(assertPublicConfiguration(result));
 }
 export function safeHttpURL(value,base){
   let url;try{url=new URL(value,base);}catch{throw dataError('Invalid HTTP data-source URL');}

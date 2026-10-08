@@ -88,7 +88,7 @@ export class VBWin32Bridge {
       parent:()=>isForm?0:c.form?.hWnd||0,controlId:Number(c.props.TabIndex||0)+1,
       getText:()=>c.get(textKey),setText:s=>c.set(textKey,s),isVisible:()=>!!c.props.Visible,isEnabled:()=>!!c.props.Enabled,
       setEnabled:enabled=>c.set('Enabled',enabled?-1:0),show:command=>{if(![0,1,4,5,8,9].includes(command))throw new Win32Error('Window state is not supported by this browser adapter',50);c.set('Visible',command===0?0:-1);},
-      getRect:()=>c.node.getBoundingClientRect(),getClientRect:()=>({width:(c.content||c.input||c.node).clientWidth,height:(c.content||c.input||c.node).clientHeight}),clientOrigin:()=>{const r=(c.content||c.input||c.node).getBoundingClientRect();return [r.left,r.top];},
+      getRect:()=>c.node.getBoundingClientRect(),getClientRect:()=>{const n=c.content||c.input||c.node;return {width:n.clientWidth||Math.max(0,Number(c.props.ClientWidth??c.props.Width)/15),height:n.clientHeight||Math.max(0,Number(c.props.ClientHeight??c.props.Height)/15)};},clientOrigin:()=>{const r=(c.content||c.input||c.node).getBoundingClientRect();return [r.left,r.top];},
       getPosition:()=>[c.props.Left/15,c.props.Top/15,(c.props.Left+c.props.Width)/15,(c.props.Top+c.props.Height)/15],
       move:(x,y,width,height)=>{c.movedByUser=true;Object.assign(c.props,{Left:x*15,Top:y*15,Width:width*15,Height:height*15});if(isForm)Object.assign(c.props,{ClientWidth:Math.max(0,width-8)*15,ClientHeight:Math.max(0,height-32)*15});c.refresh();},
       getCheck:()=>Number(c.props.Value||0),setCheck:state=>c.set('Value',state),click:()=>c.node.click()};
@@ -100,6 +100,15 @@ export class VBWin32Bridge {
       else if(operation==='text'){if(state.backgroundMode===2)throw new Win32Error('Opaque GDI text backgrounds require a Canvas adapter',50);surface.text(args[2],args[0],args[1],state.textColor);}
       else throw new Win32Error('Drawing operation not available on this surface',50);
     };
+    if(['Form','MDIForm','PictureBox'].includes(c.type)){
+      const raster=fn=>(...args)=>{try{return fn(...args);}catch(error){if(error instanceof RangeError)throw new Win32Error(error.message,8);throw error;}};
+      // Paint is queued without awaiting the active VB stack (UpdateWindow must not deadlock).
+      descriptor.requestNonClientPaint=()=>{c.refresh();};
+      descriptor.getBackgroundColor=()=>Number(c.props.BackColor??0xffffff);
+      descriptor.requestPaint=()=>{c.event('Paint',[],true).catch(error=>this.vm.reportError(error));};
+      descriptor.readPixels=raster((...args)=>c.ensureSurface().readPixels(...args));
+      descriptor.writePixels=raster((...args)=>c.ensureSurface().writePixels(...args));
+    }
     return this.api.registerWindow(descriptor);
   }
   unregisterControl(handle){if(handle&&!this.api.disposed)this.api.unregisterWindow(handle);}

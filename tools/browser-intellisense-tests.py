@@ -2,6 +2,8 @@
 """Real standalone-IDE IntelliSense regression tests. No native VB6 pixel claim."""
 from pathlib import Path
 import json, os, sys, time, traceback
+import functools, http.server, threading
+from contextlib import contextmanager
 from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'validation';OUT.mkdir(exist_ok=True)
@@ -23,12 +25,16 @@ def setup(p, source, controls=None, others=None):
 def names(p):return p.evaluate('vb6Studio.editor.completionItems||[]')
 def put(p, text):p.keyboard.insert_text(text)
 def escaped(p):p.keyboard.press('Escape')
-def shot(p,name):p.screenshot(path=str(OUT/('intellisense-'+name+'.png')),caret='hide')
+def shot(p,name):p.screenshot(path=str(OUT/('intellisense-'+os.environ.get('VB6_BROWSER','chromium')+'-'+os.environ.get('VB6_INTELLISENSE_ORIGIN','inline')+'-'+name+'.png')),caret='hide')
 
 def automatic(p):
     setup(p,'Private Sub Form_Load()\n    Text1',[{'name':'Text1','type':'TextBox'}]);put(p,'.')
     p.wait_for_selector('.completion-list');check('SelStart' in names(p),names(p));check('Nodes' not in names(p))
-    put(p,'SelSt');check(names(p)==['SelStart'],names(p));p.keyboard.press('Tab')
+    put(p,'SelSt')
+    # Firefox may acknowledge text insertion before the input-driven list
+    # refresh completes. Observe the exact filtered state, not two racy reads.
+    p.wait_for_function('!!vb6Studio.editor.completion && vb6Studio.editor.completionItems.length===1 && vb6Studio.editor.completionItems[0]==="SelStart"')
+    check(names(p)==['SelStart'],names(p));p.keyboard.press('Tab')
     check(p.evaluate('vb6Studio.editor.text.endsWith("Text1.SelStart")'))
     check(not p.locator('.completion-list').count())
 
@@ -136,23 +142,75 @@ def composition_resume(p):
     p.wait_for_function('vb6Studio.editor.completionItems.length===1&&vb6Studio.editor.completionItems[0]==="SelStart"&&!!vb6Studio.editor.completion')
     p.keyboard.press('Tab');check(p.evaluate('vb6Studio.editor.text.endsWith("Text1.SelStart")'))
 
-CASES=[automatic,enter_and_undo,punctuation,suffix,with_split,constants,nested_info,literals,types,escape_options,accessibility,stale,large,data_tip,immediate,reference_import,frame_expression,composition_resume]
+def composition_commit_before_timer(p):
+    setup(p,'Private Sub Form_Load()\n    Text1',[{'name':'Text1','type':'TextBox'}]);put(p,'.');p.wait_for_selector('.completion-list')
+    # Do not yield to the timer: a fast Tab must commit the freshly composed
+    # prefix, not indent because composition temporarily hid the list.
+    result=p.evaluate("""()=>{const e=vb6Studio.editor,input=e.input;
+      input.dispatchEvent(new CompositionEvent('compositionstart'));
+      input.setRangeText('SelSt',input.selectionStart,input.selectionEnd,'end');
+      input.dispatchEvent(new InputEvent('input',{data:'SelSt',inputType:'insertCompositionText',isComposing:true,bubbles:true}));
+      input.dispatchEvent(new CompositionEvent('compositionend',{data:'SelSt'}));
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',code:'Tab',bubbles:true,cancelable:true}));
+      return {text:e.text,open:!!e.completion};}""")
+    check(result['text'].endswith('Text1.SelStart'),result);check(not result['open'],result)
+    p.wait_for_timeout(30);check(not p.locator('.completion-list').count(),'Composition timer reopened a committed list')
+    p.evaluate('vb6Studio.command("undo")');check(p.evaluate('vb6Studio.editor.text.endsWith("Text1.SelSt")'))
+
+def composition_escape_before_timer(p):
+    setup(p,'Private Sub Form_Load()\n    Text1',[{'name':'Text1','type':'TextBox'}]);put(p,'.');p.wait_for_selector('.completion-list')
+    p.evaluate("""()=>{const e=vb6Studio.editor,input=e.input;
+      input.dispatchEvent(new CompositionEvent('compositionstart'));
+      input.dispatchEvent(new CompositionEvent('compositionend'));
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    }""")
+    p.wait_for_timeout(30);check(not p.locator('.completion-list').count(),'Composition timer defeated Escape')
+
+def composition_document_change_before_timer(p):
+    setup(p,'Private Sub Form_Load()\n    Text1',[{'name':'Text1','type':'TextBox'}]);put(p,'.');p.wait_for_selector('.completion-list')
+    p.evaluate("""()=>{const e=vb6Studio.editor,input=e.input;
+      input.dispatchEvent(new CompositionEvent('compositionstart'));
+      input.dispatchEvent(new CompositionEvent('compositionend'));
+      e.setDocument({...e.module,id:'replacement',name:'Other',code:'Dim replacement As Long'},e.project);
+    }""")
+    p.wait_for_timeout(30);check(not p.locator('.completion-list').count(),'Composition timer crossed a document change')
+
+CASES=[composition_commit_before_timer,composition_escape_before_timer,composition_document_change_before_timer,automatic,enter_and_undo,punctuation,suffix,with_split,constants,nested_info,literals,types,escape_options,accessibility,stale,large,data_tip,immediate,reference_import,frame_expression,composition_resume]
+
+@contextmanager
+def deployment():
+    mode=os.environ.get('VB6_INTELLISENSE_ORIGIN','inline')
+    if mode=='file':
+        yield (ROOT/'dist/VB6-Studio-Web.html').as_uri();return
+    if mode in ('http','modular'):
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def log_message(self,*args):pass
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Handler,directory=str(ROOT.parent)))
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            tail='dist/index.html' if mode=='modular' else 'dist/VB6-Studio-Web.html'
+            yield f'http://127.0.0.1:{server.server_port}/{ROOT.name}/{tail}'
+        finally:server.shutdown();server.server_close();thread.join()
+    elif mode=='inline':yield None
+    else:raise ValueError('Unknown IntelliSense deployment mode: '+mode)
 
 def main():
-    kind=os.environ.get('VB6_BROWSER','chromium')
-    with sync_playwright() as pw:
-        browser=getattr(pw,kind).launch(**({'args':['--no-sandbox']} if kind=='chromium' else {}));version=browser.version
+    kind=os.environ.get('VB6_BROWSER','chromium');mode=os.environ.get('VB6_INTELLISENSE_ORIGIN','inline');RESULTS.clear()
+    with deployment() as url, sync_playwright() as pw:
+        browser=getattr(pw,kind).launch(**({'args':['--no-sandbox'],**({'executable_path':os.environ['VB6_CHROMIUM']} if os.environ.get('VB6_CHROMIUM') else {})} if kind=='chromium' else {}));version=browser.version
         for fn in CASES:
             page=browser.new_page(viewport={'width':1440,'height':960});page.set_default_timeout(8000);errors=[];page.on('pageerror',lambda error:errors.append(str(error)));begin=time.perf_counter()
             try:
-                page.set_content(HTML);page.wait_for_function('!!globalThis.vb6Studio?.editor');details=fn(page);check(not errors,errors);RESULTS.append({'name':fn.__name__,'passed':True,'details':details,'ms':round((time.perf_counter()-begin)*1000,2)});print('PASS',fn.__name__,flush=True)
+                if url:page.goto(url,wait_until='load')
+                else:page.set_content(HTML)
+                page.wait_for_function('!!globalThis.vb6Studio?.editor');details=fn(page);check(not errors,errors);RESULTS.append({'name':fn.__name__,'passed':True,'details':details,'ms':round((time.perf_counter()-begin)*1000,2)});print('PASS',fn.__name__,flush=True)
             except Exception as error:
                 RESULTS.append({'name':fn.__name__,'passed':False,'error':str(error),'pageErrors':errors});print('FAIL',fn.__name__,str(error),flush=True);traceback.print_exc(limit=3)
                 try:shot(page,'failed-'+fn.__name__)
                 except Exception:pass
             finally:page.close()
         browser.close()
-    report={'browser':kind,'version':version,'passed':sum(r['passed'] for r in RESULTS),'failed':sum(not r['passed'] for r in RESULTS),'tests':RESULTS}
-    (OUT/('intellisense-'+kind+'.json')).write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({k:v for k,v in report.items() if k!='tests'}),flush=True)
+    report={'browser':kind,'version':version,'origin':mode,'url':url,'passed':sum(r['passed'] for r in RESULTS),'failed':sum(not r['passed'] for r in RESULTS),'tests':RESULTS}
+    (OUT/('intellisense-'+kind+'-'+mode+'.json')).write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({k:v for k,v in report.items() if k!='tests'}),flush=True)
     return bool(report['failed'])
 if __name__=='__main__':sys.exit(main())

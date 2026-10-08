@@ -1,3 +1,4 @@
+import {bindApplicationTheme} from './application-appearance.js';
 /** Shared IDE/runtime popup menus: one session, a retained submenu stack, no leaked listeners. */
 import {uiDocument} from '../core/window-context.js';
 import {el} from '../core/core.js';
@@ -28,7 +29,8 @@ class MenuSession {
   open(items,x,y,parent){
     const depth=parent?parent.level+1:0;this.trim(depth);
     const node=el('div',{id:'classic-menu-'+(++sequence),class:'classic-menu ide-popup-menu'+(this.options.runtime?' vb-popup-menu runtime-popup':''),role:'menu',tabindex:-1,'data-vb-theme':this.theme,'aria-label':parent?.item.label?.replaceAll('&','')||this.options.label||'Commands'});
-    const state={node,rows:[],selected:-1,level:depth,parent};
+    const releaseTheme=this.options.runtime?bindApplicationTheme(this.options.opener||this.previous,node):null;
+    const state={node,rows:[],selected:-1,level:depth,parent,releaseTheme};
     for(const item of items){
       if(!item){node.append(el('div',{class:'menu-separator',role:'separator'}));continue;}
       const enabled=typeof item.enabled==='function'?!!item.enabled():item.enabled!==false;
@@ -39,7 +41,7 @@ class MenuSession {
       row.append(mark,label,el('span',{class:'menu-shortcut'},item.shortcut||''),el('span',{class:'menu-arrow'},item.items?icon('arrow-right'):null));
       const entry={row,item,enabled,level:depth};state.rows.push(entry);
       row.addEventListener('click',()=>this.activate(state,entry));
-      row.addEventListener('pointerenter',()=>{if(!enabled)return;this.select(state,state.rows.indexOf(entry),false);clearTimeout(this.timer);this.timer=setTimeout(()=>{if(active===this&&entry.item.items)this.submenu(state,entry,false);else this.trim(depth+1);},180);});
+      row.addEventListener('pointerenter',()=>{if(!enabled)return;this.select(state,state.rows.indexOf(entry),true);clearTimeout(this.timer);this.timer=setTimeout(()=>{if(active===this&&entry.item.items)this.submenu(state,entry,false);else this.trim(depth+1);},180);});
       node.append(row);
     }
     node.addEventListener('keydown',e=>this.keydown(state,e));
@@ -51,7 +53,7 @@ class MenuSession {
     if(!parent){node.focus({preventScroll:true});if(this.options.focusFirst)this.select(state,this.next(state,-1,1),true);}
     return state;
   }
-  trim(depth){clearTimeout(this.timer);while(this.stack.length>depth){const state=this.stack.pop();state.parent?.row.setAttribute('aria-expanded','false');state.node.remove();}}
+  trim(depth){clearTimeout(this.timer);while(this.stack.length>depth){const state=this.stack.pop();state.parent?.row.setAttribute('aria-expanded','false');state.releaseTheme?.();state.node.remove();}}
   next(state,index,direction){const n=state.rows.length;for(let i=0;i<n;i++){index=(index+direction+n)%n;if(state.rows[index].enabled)return index;}return -1;}
   select(state,index,focus){state.selected=index;state.rows.forEach((entry,i)=>entry.row.classList.toggle('menu-selected',i===index));if(focus)state.rows[index]?.row.focus({preventScroll:true});state.rows[index]?.row.scrollIntoView({block:'nearest'});}
   submenu(state,entry,focus){

@@ -1,7 +1,9 @@
+import {THEMES} from '../src/theme/theme.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {ICON_ART,CONTROL_ART,ICON_PALETTE} from '../src/theme/icon-art.js';
 import {ICON_NAMES,CONTROL_ICON_TYPES,hasIcon,hasControlIcon,iconSVG} from '../src/theme/icons.js';
 import {COMMANDS,COMMAND_ICONS,DEFAULT_BARS,decorateCommandItems} from '../src/ide/command-bar-model.js';
@@ -43,7 +45,7 @@ test('alignment, sizing, debugger and bookmark commands cannot regress to aliase
 test('every static icon call in the source is registered',()=>{
  const root=new URL('../src/',import.meta.url);
  const walk=dir=>fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(dir,e.name)):e.name.endsWith('.js')&&!e.name.endsWith('-payload.js')?[path.join(dir,e.name)]:[]);
- for(const file of walk(root.pathname))for(const match of fs.readFileSync(file,'utf8').matchAll(/\bicon\(\s*['"]([^'"]+)['"]/g))assert.ok(hasIcon(match[1]),`${file}: ${match[1]}`);
+ for(const file of walk(fileURLToPath(root)))for(const match of fs.readFileSync(file,'utf8').matchAll(/\bicon\(\s*['"]([^'"]+)['"]/g))assert.ok(hasIcon(match[1]),`${file}: ${match[1]}`);
 });
 test('SVG has no fonts, resources, scripts or per-pixel DOM nodes',()=>{
  for(const [control,table] of [[false,ICON_ART],[true,CONTROL_ART]])for(const id of Object.keys(table)){
@@ -77,5 +79,5 @@ test('IDE menus get the same glyph as toolbars without mutating descriptors',()=
 test('generated themes reset icon colors at each theme boundary rather than invert descendants',()=>{
  const css=fs.readFileSync(new URL('../src/theme/palette.css',import.meta.url),'utf8');
  assert.doesNotMatch(css,/filter:\s*(invert|grayscale)/);assert.match(css,/icon-disabled/);
- for(const color of Object.keys(ICON_PALETTE))assert.equal(css.split('--vb-icon-'+color+':').length-1,3,color);
+ for(const color of Object.keys(ICON_PALETTE))assert.equal(css.split('--vb-icon-'+color+':').length-1,Object.keys(THEMES).length,color);
 });

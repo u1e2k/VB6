@@ -187,6 +187,8 @@ input:focus,select:focus,textarea:focus{outline:none}
 .ide-dialog-body{padding:14px;overflow:auto;min-height:0;line-height:1.5}
 .ide-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:2px 12px 12px}
 .ide-dialog-footer button{min-width:76px}
+.ide-native-dialog{position:fixed;inset:0;margin:auto;height:fit-content}
+.ide-native-dialog::backdrop{background:transparent}
 .default-button{outline:1px solid var(--vb-text);outline-offset:0}
 .dialog-message{white-space:pre-wrap;max-height:60vh;overflow:auto}
 .dialog-input{width:100%;margin-top:8px}
@@ -400,7 +402,8 @@ body{font-family:var(--vb-font);font-size:11px;color:var(--vb-text)}
 .syn-string,.syn-number{color:var(--vb-window-text)}
 .breakpoint-line{background:var(--vb-breakpoint);color:white}
 .breakpoint-line span{color:inherit}
-.execution-line,.execution-line span{background:var(--vb-execution);color:#000}
+.execution-line:not(.execution-range),.execution-line:not(.execution-range) span,.code-execution{background:var(--vb-execution);color:#000}
+.execution-line.execution-range{background:transparent}
 .code-gutter{width:var(--editor-gutter);background:var(--vb-face);border-right:1px solid var(--vb-shadow)}
 .gutter-line{height:var(--editor-line-height);line-height:var(--editor-line-height);padding:0 3px;color:var(--vb-gray);font-size:10px}
 .gutter-line.has-breakpoint{color:var(--vb-breakpoint);font-size:13px}
@@ -495,3 +498,15 @@ body{font-family:var(--vb-font);font-size:11px;color:var(--vb-text)}
 .project-search-window{display:flex;flex-direction:column;height:100%;padding:5px;gap:5px;min-height:0;background:var(--vb-face);color:var(--vb-text)}.project-search-fields{display:flex;gap:6px;align-items:end}.project-search-fields label{display:flex;flex-direction:column;gap:3px;min-width:70px}.project-search-fields label:first-child{flex:1}.project-search-fields input{width:100%;min-width:0}.project-search-fields button{display:flex;gap:4px;align-items:center;white-space:nowrap}.project-replace-row{display:flex;gap:6px;align-items:end}.project-replace-row[hidden]{display:none}.project-replace-row label{display:flex;align-items:center;gap:5px;flex:1;white-space:nowrap}.project-replace-row input{flex:1;min-width:0}.project-search-options{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.project-search-options label{display:flex;align-items:center;gap:3px}.project-search-options button{margin-left:auto}.search-preview{margin:0;height:50px;min-height:30px;overflow:auto;background:var(--vb-window);color:var(--vb-window-text,var(--vb-text));padding:4px;white-space:pre;font:11px/16px 'Courier New',monospace;border:1px solid var(--vb-shadow)}
 .gutter-line.has-bookmark{box-shadow:inset 3px 0 var(--vb-selection)}.bookmark-symbol{display:block;margin:auto;width:8px;height:10px;border:1px solid var(--vb-selection);background:var(--vb-selection);clip-path:polygon(0 0,100% 0,100% 100%,50% 70%,0 100%)}
 @media(max-width:620px){.object-columns{grid-template-columns:minmax(80px,35%) 4px minmax(90px,1fr)}.object-toolbar button{font-size:10px;padding:1px 3px}.object-search{flex-wrap:wrap}.object-search label{font-size:10px}.object-definition{height:80px}.project-search-fields{flex-wrap:wrap}.project-search-fields label:first-child{flex-basis:55%}.project-replace-row label{flex-direction:column;align-items:stretch}.project-search-options{font-size:10px;gap:3px}}
+
+/* These authored native border islands must not share raster invalidation with
+   a newly attached transparent rendering layer. This establishes their local
+   stacking boundaries without changing box geometry, clipping escaped popups,
+   or requesting a persistent GPU promotion with will-change/transform.
+   https://www.w3.org/TR/compositing-1/#isolation */
+.mdi-client,.layout-monitor { isolation:isolate; }
+/* Optional anchoring editor; classic theme tokens keep it native to the IDE. */
+.anchor-diagram{display:grid;grid-template:36px 60px 36px / 75px 1fr 75px;gap:8px;padding:12px;border:2px inset var(--vb-button-face,#c0c0c0);margin:8px 0}
+.anchor-top{grid-area:1/2}.anchor-bottom{grid-area:3/2}.anchor-left{grid-area:2/1}.anchor-right{grid-area:2/3}.anchor-control{grid-area:2/2;display:flex;align-items:center;justify-content:center;border:2px outset var(--vb-button-face,#c0c0c0)}
+.anchor-edge.selected{background:var(--vb-selection,#000080);color:var(--vb-selection-text,#fff)}.anchor-presets{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.anchor-summary{display:block;min-height:18px}
+.designer-anchor-guide{position:absolute;border-top:1px dashed var(--vb-selection,#000080);border-left:1px dashed var(--vb-selection,#000080);pointer-events:none;opacity:.65}

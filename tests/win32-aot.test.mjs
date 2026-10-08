@@ -62,13 +62,13 @@ test('Declare parsing preserves source lines, scope, aliases and exact numeric A
   assert.equal(extractNativeDeclarations({name:'M',code:'Declare Function F Lib "x.dll" Alias "#42" (ByVal x As Long) As Integer'}).declarations.get('f').symbol,42);
 });
 for(const code of [
-  'Private Declare Function F Lib "x" (ByVal s As String) As Long',
+  'Private Declare Function F Lib "x" (ByVal s As Object) As Long',
   'Private Declare Function F Lib "x" (x() As Long) As Long',
   'Private Declare Function F Lib "../x" () As Long'
 ])test('unsupported native Declare fails without producing a plausible executable: '+code,()=>assert.throws(()=>extractNativeDeclarations({name:'M',code})));
 for(const [name,code] of [
-  ['unsupported record storage','Private Type Point\n x As Long\nEnd Type\nDim n As Point'],['ByVal array parameters','Private Sub F(ByVal n() As Long)\nEnd Sub'],
-  ['unsupported date storage','Private Sub Form_Load()\n Dim n As Date\nEnd Sub'],
+  ['unsupported managed record storage','Private Type Point\n x As String\nEnd Type\nDim n As Point'],['ByVal array parameters','Private Sub F(ByVal n() As Long)\nEnd Sub'],
+  ['unsupported Decimal storage','Private Sub Form_Load()\n Dim n As Decimal\nEnd Sub'],
 
   ['unsupported event','Private Sub Form_KeyDown(KeyCode As Integer, Shift As Integer)\nEnd Sub'],
   ['ambiguous default variant','Private Sub F(n)\nEnd Sub']
@@ -99,7 +99,8 @@ test('qualified calls respect private procedure and Declare scope',()=>{
 });
 test('native declarations cannot shadow procedure or storage names',()=>{
   for(const declaration of ['Private Sub CallMe()\nEnd Sub','Private CallMe As Long']){
-    assert.throws(()=>buildCode('Private Declare Sub CallMe Lib "x" ()\n'+declaration),/conflicts/);
+    assert.throws(()=>buildCode('Private Declare Sub CallMe Lib "x" ()\n'+declaration),error=>
+      error.name==='NativeCompileError'&&error.diagnostics.some(d=>d.source==='Form1'&&d.line>0&&/^Ambiguous (?:name detected|member name): CallMe$/.test(d.message)));
   }
 });
 test('form initializers and default-instance method calls have distinct guarded initialization',()=>{
@@ -107,10 +108,10 @@ test('form initializers and default-instance method calls have distinct guarded 
   const map=result.report.sourceMap.filter(e=>e.procedure==='Form_Initialize');assert.ok(map.length);
   const text=Buffer.from(result.bytes);assert.ok(text.includes(Buffer.from('Initialized native window','utf16le')));
 });
-test('invalid hWnd, form images and unsupported scale modes fail compilation',()=>{
+test('invalid hWnd, missing form resources and unsupported scale modes fail compilation',()=>{
   const p=newProject();p.modules[0].form.controls.push(createControl('Timer','Timer1'));
   p.modules[0].code='Private Sub Form_Load()\n Dim n As Long\n n = Timer1.hWnd\nEnd Sub';assert.throws(()=>compileWin32(p),/Timer has no hWnd/);
-  for(const props of [{ScaleMode:2},{Picture:'x.bmp'},{Icon:'x.ico'}]){const form=newProject();Object.assign(form.modules[0].form.properties,props);assert.throws(()=>compileWin32(form),/ScaleMode|picture\/icon/);}
+  for(const props of [{ScaleMode:2},{Picture:'x.bmp'},{Icon:'x.ico'}]){const form=newProject();Object.assign(form.modules[0].form.properties,props);assert.throws(()=>compileWin32(form),/ScaleMode|Missing embedded native picture asset/);}
 });
 test('pixel and twip ScaleWidth lower to distinct explicit coordinate policies',()=>{
   const p=newProject();p.modules[0].code='Private Sub Form_Resize()\n Dim n As Long\n n = ScaleWidth\nEnd Sub';

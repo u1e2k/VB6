@@ -1,6 +1,8 @@
+import {mem32} from './x86-operands.js';
 /** Native storage lowering. BSTR ownership is explicit; no JS or VB runtime is embedded. */
+import {NATIVE_ARRAY_MAX_BYTES, NATIVE_ARRAY_MAX_RANK} from './arrays.js';
 const key = value => String(value).toLowerCase();
-const types = new Set(['byte', 'integer', 'long', 'boolean', 'string', 'single', 'double']);
+const types = new Set(['byte', 'integer', 'long', 'boolean', 'string', 'single', 'double', 'currency', 'date']);
 export const MAX_NATIVE_STRING = 1024 * 1024;
 
 function boundValue(compiler, node, module, proc) {
@@ -28,22 +30,22 @@ function boundValue(compiler, node, module, proc) {
 }
 
 export function storageLayout(compiler, decl, module, proc) {
-  if (!types.has(key(decl.type)) || decl.autoNew || decl.withEvents) compiler.fail('Native storage requires Byte, Integer, Long, Boolean, Single, Double or String: ' + decl.name, module);
+  if (!types.has(key(decl.type)) || decl.autoNew || decl.withEvents) compiler.fail('Native storage requires Byte, Integer, Long, Boolean, Single, Double, Currency, Date or String: ' + decl.name, module);
   if (decl.fixedLength !== null && decl.fixedLength !== undefined && (!Number.isInteger(decl.fixedLength) || decl.fixedLength < 1 || decl.fixedLength > 65535)) compiler.fail('Invalid fixed String length: ' + decl.name, module);
-  const elementBytes = key(decl.type) === 'byte' ? 1 : ['integer', 'boolean'].includes(key(decl.type)) ? 2 : key(decl.type)==='double' ? 8 : 4;
+  const elementBytes = key(decl.type) === 'byte' ? 1 : ['integer', 'boolean'].includes(key(decl.type)) ? 2 : ['double','currency','date'].includes(key(decl.type)) ? 8 : 4;
   decl.nativeElementBytes = elementBytes;
   let count = 1;
   if (decl.bounds !== null && decl.bounds !== undefined) {
     decl.nativeArray = true;
     decl.nativeDynamic = !decl.bounds.length;
     if (decl.parameter && (!decl.byRef || decl.bounds.length)) compiler.fail('Native array parameters must be unsized and ByRef', module);
-    if (decl.bounds.length > 8) compiler.fail('Native fixed arrays support at most eight dimensions', module);
+    if (decl.bounds.length > NATIVE_ARRAY_MAX_RANK) compiler.fail('Native fixed arrays support at most 60 dimensions', module);
     decl.nativeBounds = decl.bounds.map(([low, high]) => {
       const lower = boundValue(compiler, low, module, proc), upper = boundValue(compiler, high, module, proc);
       if (![lower, upper].every(n => Number.isInteger(n) && n >= -2147483648 && n <= 2147483647) || upper < lower) compiler.fail('Invalid native array bounds: ' + decl.name, module);
       const stride = count * elementBytes;
       count *= upper - lower + 1;
-      if (!Number.isSafeInteger(count) || count * elementBytes > 1024 * 1024) compiler.fail('Native fixed array exceeds the one MiB storage limit', module);
+      if (!Number.isSafeInteger(count) || count * elementBytes > (compiler.maxArrayBytes ?? NATIVE_ARRAY_MAX_BYTES)) compiler.fail('Native fixed array exceeds checked x86 backing-address range or configured budget', module);
       return {lower, upper, stride};
     });
   }
@@ -69,6 +71,18 @@ export const nativeStorageMethods = {
     } else { variable.label = variable.name; this.allocateStorage(variable); }
     return variable;
   },
+  /** Adopt one statement-scoped native reference in EAX. Error dispatch and
+   * normal instruction cleanup share the same release path. */
+  ownNativePointer(release,blockScoped=false) {
+    if(!this.context?.proc?.name)this.fail('Native object temporary requires a procedure frame');
+    const variable=this.arrayWorkspace(4,'native-owned-reference'),x=this.x;
+    (this.context.nativeOwnedTemps ||= []).push({variable,release,blockScoped});
+    x.push();this.rawStorageAddress(variable);x.mov('ebx','eax').pushOperand(mem32({base:'ebx'})).call(release).popOperand('edi').mov(mem32({base:'ebx'}),'edi').mov('eax','edi');
+    return variable;
+  },
+  clearNativeOwnedPointer({variable,release}) {
+    const x=this.x;this.rawStorageAddress(variable);x.emit(0xff,0x30,0xc7,0x00,0,0,0,0).call(release);
+  },
   /** Adopt a freshly allocated BSTR in EAX. Each source expression has its own slot. */
   ownString() {
     const variable = this.temporaryString(), x = this.x;
@@ -79,10 +93,14 @@ export const nativeStorageMethods = {
     const ready = this.x.unique(); this.x.test().branch('ne', ready).value(this.string('')).label(ready);
   },
   storageExpression(variable, node) {
+    if(variable.recordFieldArray)this.fail('Native record array field requires indices');
+    if(variable.nativeRecord)return this.recordExpression(variable,node);
     if (variable.nativeArray && !variable.elementOf) this.fail('Whole-array values require array assignment or a ByRef array parameter');
-    if (key(variable.type) === 'string') this.textExpression(node); else if(['single','double'].includes(key(variable.type)))this.floatExpression(node);else if(key(variable.type)==='boolean')this.truth(node);else this.numeric(node);
+    if(key(variable.type)==='date')this.dateExpression(node);else if(key(variable.type)==='currency')this.currencyExpression(node);else if (key(variable.type) === 'string') {if(this.type(node)==='string')this.expression(node);else this.textExpression(node);} else if(['single','double'].includes(key(variable.type))){this.floatExpression(node,key(variable.type)==='single');}else if(key(variable.type)==='boolean')this.truth(node);else this.numeric(node);
   },
   rawStorageAddress(variable) {
+    this.withGuard(variable.nativeWithActive);
+    if(variable.recordOf)return this.recordAddress(variable);
     if (variable.owner?.form) this.x.call(variable.owner.initialize);
     if (variable.label) this.x.value(variable.label);
     else if (variable.parameter && variable.byRef) this.x.value({argument: variable.offset});
@@ -104,13 +122,16 @@ export const nativeStorageMethods = {
   },
   stringBuiltin(node, name) {
     const x = this.x, args = node.args;
+    if (name === 'space') {
+      if (args.length !== 1) this.fail('Space expects one argument');
+      this.numeric(args[0]); x.push().call('native:string:space'); this.ownString(); return true;
+    }
     if (['len','lenb','ascw','strptr'].includes(name)) {
-      if(args.length===1&&['len','lenb'].includes(name)&&this.type(args[0])!=='string'){const size={byte:1,integer:2,boolean:2,long:4,single:4,double:8}[this.type(args[0])];if(!size)this.fail(name+' requires a supported value');this.expression(args[0]);x.value(size);return true;}
+      if(args.length===1&&['len','lenb'].includes(name)&&this.type(args[0])!=='string'){const size={byte:1,integer:2,boolean:2,long:4,single:4,double:8,currency:8,date:8}[this.type(args[0])];if(!size)this.fail(name+' requires a supported value');this.expression(args[0]);x.value(size);return true;}
       if (args.length !== 1 || this.type(args[0]) !== 'string') this.fail(name + ' expects one String argument');
       if(name==='strptr'){
         const variable=this.variable(args[0]);
         if(variable){if(variable.nativeBounds&&!variable.elementOf)this.fail('StrPtr requires a String element, not an array');const pin=this.address(variable);x.emit(0x8b,0x00);this.releaseArrayPin(pin);}
-        else if(args[0].kind==='id'&&key(args[0].name)==='vbnullstring')x.value(0);
         else this.expression(args[0]);
         return true;
       }
@@ -136,8 +157,14 @@ export const nativeStorageMethods = {
 
 export function emitNativeStorageHelpers(compiler) {
   const x = compiler.x, api = 'oleaut32.dll';
+  // https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/space-function
+  x.label('native:string:space').enter().value({argument:8}).test().branch('s','error:5')
+    .compare(MAX_NATIVE_STRING).branch('a','error:7').push().push(0).invoke(api,'SysAllocStringLen')
+    .test().branch('e','error:7').emit(0x89,0xc3,0x89,0xc7).value({argument:8}).emit(0x89,0xc1)
+    .value(32).emit(0xfc,0xf3,0x66,0xab,0x89,0xd8).leave(4);
   x.label('native:string:numeric-text').enter().api(api,'SysStringLen',[{argument:8}]).emit(0x89,0xc3).api('kernel32.dll','lstrlenW',[{argument:8}]).emit(0x39,0xd8).branch('ne','error:13').value({argument:8}).leave(4);
-  x.label('native:string:copy').enter().api(api,'SysStringLen',[{argument:8}]).compare(MAX_NATIVE_STRING).branch('g','error:7').push().push({argument:8}).invoke(api,'SysAllocStringLen').test().branch('e','error:7').leave(4);
+  const copyNonNull=x.unique();
+  x.label('native:string:copy').enter().value({argument:8}).test().branch('ne',copyNonNull).leave(4).label(copyNonNull).api(api,'SysStringLen',[{argument:8}]).compare(MAX_NATIVE_STRING).branch('g','error:7').push().push({argument:8}).invoke(api,'SysAllocStringLen').test().branch('e','error:7').leave(4);
   x.label('native:string:assign').enter().push({argument:12}).call('native:string:copy').emit(0x89,0xc7).value({argument:8}).emit(0x89,0xc3,0xff,0x33).invoke(api,'SysFreeString').emit(0x89,0x3b,0x89,0xf8).leave(8);
   x.label('native:string:from-int').enter(4).value(0).emit(0x89,0x45,0xfc).api(api,'VarBstrFromI4',[{argument:8},0x400,0,{address:-4}]).test().branch('s','error:7').value({argument:-4}).leave(4);
   x.label('native:string:concat').enter(4).api(api,'SysStringLen',[{argument:8}]).emit(0x89,0xc3).api(api,'SysStringLen',[{argument:12}]).emit(0x01,0xd8).compare(MAX_NATIVE_STRING).branch('g','error:7').value(0).emit(0x89,0x45,0xfc).api(api,'VarBstrCat',[{argument:8},{argument:12},{address:-4}]).test().branch('s','error:7').value({argument:-4}).leave(8);

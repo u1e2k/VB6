@@ -4,7 +4,7 @@ const key = value => String(value).toLowerCase();
 const mem = memory => ({memory});
 const arg = argument => ({argument});
 const E = 'native:error:';
-const DESCRIPTIONS = new Map([[5,'Invalid procedure call or argument'],[6,'Overflow'],[7,'Out of memory'],[9,'Subscript out of range'],[10,'This array is fixed or temporarily locked'],[11,'Division by zero'],[13,'Type mismatch'],[20,'Resume without error'],[340,'Control array element does not exist']]);
+const DESCRIPTIONS = new Map([[32755,'Cancel was selected'],[94,'Invalid use of Null'],[380,'Invalid property value'],[381,'Invalid property array index'],[35601,'Element not found'],[35602,'Key is not unique in collection'],[481,'Invalid picture'],[53,'File not found'],[70,'Permission denied'],[326,'Resource not found'],[3,'Return without GoSub'],[28,'Out of stack space'],[91,'Object variable or With block variable not set'],[5,'Invalid procedure call or argument'],[6,'Overflow'],[7,'Out of memory'],[9,'Subscript out of range'],[10,'This array is fixed or temporarily locked'],[11,'Division by zero'],[13,'Type mismatch'],[20,'Resume without error'],[340,'Control array element does not exist']]);
 // Metadata is relative to the native VB procedure's EBP, before its user locals.
 const F = {previous:-4,stack:-8,dispatch:-12,handler:-16,active:-20,current:-24,next:-28,fault:-32,resumeNext:-36,line:-40,erl:-44,source:-48};
 const localStore = (x, offset) => x.emit(0x89,0x85).imm(offset);
@@ -12,17 +12,17 @@ const localImmediate = (x, offset, value) => { x.value(value);localStore(x,offse
 
 export const nativeErrorMethods = {
   prepareErrors() {
-    for (const name of ['frame','pending','number','description','source','erl']) this.slot(E+name);
+    for (const name of ['frame','pending','number','description','source','erl','lastdllerror']) this.slot(E+name);
   },
   errorProperty(node) {
     if(node.kind!=='member'||node.object.kind!=='id'||key(node.object.name)!=='err')return null;
     const name=key(node.name);
-    if(!['number','description','source'].includes(name))this.fail('Native Err property is not implemented: '+node.name);
+    if(!['number','description','source','lastdllerror'].includes(name))this.fail('Native Err property is not implemented: '+node.name);
     return name;
   },
   errorExpression(node) {
     const property=this.errorProperty(node),x=this.x;
-    if(property){x.value(mem(E+property));if(property!=='number'){x.push().call('native:string:copy');this.ownString();}return true;}
+    if(property){x.value(mem(E+property));if(!['number','lastdllerror'].includes(property)){x.push().call('native:string:copy');this.ownString();}return true;}
     if(node.kind==='id'&&key(node.name)==='erl'){x.value(mem(E+'erl'));return true;}
     return false;
   },
@@ -60,7 +60,7 @@ export const nativeErrorMethods = {
     }
     return false;
   },
-  checkNativeError(target=this.context?.label+':error-dispatch') {
+  checkNativeError(target=this.context?.proc?.name&&this.context?.label?this.context.label+':error-dispatch':'native:error:propagate') {
     this.x.emit(0x83,0x3d).addr(E+'pending').emit(0).branch('ne',target);
   },
   enterErrorFrame(context) {
@@ -72,6 +72,12 @@ export const nativeErrorMethods = {
     localImmediate(x,F.dispatch,context.label+':error-dispatch');
     localImmediate(x,F.source,this.string(context.module.name));
     localImmediate(x,F.current,context.label+':0');localImmediate(x,F.next,context.label+':0');
+    if(context.module.nativeInternal){
+      // Intrinsics are not authored procedures: retain the caller's Erl/Source.
+      const noCaller=x.unique();x.value(arg(F.previous)).test().branch('e',noCaller).emit(0x89,0xc2);
+      x.emit(0x8b,0x42,F.erl&255);localStore(x,F.erl);
+      x.emit(0x8b,0x42,F.source&255);localStore(x,F.source);x.label(noCaller);
+    }
   },
   leaveErrorFrame() {
     // EAX is the return value; restoring the prior frame must not overwrite it.
@@ -118,6 +124,7 @@ export function emitNativeErrorHelpers(compiler) {
   x.value(mem(E+'frame')).test().branch('e',sourceDone).emit(0x89,0xc2,0x8b,0x42,F.source&255).store(E+'source').emit(0x8b,0x42,F.erl&255).store(E+'erl');
   x.label(sourceDone).value(1).store(E+'pending');
   x.value(mem(E+'frame')).test().branch('e',E+'fatal').emit(0x89,0xc5,0x8b,0x65,F.stack&255,0xff,0x65,F.dispatch&255);
+  x.label(E+'propagate').value(mem(E+'frame')).test().branch('e',E+'fatal').emit(0x89,0xc5,0x8b,0x65,F.stack&255,0xff,0x65,F.dispatch&255);
   x.label(E+'fatal');
   // Disable non-local transfers before constructing the final diagnostic itself.
   x.value(0).store(E+'frame');

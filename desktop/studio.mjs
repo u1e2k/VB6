@@ -1,19 +1,26 @@
 import {createNativeWindowTransport} from './window-transport.mjs';
-/** Keep the IDE's debugger preview sandboxed; only its document is served by the native host. */
+import {createNativeRuntimeDocumentLoader} from './runtime-document.mjs';
+import {loadRuntimeDocument} from '../src/ide/runtime-document.js';
+
+/** F5 and design Immediate share the host-approved document loader. Preserve
+ * the earlier embedding hook as an adapter, not a second navigation policy.
+ * Native URL validation, frame/session identity, CSP and sandboxing remain
+ * enforced before navigation; never create a transient srcdoc document.
+ * https://www.electronjs.org/docs/latest/tutorial/security
+ * https://html.spec.whatwg.org/multipage/iframe-embed-object.html#the-iframe-element
+ */
+export function installNativePreview(studio, bridge) {
+  studio.runtimeDocumentLoader = createNativeRuntimeDocumentLoader(bridge);
+  studio.loadRuntimeDocument = (frame, html) => {
+    const token = studio.bridgeToken;
+    return loadRuntimeDocument(studio, frame, html, {
+      isCurrent: () => studio.runtimeFrame === frame && studio.bridgeToken === token,
+      onError: error => { studio.stop(); studio.status('Native preview failed: ' + error.message); }
+    });
+  };
+}
 const studio = globalThis.vb6Studio;
 if (studio) {
   studio.browserWindows.transport = createNativeWindowTransport(globalThis,globalThis.vb6Native,error=>studio.status('Native tool window: '+error.message));
-  const run = studio.run.bind(studio);
-  studio.run = (...args) => {
-    const previous = studio.runtimeFrame;
-    run(...args);
-    const frame = studio.runtimeFrame;
-    if (!frame || frame === previous || !frame.srcdoc) return;
-    const html = frame.srcdoc;
-    // Cancel srcdoc navigation in this same task; the native protocol supplies a document-specific CSP.
-    frame.removeAttribute('srcdoc');
-    globalThis.vb6Native.runtimeDocument(html).then(url => {
-      if (studio.runtimeFrame === frame && frame.isConnected) frame.src = url;
-    }).catch(error => { studio.stop(); studio.status('Native preview failed: ' + error.message); });
-  };
+  installNativePreview(studio, globalThis.vb6Native);
 }

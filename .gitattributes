@@ -1,0 +1,24 @@
+# Keep inputs to deterministic JavaScript/CSS/HTML bundles identical on every host.
+# Native VB source/resource formats retain their existing byte/encoding policies.
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+
+# The exact third-party notice is embedded verbatim in the LF CSS source.
+/LICENSES/98.css.txt text eol=lf
+
+# Authored migration runtime inputs are embedded in deterministic browser bundles.
+/packages/vbnet-runtime/** text eol=lf
+/packages/vbnet-runtime-windows/** text eol=lf
+
+# Authored AppKit/runtime source is embedded in deterministic browser SDK kits.
+/packages/macos-native/native/** text eol=lf
+/packages/macos-native/LICENSE text eol=lf
+
+# Standalone migration package metadata is reproducible across host checkouts.
+/packages/vbnet-migration/README.md text eol=lf
+/packages/vbnet-migration/LICENSE text eol=lf
+/packages/vbnet-migration/*.d.ts text eol=lf

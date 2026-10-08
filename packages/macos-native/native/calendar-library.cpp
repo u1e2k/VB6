@@ -1,0 +1,23 @@
+#include "library.hpp"
+#include "calendar.hpp"
+namespace vb6 {
+void installCalendarBuiltins(Runtime&rt){
+  for(auto name:{"CDate","CVDate"})addBuiltin(rt,name,"expression",[name](Frame&,Args a){auto v=parseDate(a[0].value);v.variant=std::string(name)=="CVDate";return v;});
+  addBuiltin(rt,"IsDate","expression",[](Frame&,Args a){try{parseDate(a[0].value);return Value::boolean(true);}catch(const Error&){return Value::boolean(false);}},false,true);
+  for(auto name:{"Now","Date","Time","Timer"})addBuiltin(rt,name,"",[name](Frame&,Args){auto d=currentCivilTime();std::string key=name;if(key=="Timer")return Value::real(d.hour*3600+d.minute*60+d.second+d.millisecond/1000.0,Type::Single);if(key=="Date")d.hour=d.minute=d.second=d.millisecond=0;if(key=="Time"){d.year=1899;d.month=12;d.day=30;}return civilDate(d);});
+  for(auto name:{"DateValue","TimeValue"})addBuiltin(rt,name,"date",[name](Frame&,Args a){auto d=civilTime(a[0].value);if(std::string(name)=="DateValue")d.hour=d.minute=d.second=d.millisecond=0;else{d.year=1899;d.month=12;d.day=30;}return civilDate(d);});
+  const std::map<std::string,std::string>parts={{"Year","yyyy"},{"Month","m"},{"Day","d"},{"Hour","h"},{"Minute","n"},{"Second","s"}};
+  for(auto&entry:parts)addBuiltin(rt,entry.first,"date",[part=entry.second](Frame&,Args a){return Value::integer(datePart(part,a[0].value,0,1),Type::Integer);});
+  addBuiltin(rt,"DateSerial","year,month,day",[](Frame&,Args a){auto y=coerce(a[0].value,"integer").integral(),m=coerce(a[1].value,"integer").integral(),d=coerce(a[2].value,"integer").integral();if(y>=0&&y<100)y+=y<30?2000:1900;return civilDate(civilFromOrdinal(civilOrdinal(int(y),int(m),int(d))));});
+  addBuiltin(rt,"TimeSerial","hour,minute,second",[](Frame&,Args a){auto h=coerce(a[0].value,"integer").integral(),m=coerce(a[1].value,"integer").integral(),s=coerce(a[2].value,"integer").integral();return dateFromMilliseconds((h*3600+m*60+s)*1000);});
+  addBuiltin(rt,"Weekday","date,firstdayofweek?",[](Frame&,Args a){return Value::integer(datePart("w",a[0].value,firstWeekDay(integerArgument(a,1,1)),1),Type::Integer);});
+  addBuiltin(rt,"MonthName","month,abbreviate?",[](Frame&,Args a){auto month=integerArgument(a,0);if(month<1||month>12)fail(5);return Value::string(formatDate(civilDate({2000,int(month),1}),argument(a,1,Value::boolean(false)).truth()?u"mmm":u"mmmm"));});
+  addBuiltin(rt,"WeekdayName","weekday,abbreviate?,firstdayofweek?",[](Frame&,Args a){auto day=integerArgument(a,0);if(day<1||day>7)fail(5);auto first=firstWeekDay(integerArgument(a,2,1));auto d=civilDate(civilFromOrdinal(civilOrdinal(2023,1,1)+day-1+first));return Value::string(formatDate(d,argument(a,1,Value::boolean(false)).truth()?u"ddd":u"dddd"));});
+  addBuiltin(rt,"DateAdd","interval,number,date",[](Frame&,Args a){return addDate(dateInterval(a[0].value),coerce(a[1].value,"long").integral(),a[2].value);});
+  addBuiltin(rt,"DateDiff","interval,date1,date2,firstdayofweek?,firstweekofyear?",[](Frame&,Args a){return Value::integer(diffDate(dateInterval(a[0].value),a[1].value,a[2].value,firstWeekDay(integerArgument(a,3,1)),firstWeekRule(integerArgument(a,4,1))));});
+  addBuiltin(rt,"DatePart","interval,date,firstdayofweek?,firstweekofyear?",[](Frame&,Args a){return Value::integer(datePart(dateInterval(a[0].value),a[1].value,firstWeekDay(integerArgument(a,2,1)),firstWeekRule(integerArgument(a,3,1))),Type::Integer);});
+  addBuiltin(rt,"Format","expression,format?",[](Frame&,Args a){return Value::string(formatValue(a[0].value,stringArgument(a,1)),true);});
+  addBuiltin(rt,"FormatDateTime","date,namedformat?",[](Frame&,Args a){static const Text names[]={u"General Date",u"Long Date",u"Short Date",u"Long Time",u"Short Time"};auto mode=integerArgument(a,1);if(mode<0||mode>4)fail(5);return Value::string(formatDate(a[0].value,names[mode]));});
+  for(auto name:{"FormatNumber","FormatCurrency","FormatPercent"})addBuiltin(rt,name,"expression,numdigitsafterdecimal?,includeleadingdigit?,useparensfornegativenumbers?,groupdigits?",[name](Frame&,Args a){auto digits=integerArgument(a,1,2);if(digits==-1)digits=2;if(digits<0||digits>28)fail(5);auto leading=integerArgument(a,2,-1),parens=integerArgument(a,3,0),group=integerArgument(a,4,-1);if((leading!=0&&leading!=-1&&leading!=-2)||(parens!=0&&parens!=-1&&parens!=-2)||(group!=0&&group!=-1&&group!=-2))fail(5);Text pattern=group?u"#,##0":u"0";if(!leading)pattern.back()=u'#';if(digits)pattern+=u"."+Text(size_t(digits),u'0');std::string key=name;if(key=="FormatCurrency")pattern=u"$"+pattern;if(key=="FormatPercent")pattern+=u'%';if(parens==-1)pattern+=u";("+pattern+u")";return Value::string(formatValue(a[0].value,pattern));});
+}
+}
