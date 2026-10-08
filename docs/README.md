@@ -42,10 +42,14 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 ## IDE, appearance and rendering
 
+- [Optional XAML form authoring](XAML.md): standalone compiler, source editor,
+  designer/Properties synchronization, persistence and conversion boundaries.
+
 - [IntelliSense](INTELLISENSE.md) and [resolution/reference contracts](INTELLISENSE-COMPATIBILITY.md).
 - [Auto Layout designer](auto-layout-designer.md): opt-in panel, canvas interaction,
   shared solver and export boundaries.
 - [Detached browser windows](BROWSER-WINDOWS.md).
+- [HTML retention and designer measurements](HTML-RENDERING-PERFORMANCE.md): DOM identity, read-before-write batching and browser validation.
 - [UI rendering backends](RENDERING.md): settings, native islands, lifecycle,
   performance measurement and strict acceptance; [rendering source attribution](RENDERING-SOURCES.md).
 - [IDE themes](IDE-THEMES.md), [application themes](APPLICATION-THEMES.md) and
@@ -58,6 +62,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Windows build targets](WINDOWS-BUILDS.md), [target validation](NATIVE-VALIDATION.md),
   [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
+- [Native strings and control metadata](NATIVE-STRING-METADATA.md): counted BSTRs,
+  Replace/InStr binding, Tag/Name lifetime and HWND-backed TabStop.
 - [Win32 controls](WIN32-CONTROLS.md): native AOT control coverage, property and stream ownership, layout integration, output dependencies and Windows execution checks.
 - [Native RichEdit selection and search](WIN32-RICHEDIT.md): mixed-format masks, Unicode search, line lookup and undo/redo.
 - [Native grids, charts and tab pages](WIN32-GRIDS-CHARTS-TABS.md): storage, editing, GDI, ownership and execution gates.
@@ -87,6 +93,7 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 Package READMEs own their API, installation and compatibility details:
 [automatic layout](../packages/auto-layout/README.md),
+[XAML compiler and language services](../packages/xaml-compiler/README.md),
 [Win32 browser compatibility](../packages/win32-browser/README.md),
 [portable COM/OLE](../packages/com-ole/README.md),
 [Automation values and adapters](../packages/automation/README.md),

@@ -1,3 +1,4 @@
+import {xamlBuildDiagnostics} from '../xaml/contract.js';
 import {assertPublicConfiguration} from '../data/common.js';
 import {ApplicationExportError, exportDiagnostic} from './diagnostics.js';
 import {snapshotExportValue} from './serialization.js';
@@ -44,14 +45,18 @@ function validateShape(project, options) {
   return errors;
 }
 
-/** Preserve all project fields. This is deliberately not normalizeProject, which
+/** Preserve project fields except design-time XAML source. This is deliberately not normalizeProject, which
  * repairs IDs, renames projects and can change authored layout/renderer settings.
  */
 export function prepareApplicationExport(input, runtimeOptions, compile) {
   const project = snapshotExportValue(input, 'project');
   const options = snapshotExportValue(runtimeOptions, 'options');
   const errors = validateShape(project, options);
+  if (!errors.length) errors.push(...xamlBuildDiagnostics(project));
   if (errors.length) throw new ApplicationExportError(errors);
+  // XAML is authoring metadata; builds consume the already validated form model.
+  // Invalid drafts remain in saved projects, never in an exported application.
+  for (const module of project.modules) delete module.xaml;
   try {
     assertPublicConfiguration(project.dataSources);
     assertPublicConfiguration(options);

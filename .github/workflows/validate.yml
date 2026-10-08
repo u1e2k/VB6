@@ -105,8 +105,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm run build
-      - run: python -m pip install playwright==1.57.0
+      - run: python -m pip install playwright==1.57.0 Pillow
       - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: HTML retention, selection batching and stable presentation
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-html-retention.py
       - name: Microsoft runtime EXE dialog, downloads and cancellation (synthetic compiler)
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -164,6 +168,7 @@ jobs:
         with:
           name: browser-windows-${{ matrix.browser }}
           path: |
+            reports/html-retention/${{ matrix.browser }}
             reports/browser-windows
             reports/ide-themes
             reports/application-themes/${{ matrix.browser }}
