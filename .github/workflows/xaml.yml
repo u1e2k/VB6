@@ -1,0 +1,85 @@
+name: XAML MVP conformance
+on:
+  push:
+    branches: [main, feat/javascript-xaml-compiler]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: xaml-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  compiler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive exact source for reproducible validation
+        run: git archive --format=zip HEAD -o /tmp/xaml-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xaml-source-${{ github.sha }}
+          path: /tmp/xaml-source.zip
+          retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run build
+      - name: Compiler, form round-trip and authoring transactions
+        run: |
+          set -o pipefail
+          mkdir -p reports/xaml
+          node --test tests/xaml-*.test.mjs 2>&1 | tee reports/xaml/compiler.log
+      - name: Independently installed package consumer
+        run: node tools/test-xaml-package.mjs
+      - name: Reproducible generated products
+        run: git diff --exit-code -- dist src/exporter/runtime-payload.js src/editor/diagnostics-payload.js examples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xaml-compiler-reports
+          path: reports/xaml
+          if-no-files-found: ignore
+          retention-days: 7
+  authoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: python -m pip install playwright==1.57.0
+      - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - name: Resolve Chromium executable
+        if: matrix.browser == 'chromium'
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              print('CHROMIUM_PATH=' + p.chromium.executable_path)
+          PY
+      - name: XAML, designer, Properties and exported event execution over HTTP
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+          VB6_TEST_TRANSPORT: http
+        run: |
+          set -o pipefail
+          mkdir -p "reports/xaml/${VB6_BROWSER}"
+          python tools/browser-xaml-tests.py 2>&1 | tee "reports/xaml/${VB6_BROWSER}/acceptance.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xaml-authoring-${{ matrix.browser }}
+          path: reports/xaml
+          if-no-files-found: ignore
+          retention-days: 7
