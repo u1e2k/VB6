@@ -2,12 +2,12 @@
   "version": 2,
   "files": {
     "dist/studio.js": {
-      "bytes": 7428084,
-      "sha256": "39fc0e7b96fe2c8aa5b6235357d6f6c2e1c157f56ee61aaa5f9c6f4dba1b41a4"
+      "bytes": 7616479,
+      "sha256": "ce6ceff5a8cfef9d74943e308b260de199822bb3385a9df9e2bc2b2fbe24a27a"
     },
     "dist/VB6-Studio-Web.html": {
-      "bytes": 7750354,
-      "sha256": "527981b4b241dbe692650503461ef98c4eb37214b42834bf941d9c1edd1e11d5"
+      "bytes": 7938749,
+      "sha256": "3b71535e362b5ecf623eb192d42c3d5ff003b4e121a8545918aa99d0c4d782a8"
     },
     "dist/win32-browser.js": {
       "bytes": 212919,
@@ -26,8 +26,8 @@
       "sha256": "32bb2c6755e6163393536bd7948961a93dfb314fcd4c6d4988272b2ca9ad07fc"
     },
     "dist/vb6-native.js": {
-      "bytes": 715879,
-      "sha256": "2103f5d3fd36e95d207e90b44bc8fbc24e7cabfa6eb4381537426a179da7976a"
+      "bytes": 907242,
+      "sha256": "26ffc4f31bbab1e4c688200c8d4faf96b822a53af80442faa3a36b7d707777ee"
     },
     "src/editor/diagnostics-payload.js": {
       "bytes": 210552,
