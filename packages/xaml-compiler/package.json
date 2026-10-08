@@ -1,0 +1,16 @@
+{
+  "name": "@vb6/xaml-compiler",
+  "version": "0.1.0",
+  "description": "Dependency-free AST-based XAML compiler, schema and language services for JavaScript hosts",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": { "types": "./src/index.d.ts", "import": "./src/index.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "engines": { "node": ">=22" },
+  "license": "MIT"
+}

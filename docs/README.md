@@ -42,6 +42,9 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 ## IDE, appearance and rendering
 
+- [Optional XAML form authoring](XAML.md): standalone compiler, source editor,
+  designer/Properties synchronization, persistence and conversion boundaries.
+
 - [IntelliSense](INTELLISENSE.md) and [resolution/reference contracts](INTELLISENSE-COMPATIBILITY.md).
 - [Auto Layout designer](auto-layout-designer.md): opt-in panel, canvas interaction,
   shared solver and export boundaries.
@@ -88,6 +91,7 @@ These guides describe the implemented system, not complete native VB6 parity.
 
 Package READMEs own their API, installation and compatibility details:
 [automatic layout](../packages/auto-layout/README.md),
+[XAML compiler and language services](../packages/xaml-compiler/README.md),
 [Win32 browser compatibility](../packages/win32-browser/README.md),
 [portable COM/OLE](../packages/com-ole/README.md),
 [Automation values and adapters](../packages/automation/README.md),
