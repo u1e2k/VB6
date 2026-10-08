@@ -7,7 +7,7 @@
     <OptionInfer>On</OptionInfer>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>VB6.Studio.Compatibility</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>Source-distributed compatibility primitives for VB6 Studio migrations.</Description>
     <Deterministic>true</Deterministic>

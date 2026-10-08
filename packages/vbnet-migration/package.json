@@ -1,6 +1,6 @@
 {
   "name": "@vb6-studio/vbnet-migration",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Extensible VB6-to-VB.NET .NET 10 source migration, WinForms export and deterministic project archives",
   "type": "module",
   "main": "./lib/src/migration/index.js",

@@ -1,94 +1,133 @@
 # @vb6-studio/vbnet-migration
 
-Extensible, source-retaining VB6 → VB.NET migration for **.NET 10**, with WinForms
-source generation and deterministic ZIP exports. Pure synchronous JavaScript ESM;
-the converter does not execute VB6 code. Node 22+ CLI and a standalone browser
-bundle are included. Generated applications include complete compatibility-runtime
-VB sources; they do not depend on the JavaScript converter at runtime.
+Native-first, source-retaining VB6 → VB.NET migration for **.NET 10**, with
+WinForms designers and deterministic ZIP exports. Pure synchronous JavaScript
+ESM, Node 22+ CLI, typed extension APIs, and a standalone browser bundle.
+Converted applications do not depend on the JavaScript converter or embed its VM.
 
-**Version 0.1.0 is not universal VB6 compatibility.** A successful conversion means
-no *known converter blockers*, not a successful .NET build or certified behavioral
-parity. Reports explicitly record `dotnetBuild: "not-run"`. COM/OCX dependencies,
-raw pointers, unsupported controls, resources, binary layouts and other unhandled
-semantics produce review diagnostics. An unresolved export requires an explicit
-option and includes an MSBuild error guard, not compilable no-op stubs.
+**0.2.0 defaults to native / preserve / minimal.** Simple projects need no custom
+compatibility runtime. Other projects receive only the required authored support
+units. This is not universal VB6 compatibility: success means no known converter
+blockers, not successful .NET compilation or certified behavioral equivalence.
+Reports record `dotnetBuild: "not-run"`; unresolved review archives retain guards.
+
+## API
 
 ```js
 import {createVbNetMigrator} from '@vb6-studio/vbnet-migration';
 import {writeFile} from 'node:fs/promises';
 
-const migrator = createVbNetMigrator();
 const project = {
   name: 'Hello', startup: 'Sub Main', settings: {},
   modules: [{name: 'Program', kind: 'module', code:
     'Option Explicit\nPublic Sub Main()\nDebug.Print "Hello from .NET 10"\nEnd Sub'}]
 };
-const result = migrator.exportProject(project, {target: 'console'});
+const migrator = createVbNetMigrator();
+const result = migrator.exportProject(project, {
+  target: 'console', platform: 'AnyCPU', runtime: 'none'
+});
 await writeFile(result.fileName, result.bytes, {flag: 'wx'});
 ```
 
+`convertProject` returns `files`, `diagnostics`, `report`, `sourceMap`, `success`
+and `projectFile`; `exportProject` adds `bytes` and `fileName`. Convenience
+functions `convertVbNetProject` and `exportVbNetProject` are also exported.
+`index.d.ts` defines options, reports, plugin contracts and the immutable
+`RUNTIME_CATALOG`. No input VB6, COM component, process or network request runs
+while converting. Plugins are separate trusted host JavaScript.
+
+## Output and semantic policies
+
+| Setting | Contract |
+|---|---|
+| `codeStyle: 'native'` | Default. Bound records, eligible native arrays, conservative local Variant specialization, simpler functions/startup/events and intrinsic selection. |
+| `codeStyle: 'compatibility'` | Legacy source representations. Defaults to project support unless runtime is explicitly selected. |
+| `runtime: 'minimal'` | Default native packaging. Required source units under `Application/Compatibility/`; no extra runtime project. No directory when no support is needed. |
+| `runtime: 'none'` | No support; required helpers produce actionable blocking diagnostics rather than disappearing. |
+| `runtime: 'project'` | Authored source projects. Compatibility/project retains the previous full-runtime layout. |
+| `runtime: 'package'` | Explicit `runtimePackage`/`windowsRuntimePackage` objects `{id, version}` for required families. No automatic package publication, availability or restore claim. |
+| `semanticPolicy: 'preserve'` | Default. Unproved transformations retain compatibility support. |
+| `semanticPolicy: 'modernize'` | Requires `acceptedRules: ['currency-decimal']`. This is the only currently implemented modernization rule. |
+
+Currency → Decimal changes quantization, scaled range, subtype introspection and
+binary/interop representation; it is never implicitly approved. Native field
+types/array layouts must remain consistent at every relevant use. Escaping arrays,
+uncertain allocation/bounds, owned initialization, multidimensional Preserve/
+enumeration and most public-array contracts retain compatibility representations.
+Standard `Microsoft.VisualBasic` APIs are .NET libraries, not a custom VB6 VM.
+
+## CLI
+
 ```sh
-vb6-migrate Legacy.vbp --out Legacy-net10.zip
+vb6-migrate Legacy.vbp --platform AnyCPU --out Legacy-net10.zip
 vb6-migrate Legacy.zip --entry Legacy/App.vbp --out Legacy-net10.zip
-vb6-migrate application.vb6web --target winforms --platform x86 --out application.zip
-vb6-migrate Legacy.vbp --inspect
-vb6-migrate Legacy.vbp --review --out Legacy-review.zip
+vb6-migrate Legacy.vbp --runtime none --inspect
+vb6-migrate Legacy.vbp --code-style compatibility --runtime project --out compatibility.zip
+vb6-migrate Legacy.vbp --semantic-policy modernize --accept-rule currency-decimal --out approved.zip
+vb6-migrate Legacy.vbp --runtime package --runtime-package Company.Compat@0.2.0 --out shared.zip
+vb6-migrate Legacy.vbp --review --out unresolved-review.zip
 ```
 
-Unzip the result, review `migration-report.json`, then use `dotnet build *.slnx`.
-WinForms applications run on Windows; non-UI applications target `net10.0`.
-The compatibility default is `Option Strict Off` and x86 for classic interop.
-`--strict` enables `Option Strict On`; it is not an inference guarantee.
+`Company.Compat` is an illustrative identity, not a published package claim.
+Package versions must be explicit semantic versions. Existing files are never
+overwritten; ZIP/native input reading is bounded and does not extract arbitrary
+paths. `--no-originals` removes retained source copies when deliberately selected.
+Originals are never included in generated compile globs.
 
-## API and extensions
+Review `migration-report.json`, then build the generated `.slnx` with the .NET 10
+SDK. WinForms runs on Windows. x86 and `Option Strict Off` remain conservative
+interop defaults; `--strict` requests stricter compiler checks, not an inference
+or successful-compilation guarantee.
 
-`createVbNetMigrator({plugins, compile})` returns `convertProject(project, options)`
-and `exportProject(project, options)`. Conversion returns generated `files`,
-`diagnostics`, `report`, `sourceMap`, `success` and `projectFile`. Export adds
-`bytes` and `fileName`. Equivalent convenience functions are exported alongside
-`migrationZip`, `MigrationError`, version constants and capability metadata.
-See `index.d.ts` for the versioned contracts.
-
-Plugins have unique `id` values and optional synchronous `analyze`, `expression`,
-`statement`, `control`, `finalize` hooks. Code hooks return a VB source string or
-`undefined` to defer. Plugins are trusted executable JavaScript supplied by the
-caller, never loaded from project metadata. They may add diagnostics and files;
-generated path collisions, traversal and asynchronous hooks are rejected.
+## Extensions
 
 ```js
 const plugin = {
-  id: 'company.constants.v1',
-  expression({node}, context) {
+  id: 'company.constants.v2',
+  representationSafe: true,
+  expression({node}) {
     if (node?.kind === 'id' && node.name.toLowerCase() === 'companyversion') {
-      return '"2026.10"';
+      return {code: '"2026.10"', requires: []};
     }
   }
 };
 const converter = createVbNetMigrator({plugins: [plugin]});
 ```
 
-The browser build exposes `globalThis.VB6Migration` and requires no Node APIs.
-The CLI import `@vb6-studio/vbnet-migration/cli` exports argument parsing, bounded
-input loading and command execution. Native directory traversal skips symlinks.
-ZIP input is bounded and never extracted to arbitrary host paths.
+Synchronous hooks: `analyze`, `expression`, `statement`, `control`, `finalize`.
+Code hooks can return `{code, requires}`, a legacy string, or `undefined` to defer.
+Static `plugin.requires` and `context.requireRuntime(symbol, location, reason)`
+can register explicit dependency roots. Unknown roots fail. No final application
+text scanning is used to guess runtime dependencies.
 
-## Architecture and boundaries
+Old opaque code hooks conservatively retain support. Unless they explicitly set
+`representationSafe: true`, representation-sensitive optimizations remain off.
+The flag and a requirements declaration are independent trusted promises.
+Finalize runs after application/source emission but before runtime/SDK/solution
+materialization; added VB files must provide imports or qualified names. A plugin
+rewriting mapped files is responsible for its mapping changes. Path collisions,
+traversal and async hooks remain errors. No plugins are loaded from project data.
 
-The pipeline snapshots project data, reuses the repository's parser and compiler
-syntax, binds module/procedure symbols, emits structured VB.NET, generates forms,
-adds source runtime projects and maps, then validates the complete archive.
-Numbers preserve VB6 Integer/Long widths; lower-bound arrays, Currency and fixed
-strings use explicit compatibility code. Structured loops and properties remain
-structured; GoSub uses a continuation stack. Existing Microsoft.VisualBasic APIs
-supply supported intrinsics rather than recreating the entire library.
+The browser build exposes `globalThis.VB6Migration` without Node APIs. The CLI
+entry `@vb6-studio/vbnet-migration/cli` also exports argument/input adapters.
 
-Exact Variant subtype/overflow promotion, deterministic COM reference-count
-lifetime, OCX designer state, raw ABI and graphics parity are not certified.
-Inactive conditional-compilation branches remain in originals. Workspace projects
-are retained and converted separately, but linking requires an explicit adapter.
-Control and runtime limitations are recorded in the repository migration guide.
+## Reports, verification and boundaries
 
-## Build from this repository
+`report.representations` explains selected and retained layouts;
+`report.runtime` lists roots, transitive features, policy, source counts/bytes and
+package identities; `report.modernization` records explicit semantic changes.
+Source counts are not compiled-binary or performance measurements.
+
+COM/OCX/native ABI, general default members/Variant subtype promotion, live
+compatibility-array element references, binary layouts, graphics/printing,
+dynamic-control lifetime and cross-project linking still need adapters/review.
+Inactive configurations and original resources are retained, not certified converted.
+
+The repository includes generation/size budgets, independently extracted package
+checks, real browser export tests, and .NET compilation/execution fixtures for both
+profiles. Each support root is compiled in isolation using its dependency closure.
+A missing local .NET SDK is an explicit skip; `VB6_REQUIRE_DOTNET=1` makes required
+CI fail instead. Test definitions alone are not successful execution evidence.
 
 ```sh
 npm run build:vbnet-migration
@@ -97,6 +136,7 @@ npm run test:migration:browser
 npm run pack:vbnet-migration
 ```
 
-The package copies its complete dependency closure into `lib` and includes the
-browser bundle in `dist`. Generated files are built before packing and are not
-vendored into repository source control. MIT licensed.
+The repository guide `docs/VBNET-NATIVE-FIRST.md` documents exact proof boundaries,
+hook timing, migration controls and primary language references. Generated `lib`
+and `dist` are built from the complete relative dependency closure before packing.
+MIT licensed. This package is packable; no registry publication is implied.

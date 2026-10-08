@@ -9,7 +9,8 @@ import {readZip} from '../src/project/zip.js';
 import {key,typeName,identifier} from '../src/migration/names.js';
 import {project,procedure,formProject,CORE_FIXTURE} from './migration-fixtures.mjs';
 
-const convert=(input,options={})=>convertVbNetProject(input,{platform:'AnyCPU',...options});
+// Retain exact legacy-output contracts alongside the native-first suite.
+const convert=(input,options={})=>convertVbNetProject(input,{platform:'AnyCPU',codeStyle:'compatibility',runtime:'project',...options});
 const code=result=>result.files['Application/Module1.vb'];
 function okay(result){assert.equal(result.success,true,JSON.stringify(result.diagnostics));return result;}
 function freeze(value){if(value&&typeof value==='object'){Object.freeze(value);for(const child of Object.values(value))freeze(child);}return value;}
