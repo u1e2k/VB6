@@ -2,6 +2,8 @@
  * These programs use OleAut32, not the JavaScript runtime or a mock interpreter.
  */
 import {newProject} from '../src/project/model.js';
+import {appendVariantReferenceChecks,NATIVE_VARIANT_REFERENCE_PROCEDURES} from './win32-variant-reference-fixtures.mjs';
+import {appendVariantDivisionChecks} from './win32-variant-division-fixtures.mjs';
 export function nativeVariantFixture(){
  const checks=[],body=['On Error GoTo Unexpected','Dim v As Variant, w As Variant, q As Variant, n As Long, i As Long, b As Boolean','Dim s As String, f As Single, d As Double, money As Currency, stamp As Date','Dim fixed(1 To 3) As Variant, values() As Variant, copied() As Variant'];
  const add=s=>body.push(s),check=(expression,label)=>{checks.push(label);add(`If Not (${expression}) Then ExitProcess ${checks.length}`);};
@@ -74,6 +76,8 @@ export function nativeVariantFixture(){
  add('n=0\nFor v=1 To 5\n n=n+v\nNext');check('n=15 And v=6','Variant For counter uses numeric payload rather than pointer truth');
  add('n=0\nv="match"\nSelect Case v\n Case "other"\n n=1\n Case "match"\n n=2\n Case Else\n n=3\nEnd Select');check('n=2','Select Case retains an owned Variant snapshot');
  add('For i=1 To 1000\n v="owner" & CStr(i)\n w=Echo(v)\n values(1)=w\n ChangeByVal w\nNext');check('v="owner1000" And w=v And values(1)=v','repeated Variant/String/call/array ownership is stable');
+ appendVariantDivisionChecks(add,check);
+ appendVariantReferenceChecks(add,check);
  add('ExitProcess 0\nUnexpected:\nExitProcess 10000+Err.Number');
  const project=newProject('AotVariants');project.startup='Sub Main';project.modules=[{id:'m',name:'Entry',kind:'module',code:`Option Explicit
 Private sequence As Long
@@ -163,5 +167,5 @@ Public Function TextVariantEqual() As Boolean
  Dim v As Variant,w As Variant
  v="AbC":w="aBc"
  TextVariantEqual=v=w
-End Function`}];return {project,checks};
+End Function`}];project.modules[0].code+='\n'+NATIVE_VARIANT_REFERENCE_PROCEDURES;return {project,checks};
 }
