@@ -15,14 +15,21 @@ export async function anchorDialog(value=5,title='Anchoring') {
   update();const accepted=await modal(title,{width:420,content:el('div',{},diagram,summary,presets,el('p',{},'Opposite edges stretch the control. An unanchored axis preserves the offset from its container center.'))});
   return accepted?mask:null;
 }
-export function renderAnchorGuides(designer) {
-  if(!layoutEnabled(designer.project))return;
-  const form=designer.module.form,views=new Map(designer.formView.controls.map(v=>[v.model.id,v]));
+/** Read all guide geometry before any live overlay write. A selection snapshot
+ * lets the designer share its one root measurement and per-control rectangles. */
+export function anchorGuideNodes(designer,snapshot=null) {
+  if(!layoutEnabled(designer.project))return [];
+  const views=snapshot?.views||new Map(designer.formView.controls.map(v=>[v.model.id,v])),nodes=[],parents=new Map();
+  const root=snapshot?.root||designer.formView.content.getBoundingClientRect(),z=designer.zoom;
+  parents.set(designer.formView.content,root);
   for(const c of designer.selected()) {
     if(!layoutEligible(c)||Number(c.properties.Dock||0))continue;
-    const r=designer.controlRect(c),view=views.get(c.id);if(!r||!view)continue;
-    const root=designer.formView.content.getBoundingClientRect(),parent=view.node.parentElement.getBoundingClientRect(),z=designer.zoom;
-    const p={x:(parent.left-root.left)/z,y:(parent.top-root.top)/z,width:parent.width/z,height:parent.height/z},a=parseAnchor(c.properties.Anchor??5);
-    for(const [edge,bit,x1,y1,x2,y2]of [['Top',1,r.x+r.width/2,p.y,r.x+r.width/2,r.y],['Bottom',2,r.x+r.width/2,r.y+r.height,r.x+r.width/2,p.y+p.height],['Left',4,p.x,r.y+r.height/2,r.x,r.y+r.height/2],['Right',8,r.x+r.width,r.y+r.height/2,p.x+p.width,r.y+r.height/2]])if(a&bit)designer.overlay.append(el('i',{class:'designer-anchor-guide','data-anchor-edge':edge,'data-anchor-control':c.id,style:{left:Math.min(x1,x2)+'px',top:Math.min(y1,y2)+'px',width:Math.abs(x2-x1)+'px',height:Math.abs(y2-y1)+'px'}}));
+    const r=snapshot?snapshot.rects.get(c.id):designer.controlRect(c),view=views.get(c.id);if(!r||!view)continue;
+    const parentNode=view.node.parentElement;
+    if(!parents.has(parentNode))parents.set(parentNode,parentNode.getBoundingClientRect());
+    const parent=parents.get(parentNode),p={x:(parent.left-root.left)/z,y:(parent.top-root.top)/z,width:parent.width/z,height:parent.height/z},a=parseAnchor(c.properties.Anchor??5);
+    for(const [edge,bit,x1,y1,x2,y2]of [['Top',1,r.x+r.width/2,p.y,r.x+r.width/2,r.y],['Bottom',2,r.x+r.width/2,r.y+r.height,r.x+r.width/2,p.y+p.height],['Left',4,p.x,r.y+r.height/2,r.x,r.y+r.height/2],['Right',8,r.x+r.width,r.y+r.height/2,p.x+p.width,r.y+r.height/2]])if(a&bit)nodes.push(el('i',{class:'designer-anchor-guide','data-anchor-edge':edge,'data-anchor-control':c.id,style:{left:Math.min(x1,x2)+'px',top:Math.min(y1,y2)+'px',width:Math.abs(x2-x1)+'px',height:Math.abs(y2-y1)+'px'}}));
   }
+  return nodes;
 }
+export function renderAnchorGuides(designer){designer.overlay.append(...anchorGuideNodes(designer));}

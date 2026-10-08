@@ -65,6 +65,7 @@ export class ToolList {
     // DOM writes; scrolling creates only rows newly entering the overscan range.
     // This applies the read-before-write guidance above, not third-party code.
     const height=measuredHeight??this.root.clientHeight,scrollTop=this.root.scrollTop;
+    if(!this.root.getAttribute('aria-label'))this.root.setAttribute('aria-label','Items');
     const start=Math.max(0,Math.floor(scrollTop/this.rowHeight)-2);
     const end=Math.min(this.items.length,start+Math.ceil((height||190)/this.rowHeight)+5);
     for(const [index,record] of this.rows)if(index<start||index>=end){record.node.remove();this.rows.delete(index);}
