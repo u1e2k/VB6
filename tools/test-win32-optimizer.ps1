@@ -46,4 +46,10 @@ foreach ($plan in $plans) {
   $report | ConvertTo-Json -Depth 10 | Write-Host
 }
 $results | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $root 'execution.json')
-if (@($results | Where-Object {-not $_.ok}).Count) { throw 'Native optimizer/record execution failed; see execution.json' }
+if (@($results | Where-Object {-not $_.ok}).Count) {
+  if (@($results | Where-Object {-not $_.ok -and $_.name -like 'AotVariants-*'}).Count) {
+    try { & (Join-Path $PSScriptRoot 'probe-win32-variant-arithmetic.ps1') -OutputPath (Join-Path $root 'variant-arithmetic-observations.json') }
+    catch { Write-Warning ('Independent Variant diagnostic failed: '+$_.Exception.Message) }
+  }
+  throw 'Native optimizer/record execution failed; see execution.json'
+}
