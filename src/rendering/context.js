@@ -1,3 +1,4 @@
+import {browserGraphicsDisabled} from './diagnostics.js';
 /** Retry WebGL2 creation hints without locking the canvas to a different API.
  * https://registry.khronos.org/webgl/specs/latest/1.0/#5.2
  */
@@ -14,9 +15,11 @@ export function acquireWebGLContext(canvas) {
         if (gl) return {gl, request: {powerPreference}, warnings: attempts.map(a => a.reason)};
       } catch (error) { message = error.message || String(error); }
       attempts.push({stage: 'context', options: {powerPreference}, reason: message || 'WebGL2 context unavailable'});
+      // A disabled GL implementation cannot be recovered by changing power hints.
+      if (browserGraphicsDisabled(message)) break;
     }
   } finally { canvas.removeEventListener('webglcontextcreationerror', failed); }
   const details = [...new Set(attempts.map(a => a.reason).filter(r => r !== 'WebGL2 context unavailable'))];
   throw Object.assign(new Error('WebGL2 unavailable' + (details.length ? ': ' + details.join('; ') : '')),
-    {code: 'WEBGL2_CONTEXT_UNAVAILABLE', attempts});
+    {code: attempts.some(a => browserGraphicsDisabled(a.reason)) ? 'BROWSER_GRAPHICS_DISABLED' : 'WEBGL2_CONTEXT_UNAVAILABLE', attempts});
 }
