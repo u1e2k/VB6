@@ -128,7 +128,8 @@ exports.run = async ({ app, root, records, manifest, reportPath }) => {
       if(reportPath)fs.writeFileSync(reportPath,JSON.stringify(report,null,2));
       app.quit();return;
     }
-    check('bootstrap', !startupError);
+    if (startupError) throw new Error('Native bootstrap failed: ' + startupError);
+    check('bootstrap', true);
     report.graphics = await js('globalThis.vb6NativeGraphics');
     check('renderer has no Node require', await js('typeof require === "undefined"'));
     check('unreserved popup blocked', await js('window.open("about:blank", "unreserved") === null'));
