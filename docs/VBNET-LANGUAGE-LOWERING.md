@@ -141,11 +141,20 @@ local storage. No statements are hoisted outside the original expression, so
 loop tests, untaken branches and `On Error Resume Next` retain their boundaries.
 
 This adapter covers statically bound, fixed-arity Subs, Functions and property
-getters. Reordered event calls and ParamArray signatures require a separate
-adapter and remain blocking. Unknown late-bound signatures, setter-index/value
-reordering and every property-value/narrowing copy-back combination are not
-certified by this implementation. The source VM is a second execution path, not
+getters/setters. Reordered event calls and ParamArray signatures require a separate
+adapter and remain blocking. Unknown late-bound signatures and every property-value/narrowing copy-back
+combination are not certified by this implementation. The source VM is a second execution path, not
 a licensed Microsoft VB6 oracle.
+
+Indexed writes capture receiver, lexical index arguments and then the right-hand
+value through a typed `Sub` adapter. Ordinary CLR properties remain assignments
+inside that Sub; method-backed properties invoke the selected Let or Set method.
+A getter call is never used as an assignment location. Mutable index parameters
+retain real ByRef references, and getter/Let/Set permutations use distinct cache
+keys. The original source VM currently cannot execute named indexed writes, so
+setter fixtures use explicit .NET output goldens rather than claiming a source-VM
+differential pass for those operations.
+
 
 ## Binary and random file records
 
@@ -206,6 +215,12 @@ round trips. They do not prove every locale/code-page or legacy file combination
 receiver capture, omitted defaults, lexical side effects, aliases, parentheses,
 exceptions and loop/branch placement in both output styles. The original failing
 optional-Currency fixture remains part of the hosted gate.
+`migration-setter-order.test.mjs` and `migration-setter-order-dotnet.test.mjs`
+add ordinary native properties, write-only mutable indexes, independent Let/Set
+selection, aliased indexes, receiver/index/RHS ordering and index exceptions
+preventing RHS evaluation. The dedicated source-VM boundary test records its
+unsupported named-write reference instead of substituting a modified interpreter.
+
 
 `migration-file-order.test.mjs` and `migration-file-order-dotnet.test.mjs` check
 side-effectful handle/position/storage expressions, a throwing position, and

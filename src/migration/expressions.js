@@ -198,7 +198,7 @@ export function assignment(target,value,context,{objectSet=false,asReturn=false}
   const symbol=setter?.params.at(-1)||context.resolve(target);
   if(symbol?.control&&!objectSet){const member=controlDefault(symbol.type,context);if(member)return assignment({kind:'member',object:target,name:member},value,context,{objectSet});}
   const native=context.arrayPlan(symbol),style=context.options.codeStyle==='native';
-  let right=expression(value,context,{reference:objectSet,nativeArray:!!native}),left=accessor?'':expression(target,context,{assignment:true});
+  let right=expression(value,context,{reference:objectSet,nativeArray:!!native}),left='';
   const wholeArray=symbol?.bounds!==undefined&&symbol.bounds!==null;
   if(wholeArray){
     if(symbol.bounds.length)context.add('MIG_FIXED_ARRAY_ASSIGN','Whole fixed-array assignment requires a verified copy adapter.');
@@ -213,6 +213,21 @@ export function assignment(target,value,context,{objectSet=false,asReturn=false}
     if(!objectSet&&symbol&&['object','variant'].includes(key(symbol.type))&&(!style||valueNeedsCopy(value,context)))right=context.runtime('VbRuntime.CopyValue')+'('+right+')';
     if(symbol&&context.record(symbol.type)&&(!style||context.record(symbol.type).copy))right='CType('+context.runtime('VbRuntime.CopyValue')+'('+right+'), '+context.netType(symbol.type)+')';
   }
+  // Setters share the same lexical permutation plan as getters, but native
+  // properties remain assignments inside a Sub instead of getter-call lvalues.
+  const selectedSetter=plan?.[objectSet?'set':'let'];
+  if(selectedSetter&&!resultVariable&&!asReturn&&target.kind==='call'){
+    const boundSetter={...selectedSetter,owner:property.owner||context.module};
+    const call={kind:'call',callee,args:[...target.args,{kind:'named',name:selectedSetter.params.at(-1).name,expr:value}]};
+    validateCallSemantics(call,boundSetter,context);
+    const ordered=orderedCall(call,boundSetter,context,(arg,param)=>{
+      if(arg===value)return right;
+      if(key(param.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+expression(arg,context)+')':context.runtime('VbCurrency.FromObject')+'('+expression(arg,context)+')';
+      return expression(arg,context,{argument:true});
+    },(node,usage)=>expression(node,context,usage),{accessor:objectSet?'set':'let'});
+    if(ordered!==null)return ordered;
+  }
+  if(!accessor)left=expression(target,context,{assignment:true});
   if(accessor){
     const args=target.kind==='call'?target.args:[];
     validateCallSemantics({kind:'call',callee,args:[...args,value]},setter,context);

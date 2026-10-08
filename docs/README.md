@@ -46,6 +46,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Auto Layout designer](auto-layout-designer.md): opt-in panel, canvas interaction,
   shared solver and export boundaries.
 - [Detached browser windows](BROWSER-WINDOWS.md).
+- [UI rendering backends](RENDERING.md): settings, native islands, lifecycle,
+  performance measurement and strict acceptance; [rendering source attribution](RENDERING-SOURCES.md).
 - [IDE themes](IDE-THEMES.md), [application themes](APPLICATION-THEMES.md) and
   [matching icon packs](THEME-ICON-PACKS.md).
 - [Classic icons](ICON-AUDIT.md), [classic HTML rendering and attribution](CLASSIC-HTML-RENDERING.md)

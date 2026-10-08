@@ -1,0 +1,9 @@
+import {BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect} from './policy.js';
+import {PaintScene, parseColor} from './scene.js';
+import {TextAtlas} from './atlas.js';
+import {WebGPUPainter, UI_SHADER} from './webgpu.js';
+import {WebGLPainter} from './webgl2.js';
+import {CanvasPainter} from './canvas2d.js';
+import {UIRenderer, createPainter, retainRenderer, rendererForDocument} from './renderer.js';
+import {benchmarkRendering, timingSummary} from './benchmark.js';
+export {benchmarkRendering, timingSummary, BACKENDS, DEFAULT_RENDERING, normalizeRendering, renderingCandidates, physicalSize, snapRect, intersect, PaintScene, parseColor, TextAtlas, WebGPUPainter, UI_SHADER, WebGLPainter, CanvasPainter, UIRenderer, createPainter, retainRenderer, rendererForDocument};

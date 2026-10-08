@@ -12,8 +12,9 @@ if (sampleIds.some(id => typeof id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/
     new Set(sampleIds).size !== sampleIds.length) throw new Error('Invalid generated sample inventory');
 export const LAYOUT_GENERATED_ARTIFACTS = Object.freeze(['dist/auto-layout.js', 'packages/auto-layout/dist/auto-layout.js', 'dist/vb6-native.js', 'src/editor/diagnostics-payload.js', 'dist/studio.css']);
 export const WIN32_ARTIFACTS = Object.freeze(['dist/win32-browser.js','packages/win32-browser/dist/win32-browser.js']);
+export const RENDERING_ARTIFACTS = Object.freeze(['dist/vb6-rendering.js']);
 export const GENERATED_ARTIFACTS = Object.freeze([
-  ...IDE_ARTIFACTS, ...WIN32_ARTIFACTS, ...LAYOUT_GENERATED_ARTIFACTS, 'dist/vb6-controls.css', 'dist/vb6-runtime.js', 'src/exporter/runtime-payload.js',
+  ...IDE_ARTIFACTS, ...WIN32_ARTIFACTS, ...RENDERING_ARTIFACTS, ...LAYOUT_GENERATED_ARTIFACTS, 'dist/vb6-controls.css', 'dist/vb6-runtime.js', 'src/exporter/runtime-payload.js',
   'dist/OCX-Source-Control-Lab.html',
   ...sampleIds.map(id => `dist/examples/${id}.html`)
 ]);
