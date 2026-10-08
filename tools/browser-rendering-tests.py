@@ -853,6 +853,13 @@ with sync_playwright() as playwright:
           window.r=new VB6Rendering.UIRenderer(document,{backend,fallbacks:['html']});await r.ready;
           for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
         }''',backend)
+        # Keep the text-only measurement independent of pointer hit-test updates.
+        # Replacing a Text node under the default (0,0) pointer may fire a new
+        # boundary event after asynchronous GPU startup. Deliver real movement
+        # before the baseline; do not suppress input or alter cached styles.
+        # https://www.w3.org/TR/pointerevents3/#boundary-events-caused-by-layout-changes
+        page.mouse.move(1000, 700)
+        check(page.evaluate('document.elementFromPoint(1000,700)===document.documentElement'), 'Text-cache pointer is not over empty viewport space')
         # Cache identity is measured only after initial font/layout delivery.
         # Five RAFs alone need not drain deferred observer registration, notably
         # in the headless shell. The barrier never changes styles or references.
