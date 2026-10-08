@@ -31,7 +31,7 @@ export function webBrowserAgent(types, limits, nonce, logicalURL, silent) {
   }
   function encode(value, result = 'value') {
     if (value === undefined) return result === 'object' ? {nothing:true} : {empty: true};
-    if (value === null || result === 'object' && typeof value === 'undefined') return {nothing: true};
+    if (value === null) return {nothing: true};
     if (['string','number','boolean'].includes(typeof value)) {
       if (typeof value === 'string' && value.length > limits.message || typeof value === 'number' && !Number.isFinite(value)) throw fault('DOM result exceeds limits', 7);
       return value;
@@ -79,7 +79,7 @@ export function webBrowserAgent(types, limits, nonce, logicalURL, silent) {
     const anchor = event.target?.closest?.('a[href],area[href]');
     if (!anchor || anchor.hasAttribute('download')) return;
     event.preventDefault();
-    navigation(anchor.href, event.ctrlKey || event.metaKey || event.shiftKey ? '_blank' : anchor.target);
+    navigation(anchor.getAttribute('href').startsWith('#') ? logicalURL.split('#')[0]+anchor.getAttribute('href') : anchor.href, event.ctrlKey || event.metaKey || event.shiftKey ? '_blank' : anchor.target);
   }
   function submit(event) {
     // The browser handles genuine HTML form submission, including multipart
@@ -148,8 +148,8 @@ export function webBrowserAgent(types, limits, nonce, logicalURL, silent) {
       let value;
       if (name === 'tags') value = Array.from(target).filter(item => String(item.tagName).toLowerCase() === String(args[0]).toLowerCase());
       else if (name === 'namedItem' || typeof args[0] === 'string' && !/^\d+$/.test(args[0])) {
-        const matches = Array.from(target).filter(item => item.id === args[0] || item.name === args[0]);
-        value = args[1] === undefined ? matches[0] : matches[Number(args[1])];
+        const matches = Array.from(target).filter(item => item.id === args[0] || item.getAttribute?.('name') === args[0] || item.name === args[0]);
+        value = args[1] === undefined ? name === 'item' && matches.length > 1 ? matches : matches[0] : matches[Number(args[1])];
       } else value = target[Number(args[0])];
       return value === undefined ? {nothing:true} : encode(value,'object');
     }

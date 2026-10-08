@@ -33,7 +33,8 @@ export const WEB_DOM_TYPES = Object.freeze({
   location: [...props('Href Protocol Host Hostname Port Pathname Search Hash',true),property('Origin','origin'),method('Assign',['URL']),method('Replace',['URL']),method('Reload')],
   attribute: [...props('Name Specified'),property('Value','value',true),property('NodeValue','nodeValue',true)]
 });
-for (const members of Object.values(WEB_DOM_TYPES)) {
-  for (const m of members) { m.params.forEach(Object.freeze); Object.freeze(m.params); Object.freeze(m.modes); Object.freeze(m); }
+const longMembers=new Set('SelectedIndex TabIndex ScrollTop ScrollLeft NodeType OffsetWidth OffsetHeight OffsetLeft OffsetTop ClientWidth ClientHeight ScrollWidth ScrollHeight Width Height'.split(' '));
+for (const [kind,members] of Object.entries(WEB_DOM_TYPES)) {
+  for (const m of members) { if (kind==='collection'&&['Length','Count'].includes(m.name)||kind==='element'&&longMembers.has(m.name)) m.scalar='Long'; m.params.forEach(Object.freeze); Object.freeze(m.params); Object.freeze(m.modes); Object.freeze(m); }
   Object.freeze(members);
 }

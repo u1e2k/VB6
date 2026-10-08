@@ -1,5 +1,5 @@
 import {NOTHING,MISSING,Cell,unbox,truth} from '../runtime/values.js';
-import {WEB_BROWSER_DEFAULTS,WEB_BROWSER_METHODS,WEB_BROWSER_READONLY,WEB_BROWSER_LIMITS as limits,webBrowserEvent,webBrowserURL,webBrowserHTML,webBrowserFlags,WebBrowserError} from './webbrowser-contract.js';
+import {WEB_BROWSER_DEFAULTS,WEB_BROWSER_METHODS,WEB_BROWSER_READONLY,webBrowserEvent,webBrowserURL,webBrowserHTML,webBrowserFlags,WebBrowserError} from './webbrowser-contract.js';
 import {WebBrowserFrame} from './webbrowser-frame.js';
 import {WebBrowserHistory} from './webbrowser-history.js';
 
@@ -20,6 +20,7 @@ export class WebBrowserController {
     control.props={...WEB_BROWSER_DEFAULTS,...control.props};
     this.install();
     this.stopSubscription=control.vm?.on?.('stop',()=>this.dispose());
+    this.errorSubscription=control.vm?.on?.('error',()=>this.dispose());
     control.node.classList.add('vb-webbrowser');
     this.host=control.node.ownerDocument.createElement('div');
     Object.assign(this.host.style,{width:'100%',height:'100%',overflow:'hidden',background:'white'});
@@ -70,7 +71,7 @@ export class WebBrowserController {
   set(name,value){
     this.assertOpen();value=unbox(value);
     if(WEB_BROWSER_READONLY.includes(name)||name==='NavigationStatus')throw new WebBrowserError('Property is read-only: '+name,383);
-    if(name==='URL'){const url=webBrowserURL(value,this.base());this.control.props.URL=url;if(!this.control.design)this.navigate(url);return;}
+    if(name==='URL'){const url=this.address(value);this.control.props.URL=url;if(!this.control.design)this.navigate(url);return;}
     if(name==='DocumentText'){const html=webBrowserHTML(value);this.control.props.DocumentText=html;if(!this.control.design)this.navigateHTML(html);return;}
     if(name==='HomeURL'||name==='SearchURL'){this.control.props[name]=webBrowserURL(value,this.base());return;}
     if(name==='Zoom'){const zoom=Number(value);if(!Number.isFinite(zoom)||zoom<10||zoom>1000)throw new WebBrowserError('Zoom must be between 10 and 1000 percent',380);this.control.props.Zoom=zoom;this.refresh();return;}
@@ -79,9 +80,10 @@ export class WebBrowserController {
     this.control.props[name]=truth(value)?-1:0;
   }
   base(){return /^https?:/i.test(this.locationURL)?this.locationURL:this.control.node.ownerDocument.baseURI;}
+  address(url){return typeof url==='string'&&url.trim().startsWith('#')&&this.locationURL?webBrowserURL(this.locationURL.split('#')[0]+url.trim(),this.base()):webBrowserURL(url,this.base());}
   navigate(url,flags=0,target='',postData,headers){
     this.assertOpen();
-    const address=webBrowserURL(url,this.base()),bits=webBrowserFlags(flags??0);
+    const address=this.address(url),bits=webBrowserFlags(flags??0);
     target=target??'';
     if(typeof target!=='string'||target.length>255)throw new WebBrowserError('Invalid TargetFrameName',5);
     if(!['','_self','_top','_parent','_blank'].includes(target))unsupported('Named target frame navigation');
@@ -95,7 +97,7 @@ export class WebBrowserController {
     this.assertOpen();if(this.control.design)return;
     const sequence=++this.sequence;let accepted=false;
     this.job=Promise.resolve().then(async()=>{
-      const current=()=>!this.closed&&sequence===this.sequence;
+      const current=()=>!this.closed&&sequence===this.sequence&&!['error','stopped'].includes(this.control.vm?.state);
       if(!current())return;
       const args=await this.emit('BeforeNavigate2',[this.control,entry.url,options.flags||0,options.target||'',undefined,'',0],current);
       if(!current()||truth(args[6]))return;
@@ -151,7 +153,7 @@ export class WebBrowserController {
       this.notify('ProgressChange',[-1,-1],current);this.notify('DownloadComplete',[],current);
       this.notify('DocumentComplete',[this.control,this.locationURL],current);this.commands(current);
     }else if(data.event==='navigate'){
-      try{const url=webBrowserURL(data.url,this.base());if(!['','_self','_top','_parent','_blank'].includes(data.target||''))unsupported('Named target frame navigation');this.schedule({url,html:url.startsWith('about:blank')?'':null},{flags:64,target:data.target,replace:data.replace,newWindow:data.target==='_blank'});}catch(error){this.error(error,{url:String(data.url||''),keepDocument:true});}
+      try{const url=this.address(data.url);if(!['','_self','_top','_parent','_blank'].includes(data.target||''))unsupported('Named target frame navigation');this.schedule({url,html:url.startsWith('about:blank')?'':null},{flags:64,target:data.target,replace:data.replace,newWindow:data.target==='_blank'});}catch(error){this.error(error,{url:String(data.url||''),keepDocument:true});}
     }else if(data.event==='leaving'){
       this.document=NOTHING;this.navigationStatus='unobservable';this.notify('StatusTextChange',['The document navigated itself; its destination is not observable across browser origins.'],current);
     }else if(data.event==='error')this.error(data.error);
@@ -207,7 +209,7 @@ export class WebBrowserController {
         if(command===63){if(args[2]!==undefined)this.set('Zoom',args[2]);const output=args[3]?.ref;if(output?.set)return output.set(this.control.props.Zoom);return this.control.props.Zoom;}
         if([6,11,12,13,15,16,17].includes(command)){
           this.requireDocument();if(command===6&&option===2)unsupported('Silent printing');
-          return this.frame.request({op:'command',command,query:false});
+          return this.frame.request({op:'command',command,query:false}).then(value=>this.requireDocument().decode(value));
         }
         unsupported('OLE command '+command);break;
       }
@@ -225,5 +227,5 @@ export class WebBrowserController {
   }
   propertyName(value){if(typeof value!=='string'||!value.length||value.length>255)throw new WebBrowserError('Invalid browser property name',5);return value;}
   stop(){this.assertOpen();++this.sequence;if(!this.busy)return;++this.generation;this.frame?.stop();this.frame=null;this.document=NOTHING;this.busy=false;this.readyState=0;this.navigationStatus='stopped';this.notify('DownloadComplete');}
-  dispose(){if(this.closed)return;this.closed=true;++this.sequence;++this.generation;clearTimeout(this.initialTimer);this.stopSubscription?.();this.stopSubscription=null;this.frame?.close();this.frame=null;this.document=NOTHING;this.history.clear();this.properties.clear();}
+  dispose(){if(this.closed)return;this.closed=true;++this.sequence;++this.generation;clearTimeout(this.initialTimer);this.stopSubscription?.();this.stopSubscription=null;this.errorSubscription?.();this.errorSubscription=null;this.frame?.close();this.frame=null;this.document=NOTHING;this.history.clear();this.properties.clear();}
 }

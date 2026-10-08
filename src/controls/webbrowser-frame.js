@@ -9,7 +9,7 @@ export function webBrowserSource(html, nonce, url, silent = false) {
   // The agent is trusted source, but it is still an HTML raw-text script token.
   if (/<\/script/i.test(bootstrap)) throw new WebBrowserError('Unsafe browser bootstrap',5);
   const base = /^https?:/i.test(url) ? '<base href="'+url.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')+'">' : '';
-  return '<!doctype html><meta charset="utf-8">'+base+'<script>'+bootstrap+'</script>'+html.replace(/^\s*<!doctype[^>]*>/i,'');
+  return '<!doctype html><meta charset="utf-8">'+base+'<script>'+bootstrap+'<'+'/script>'+html.replace(/^\s*<!doctype[^>]*>/i,'');
 }
 
 /** One navigation, one isolated browsing context. No allow-same-origin, no

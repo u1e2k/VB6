@@ -1,5 +1,5 @@
 import {AutomationRegistry} from '../runtime/automation.js';
-import {NOTHING, MISSING, VBArray, unbox} from '../runtime/values.js';
+import {NOTHING, MISSING, VBArray, unbox, storageScalar} from '../runtime/values.js';
 import {WEB_DOM_TYPES} from './webbrowser-dom-contract.js';
 import {WEB_BROWSER_LIMITS as limits, WebBrowserError} from './webbrowser-contract.js';
 
@@ -50,6 +50,11 @@ export class WebBrowserDocument {
         if (!Array.isArray(values) || values.length > limits.objects) throw new WebBrowserError('Document enumeration limit',7);
         return values.map(value => this.decode(value));
       }} : {})
+    };
+    adapter.invokeScalar=async (name,mode,args) => {
+      const result=await adapter.invoke(name,mode,args);
+      const scalar=WEB_DOM_TYPES[type].find(member=>member.name.toLowerCase()===String(name).toLowerCase())?.scalar;
+      return mode===2&&scalar?{...result,value:storageScalar(result.value,scalar)}:result;
     };
     const object = this.sessions.at(-1).adopt(adapter);
     this.handles.set(object,id); this.objects.set(id,{object,type}); return object;
