@@ -88,13 +88,13 @@ void MacControl::initialize(){
     b.bezelStyle=NSBezelStyleRounded;b.target=delegate;b.action=@selector(action:);b.allowsMixedState=t=="CheckBox";widget=b;view=b;
     if(flag("default"))b.keyEquivalent=@"\r";else if(flag("cancel"))b.keyEquivalent=@"\033";
   }else if(t=="Label"||t=="TextBox"&&!flag("multiline")){
-    NSTextField*f=t=="TextBox"&&!property("passwordchar",Value::string(u"")).string().empty()?[NSSecureTextField new]:[NSTextField new];
+    NSTextField*f=t=="Label"?[NSTextField new]:nativeTextField(!property("passwordchar",Value::string(u"")).string().empty());
     f.editable=t!="Label"&&!flag("locked");f.selectable=t!="Label";f.bezeled=t!="Label";f.drawsBackground=t!="Label"||flag("backstyle");f.delegate=delegate;f.target=delegate;f.action=@selector(action:);widget=f;view=f;
   }else if(t=="TextBox"||t=="RichTextBox"){
     auto scroll=[NSScrollView new];auto editor=[[NSTextView alloc]initWithFrame:NSMakeRect(0,0,120,80)];editor.delegate=delegate;editor.richText=t=="RichTextBox";editor.importsGraphics=t=="RichTextBox";editor.editable=!flag("locked");editor.verticallyResizable=YES;editor.horizontallyResizable=(int(number("scrollbars",3))&1)!=0;
     editor.autoresizingMask=NSViewWidthSizable;editor.textContainer.widthTracksTextView=YES;scroll.documentView=editor;scroll.hasVerticalScroller=(int(number("scrollbars",3))&2)!=0;scroll.hasHorizontalScroller=(int(number("scrollbars",3))&1)!=0;scroll.borderType=NSBezelBorder;widget=editor;view=scroll;
   }else if(t=="ComboBox"||t=="DriveListBox"){
-    auto combo=[NSComboBox new];combo.editable=number("style",0)!=2;combo.delegate=delegate;combo.target=delegate;combo.action=@selector(action:);widget=combo;view=combo;
+    auto combo=nativeComboBox();combo.editable=number("style",0)!=2;combo.delegate=delegate;combo.target=delegate;combo.action=@selector(action:);widget=combo;view=combo;
   }else if(t=="Frame"){
     auto box=[NSBox new];box.boxType=NSBoxPrimary;box.contentView=[VB6Canvas new];widget=box;view=box;
   }else if(t=="Image"){

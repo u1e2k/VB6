@@ -50,6 +50,9 @@ void checkNativeEditing(Runtime& rt,MacHost& host,const std::shared_ptr<Instance
   edit->set(rt,"text",Value::string(u"before"));select(rt,edit,2,2);
   auto window=host.form(form)->window;[window makeKeyAndOrderFront:nil];
   edit->invoke(rt,"setfocus",{});auto field=(NSTextField*)edit->widget;auto editor=(NSTextView*)field.currentEditor;
+  if(!editor||editor.selectedRange.location!=2||editor.selectedRange.length!=2)
+    std::cerr<<"FIELD_EDITOR_SELECTION editor="<<(editor?1:0)<<" pending="<<edit->editSelectionPending
+      <<" location="<<(editor?editor.selectedRange.location:0)<<" length="<<(editor?editor.selectedRange.length:0)<<"\n";
   assert(editor&&editor.selectedRange.location==2&&editor.selectedRange.length==2);
   editor.string=@"live \u03a9";editor.selectedRange=NSMakeRange(5,1);
   assert(edit->get(rt,"text").string()==u"live \u03a9");
@@ -100,6 +103,16 @@ void checkNativeEditing(Runtime& rt,MacHost& host,const std::shared_ptr<Instance
   listClicks=0;combo->set(rt,"listindex",Value::integer(0));assert(listClicks==1);
   combo->set(rt,"listindex",Value::integer(0));assert(listClicks==1);
   assert(combo->get(rt,"text").string()==u"New");
+  // A shared editor switches owners even when neither field changes text.
+  assert([window makeFirstResponder:nil]);
+  select(rt,edit,1,2);combo->set(rt,"text",Value::string(u"second"));select(rt,combo,2,3);
+  edit->invoke(rt,"setfocus",{});
+  assert(integer(rt,edit,"selstart")==1&&integer(rt,edit,"sellength")==2);
+  combo->invoke(rt,"setfocus",{});
+  assert(integer(rt,combo,"selstart")==2&&integer(rt,combo,"sellength")==3);
+  edit->invoke(rt,"setfocus",{});
+  assert(integer(rt,edit,"selstart")==1&&integer(rt,edit,"sellength")==2);
+  assert([window makeFirstResponder:nil]);
   form->module->procedures.erase("c2_change");form->module->procedures.erase("c11_click");
   host.check();std::cout<<"APPKIT_EDIT_SELECTION_LIST_OK\n";
 }

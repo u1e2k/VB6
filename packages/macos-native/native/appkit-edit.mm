@@ -47,7 +47,9 @@ NSRange nativeEditSelection(MacControl& c) {
 void nativeEditSelect(MacControl& c, NSRange range) {
   range = bounded(range, nativeEditText(c).size());
   remember(c, range);
-  if (auto e = editor(c)) {
+  auto e = editor(c);
+  c.editSelectionPending = !e;
+  if (e) {
     e.selectedRange = range;
     if ([e isKindOfClass:NSTextView.class]) [(NSTextView*)e scrollRangeToVisible:range];
   }
@@ -55,7 +57,10 @@ void nativeEditSelect(MacControl& c, NSRange range) {
 void nativeEditCapture(MacControl& c, NSText* source) {
   if (!isNativeEdit(c) || c.disposed) return;
   if (!source) source = editor(c);
-  if (source) remember(c, bounded(source.selectedRange, source.string.length));
+  if (source) {
+    remember(c, bounded(source.selectedRange, source.string.length));
+    c.editSelectionPending = true;
+  }
 }
 void nativeEditSetText(MacControl& c, const Text& value) {
   if (value.size() > size_t(INT32_MAX)) fail(7, "Native text exceeds VB Long indexing");

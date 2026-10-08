@@ -2,6 +2,9 @@
 #pragma once
 #include "appkit.hpp"
 namespace vb6 {
+// Native cell hooks preserve explicit selection across shared-editor attachment.
+NSTextField* nativeTextField(bool secure);
+NSComboBox* nativeComboBox();
 bool isNativeEdit(const MacControl&) noexcept;
 Text nativeEditText(MacControl&);
 NSRange nativeEditSelection(MacControl&);
