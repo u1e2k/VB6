@@ -1,8 +1,11 @@
+import {STREAM_CONSTANTS} from '../automation/constants.js';
+import {normalizeServiceDefinitions} from './service-definitions.js';
 import {VBError} from '../language/lexer.js';
 import {VBArray, VBCurrency, VBDecimal} from '../runtime/values.js';
 
 export const DATA_LIMITS = Object.freeze({rows:100000, cells:1000000, bytes:20*1024*1024, pages:100});
 export const DATA_CONSTANTS = Object.freeze({
+  ...STREAM_CONSTANTS,
   adStateClosed:0, adStateOpen:1, adStateConnecting:2, adStateExecuting:4,
   adOpenForwardOnly:0, adOpenKeyset:1, adOpenDynamic:2, adOpenStatic:3,
   adLockReadOnly:1, adLockPessimistic:2, adLockOptimistic:3, adLockBatchOptimistic:4,
@@ -131,7 +134,7 @@ export function normalizeDataSources(value){
     if(connection.fields){assertData(Array.isArray(connection.fields)&&connection.fields.length<=1024,'Invalid field mapping');const fields=new Set();for(const f of connection.fields){assertData(typeof f.name==='string'&&f.name&&!fields.has(f.name.toLowerCase()),'Duplicate or empty field mapping');fields.add(f.name.toLowerCase());pathValue({},f.path||f.name);}}
     if(connection.timeout!=null)assertData(Number.isFinite(Number(connection.timeout))&&Number(connection.timeout)>0&&Number(connection.timeout)<=600,'Invalid connection timeout');
   }
-  return assertPublicConfiguration(result);
+  return normalizeServiceDefinitions(assertPublicConfiguration(result));
 }
 export function safeHttpURL(value,base){
   let url;try{url=new URL(value,base);}catch{throw dataError('Invalid HTTP data-source URL');}

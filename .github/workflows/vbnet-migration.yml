@@ -1,15 +1,24 @@
-name: VB.NET migration
+name: VB.NET migration conformance
 on:
   pull_request:
     paths:
-      - 'packages/vbnet-migration/**'
-      - 'tests/vbnet-migration*.test.mjs'
-      - 'tests/fixtures/vbnet-migration/**'
-      - 'tools/*vbnet*'
+      - 'src/language/**'
+      - 'src/project/**'
+      - 'src/migration/**'
       - 'src/ide/vbnet-export.js'
+      - 'src/mcp/studio-entry.js'
+      - 'packages/vbnet-*/**'
+      - 'tests/migration-*'
+      - 'tools/*vbnet*'
+      - 'tools/browser-migration-tests.py'
       - '.github/workflows/vbnet-migration.yml'
   push:
     branches: [main]
+    paths:
+      - 'src/migration/**'
+      - 'packages/vbnet-*/**'
+      - 'tests/migration-*'
+      - '.github/workflows/vbnet-migration.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,32 +26,13 @@ concurrency:
   group: vbnet-migration-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 jobs:
-  runtime:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - name: Compile and execute generated VB.NET runtime fixtures
-        run: node tools/test-vbnet-runtime.mjs
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: vbnet-runtime
-          path: artifacts/vbnet-migration/runtime
-          retention-days: 7
-  converted-applications:
+  conformance:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,16 +41,29 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Compile and execute converted portable language/class fixtures
-        run: node tools/test-vbnet-dotnet.mjs
-      - name: Compile and execute converted WinForms fixture
-        if: runner.os == 'Windows'
-        run: node tools/test-vbnet-dotnet.mjs --windows
+      - run: npm run build
+      - name: Require real .NET compilation and execution
+        run: npm run test:migration
+        env:
+          VB6_REQUIRE_DOTNET: '1'
+      - run: npm run pack:vbnet-migration
+      - run: node tools/test-vbnet-package.mjs
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Linux'
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Linux'
+        run: python -m pip install playwright==1.57.0
+      - if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium
+      - name: Verify actual HTTP IDE export and downloads
+        if: runner.os == 'Linux'
+        run: npm run test:migration:browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vbnet-converted-${{ runner.os }}
+          name: vbnet-migration-${{ matrix.os }}
           path: |
-            artifacts/vbnet-migration/language
-            artifacts/vbnet-migration/windows
+            reports/vbnet-migration
+            artifacts/vbnet-migration
           retention-days: 7

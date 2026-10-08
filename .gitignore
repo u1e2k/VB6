@@ -46,3 +46,23 @@ server-profiles.local.json
 
 # Source-derived application styles, verified by the same exact fingerprint inventory.
 /dist/vb6-controls.css
+
+# Reproducible VB.NET migration package outputs
+packages/vbnet-migration/lib/
+packages/vbnet-migration/dist/
+packages/vbnet-runtime/bin/
+packages/vbnet-runtime/obj/
+packages/vbnet-runtime-windows/bin/
+packages/vbnet-runtime-windows/obj/
+
+/artifacts/vbnet-migration/
+
+# Authored .vb runtime sources are embedded deterministically during build.
+/src/migration/runtime-sources.js
+
+# Standalone renderer SDK: generated and checked by the exact artifact manifest.
+/dist/vb6-rendering.js
+
+# Reproducible Apple Silicon compiler bundle and native execution outputs.
+/dist/vb6-macos.js
+/artifacts/macos-native/

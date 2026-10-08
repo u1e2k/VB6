@@ -195,7 +195,7 @@ export class ConnectedRecordset extends ProviderRecordset {
     const rs=new ConnectedRecordset(this.context);rs._family.members.delete(rs);rs._family=this._family;this._family.members.add(rs);
     rs.rows=this.rows;rs.columns=this.columns;rs._bookmarks=this._bookmarks;rs._nextBookmark=this._family.nextBookmark;
     rs._state=1;rs._lock=lock===1?1:this.LockType;rs._sort=this._sort;rs._sortSpecs=this._sortSpecs.slice();
-    rs._writer=this._writer;rs._resync=this._resync;rs.Source=this.Source;rs._options=this._options;rs._parameters=this._parameters;
+    rs._writer=this._writer;rs._resync=this._resync;rs.Source=this.Source;rs._options=this._options;rs._parameters=this._parameters;rs._requestOptions=structuredClone(this._requestOptions||{});
     rs._activeConnection=this.ActiveConnection;rs._boundConnection=this._boundConnection;rs.ActiveConnection?.recordsets.add(rs);
     rs._pageSize=this.PageSize;return rs;
   }

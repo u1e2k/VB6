@@ -40,13 +40,13 @@ export class ADOConnection {
       }catch(error){await this.adapter?.close?.();this.adapter=null;this._state=0;throw error;}
     });
   }
-  async query(text,parameters=[],options=1,timeout=this.CommandTimeout,parameterStyle='native'){
+  async query(text,parameters=[],options=1,timeout=this.CommandTimeout,parameterStyle='native',requestOptions={}){
     return this.guard(async()=>{
       assertData(this.State===1,'Connection is closed',3709);assertData(Number.isFinite(timeout)&&timeout>=1&&timeout<=600,'Invalid command timeout',5);this.adapter.timeout=timeout;
       if(Number(options)===2){assertData(this.adapter.table,'This provider does not support table commands',3251);return this.adapter.table(String(text));}
       assertData([1,128,129].includes(Number(options)),'Only text/table commands are supported by this provider',3251);
       assertData(['native','odbc'].includes(parameterStyle),'Invalid parameter style',5);
-      return parameterStyle==='odbc'&&this.adapter.executePositional?this.adapter.executePositional(String(text??''),parameters):this.adapter.execute(String(text??''),parameters);
+      return parameterStyle==='odbc'&&this.adapter.executePositional?this.adapter.executePositional(String(text??''),parameters):this.adapter.execute(String(text??''),parameters,requestOptions);
     });
   }
   async execute(text,affected,options=1){
@@ -92,8 +92,8 @@ export class ADOCommand {
     const values=http?Object.fromEntries(typed.map((value,i)=>[this.Parameters.items[i]?.Name||String(i),this.Parameters.items[i]?.Type===11&&value!=null?Boolean(value):value])):typed;
     const timeout=this._timeoutExplicit?this.CommandTimeout:cn.CommandTimeout;
     try{
-      const result=await cn.query(this.CommandText,values,options,timeout);affected?.ref?.set(Number(result.rowsAffected||0));
-      const rs=target||new ConnectedRecordset(this.context);rs.ActiveConnection=cn;rs.Source=this.CommandText;rs._options=Number(options);rs._parameters=values;rs._ownedConnection=owned;rs.RowsAffected=Number(result.rowsAffected||0);
+      const result=await cn.query(this.CommandText,values,options,timeout,'native',this._requestOptions);affected?.ref?.set(Number(result.rowsAffected||0));
+      const rs=target||new ConnectedRecordset(this.context);rs.ActiveConnection=cn;rs.Source=this.CommandText;rs._options=Number(options);rs._parameters=values;rs._requestOptions=structuredClone(this._requestOptions||{});rs._ownedConnection=owned;rs.RowsAffected=Number(result.rowsAffected||0);
       if(result.columns?.length){rs.load(result,1);cn.recordsets.add(rs);}else if(owned)await cn.Close();
       return rs;
     }catch(error){if(owned)await cn.Close();throw error;}
