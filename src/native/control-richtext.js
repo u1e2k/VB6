@@ -43,6 +43,7 @@ export const nativeRichTextMethods={
     x.push(this.controlHandleRef(object)).call(R+(property==='selrtf'?'set-selection':'set'));return true;
   },
   nativeRichTextMethod(object,method,args){
+    if(this.nativeRichFormatMethod(object,method,args))return true;
     if(object.model?.type!=='RichTextBox'||!['loadfile','savefile'].includes(method))return false;
     if(args.length<1||args.length>2)this.fail(method+' expects a path and optional file type (0=RTF, 1=text)');
     const known=args[1]?foldNativeInteger(args[1],node=>this.nativeConstant(node))?.value:undefined;if(known!==undefined&&known!==null&&![0,1].includes(known))this.fail('RichTextBox file type must be 0 (RTF) or 1 (text)');
