@@ -1,3 +1,4 @@
+import {renderingEnvironment} from './diagnostics.js';
 import {PaintScene} from './scene.js';
 import {createPainter} from './renderer.js';
 import {deadline} from './device.js';
@@ -104,11 +105,11 @@ export async function benchmarkRendering(document, {frames = 30, quads = 10000, 
       // Driver AbortError means this backend failed, not that the user
       // cancelled. A real cancellation wins even over a different driver error.
       abort();
-      results.push({backend, available:false, reason:error.message || String(error)});
+      results.push({backend, available:false, reason:error.message || String(error), ...(typeof error.code === 'string' ? {code:error.code} : {}), ...(error.attempts?.length ? {attempts:error.attempts} : {})});
     } finally { timer?.dispose(); painter?.dispose(); canvas.width=canvas.height=1; }
   }
   abort();
-  return {schema:1, frames, quads, width:512, height:512, dpr:1, userAgent:view.navigator.userAgent, results,
+  return {schema:1, environment:renderingEnvironment(view), frames, quads, width:512, height:512, dpr:1, userAgent:view.navigator.userAgent, results,
     claims:{physicalHardwareCertified:false, nativeVB6PixelParityCertified:false, wholeIDEPerformanceCompared:false},
     note:'CPU submission and optional GPU pass timestamps for sealed primitives only. No presentation/FPS, input latency, power or native HTML compositor comparison. Adapter may be software. Timestamp values may be quantized.'};
 }

@@ -11,6 +11,7 @@ export function installStudioRendering(ide) {
     const policy = normalizeRendering(value); writeRendering(storage, policy);
     return Promise.all([main.renderer.setOptions(policy), ...[...children.values()].map(session => session.renderer.setOptions(policy))]);
   };
+  ide.retryRendering = () => Promise.all([main.renderer.retry(), ...[...children.values()].map(session => session.renderer.retry())]);
   // Install into the existing detach lifecycle, without creating any popups or
   // changing MDI mode, ownership, event dispatch or existing window cleanup.
   const host = ide.browserWindows;

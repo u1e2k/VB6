@@ -1,3 +1,4 @@
+import {createRenderingStatus} from './settings-status.js';
 import {el} from '../core/core.js';
 import {normalizeRendering} from './policy.js';
 import {benchmarkRendering} from './benchmark.js';
@@ -14,7 +15,7 @@ export function createRenderingOptions(ide) {
   const text = select('Text rendering', [['native', 'Native text (maximum font fidelity / IME)'], ['gpu', 'GPU atlas for eligible text (experimental)']], initial.text);
   const snap = el('input', {type: 'checkbox', checked: initial.pixelSnap, 'aria-label': 'Snap graphics to device pixels'});
   const exported = el('input', {type: 'checkbox', checked: false, 'aria-label': 'Use these settings in exported applications'});
-  const status = ide.rendering?.getStats();
+  const status = createRenderingStatus(ide, names);
   const node = el('div', {},
     el('fieldset', {}, el('legend', {}, 'Rendering'),
       el('div', {class: 'dialog-grid'}, el('label', {}, 'Preferred backend:'), backend,
@@ -23,10 +24,7 @@ export function createRenderingOptions(ide) {
       el('label', {class: 'option-check'}, snap, 'Snap graphics to device pixels'),
       el('label', {class: 'option-check'}, exported, 'Use these settings in exported applications')),
     el('p', {class: 'tool-note'}, 'HTML / CSS is always the final safety fallback. GPU mode paints classic UI geometry; native inputs, code editing, SVG icons and unsupported effects remain browser-rendered. Text-atlas mode is experimental. No screenshot rasterization is used.'),
-    el('fieldset', {}, el('legend', {}, 'Current renderer'),
-      el('p', {'data-renderer-status': ''}, status ? 'Requested: ' + names[status.requested] + '. Active: ' + names[status.active] + '.' : 'Renderer is initializing.'),
-      el('p', {class: 'tool-note'}, status?.attempts.map(attempt => attempt.backend + ': ' + attempt.reason).join(' • ') || 'Native-resolution device pixels; redraws are scheduled only after changes.'),
-      el('p', {class: 'tool-note'}, 'Performance counters measure CPU scene building and submission, not GPU execution time. A GPU API being available does not prove hardware acceleration.')));
+    status.node);
   const output = el('pre', {class:'tool-note', 'aria-live':'polite', style:'white-space:pre-wrap;max-height:150px;overflow:auto'}, 'Measure this browser and adapter without changing the project or renderer preference.');
   const measure = el('button', {type:'button'}, 'Measure Rendering');
   const cancel = el('button', {type:'button', disabled:true}, 'Cancel Measurement');
@@ -52,7 +50,7 @@ export function createRenderingOptions(ide) {
     view.setTimeout(()=>view.URL.revokeObjectURL(url),0);
   });
   node.append(el('fieldset',{},el('legend',{},'Local measurement'),measure,cancel,save,output));
-  return {node, apply() {
+  return {node, dispose() { status.dispose(); controller?.abort(); }, apply() {
     const policy = normalizeRendering({backend: backend.value, fallbacks: fallbacks.map(input => input.value), text: text.value, pixelSnap: snap.checked});
     if (exported.checked) ide.project.settings.rendering = policy;
     if (JSON.stringify(policy) !== JSON.stringify(initial)) ide.setRenderingPolicy?.(policy);

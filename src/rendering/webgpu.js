@@ -2,6 +2,9 @@ import {acquireDevice, deadline, subscribeDeviceLoss} from './device.js';
 import {physicalSize} from './policy.js';
 import {PaintScene} from './scene.js';
 import {encodeInstances, canReuseInstances, rememberInstances, prepareBatches} from './instances.js';
+// Clip/mode are constant for all vertices of an instance. Either provoking
+// vertex therefore preserves identical pixels and supports Compatibility mode.
+// https://gpuweb.github.io/gpuweb/wgsl/#interpolation
 export const UI_SHADER = `
 struct Screen { size: vec2f, scale: vec2f };
 @group(0) @binding(0) var<uniform> screen: Screen;
@@ -10,8 +13,8 @@ struct Output {
  @builtin(position) position: vec4f,
  @location(0) uv: vec2f,
  @location(1) color: vec4f,
- @location(2) @interpolate(flat) clip: vec4f,
- @location(3) @interpolate(flat) mode: f32
+ @location(2) @interpolate(flat, either) clip: vec4f,
+ @location(3) @interpolate(flat, either) mode: f32
 };
 @vertex fn vs(@builtin(vertex_index) vertex: u32,
  @location(0) rect: vec4f, @location(1) clip: vec4f,
@@ -42,7 +45,12 @@ export class WebGPUPainter {
   static async create(canvas, {onLost = () => {}, timeout = 3000} = {}) {
     const painter = new WebGPUPainter(canvas, onLost);
     try { await deadline(painter.initialize(timeout), timeout * 2); await painter.verifyOutput(timeout); return painter; }
-    catch (error) { painter.dispose(); throw error; }
+    catch (error) {
+      painter.dispose();
+      // GPUValidationError is a WebIDL GPUError, not a JavaScript Error. Keep
+      // its message across promise consumers (including browser automation).
+      throw error instanceof Error ? error : new Error(error?.message || String(error), {cause: error});
+    }
   }
   constructor(canvas, onLost) {
     this.canvas = canvas; this.view = canvas.ownerDocument.defaultView; this.onLost = onLost; this.name = 'webgpu'; this.disposed = false;

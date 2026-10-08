@@ -1,3 +1,4 @@
+import {renderingEnvironment} from './diagnostics.js';
 import {normalizeRendering, renderingCandidates} from './policy.js';
 import {CanvasPainter} from './canvas2d.js';
 import {WebGPUPainter} from './webgpu.js';
@@ -103,6 +104,8 @@ export class UIRenderer {
     canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;margin:0;padding:0;border:0;pointer-events:none;z-index:2147483000;visibility:hidden;contain:strict';
     this.document.documentElement.append(canvas); return canvas;
   }
+  /** Re-probe the saved policy, including a previously failed preferred GPU. */
+  retry() { this.ready = this.setOptions(this.policy, {force: true}); return this.ready; }
   async setOptions(value, {force = false} = {}) {
     if (this.disposed) return this.getStats();
     const next = normalizeRendering(value), old = this.policy;
@@ -121,14 +124,14 @@ export class UIRenderer {
     }
     const generation = ++this.generation; this.cancelFrame(); this.releaseDriver(); this.attempts = [];
     const candidates = this.forcedColors.matches ? ['html'] : renderingCandidates(next);
-    this.candidates = candidates; this.candidateIndex = -1;
+    this.candidates = candidates; this.candidateIndex = -1; this.initializing = true; this.publish();
     return this.activate(candidates, 0, generation);
   }
   async activate(candidates, start, generation) {
     for (let index = start; index < candidates.length; index++) {
       if (this.disposed || generation !== this.generation) return this.getStats();
       const name = candidates[index]; this.candidateIndex = index;
-      if (name === 'html') { this.backend = 'html'; this.publish(); return this.getStats(); }
+      if (name === 'html') { this.backend = 'html'; this.initializing = false; this.publish(); return this.getStats(); }
       const canvas = this.canvasForBackend(); let painter;
       try {
         painter = await this.factory(name, canvas, {onLost: reason => {
@@ -139,7 +142,7 @@ export class UIRenderer {
         this.observer.observe(this.document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true, characterDataOldValue: true});
         this.releaseStyleActivity = subscribeStyleActivity(this.view, () => { this.stylesDirty = true; this.invalidate(); });
         this.renderNow();
-        if (this.driver === painter) this.publish();
+        if (this.driver === painter) { this.initializing = false; this.publish(); }
         return this.getStats();
       } catch (error) {
         painter?.dispose(); canvas.remove();
@@ -149,15 +152,15 @@ export class UIRenderer {
         this.cancelFrame(); this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer.disconnect(); this.disconnectResizeTargets();
         this.observedElements.clear(); this.pointerTargets?.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false;
         this.driver = null; this.canvas = null; this.backend = 'html';
-        this.attempts.push({backend: name, reason: error.message || String(error)});
+        this.attempts.push({backend: name, reason: error.message || String(error), ...(typeof error.code === 'string' ? {code: error.code} : {}), ...(error.attempts?.length ? {details: error.attempts} : {})});
       }
     }
-    this.backend = 'html'; this.publish(); return this.getStats();
+    this.backend = 'html'; this.initializing = false; this.publish(); return this.getStats();
   }
   fallback(reason) {
     if (this.disposed) return;
     this.attempts.push({backend: this.backend, reason}); this.cancelFrame(); this.releaseDriver();
-    const generation = ++this.generation;
+    const generation = ++this.generation; this.initializing = true; this.publish();
     this.ready = this.activate(this.candidates || ['html'], this.candidateIndex + 1, generation);
   }
   /** Explicit integration hook for pre-captured native methods or custom paint. */
@@ -231,7 +234,7 @@ export class UIRenderer {
   }
   getStats() {
     const percentile = (array, quantile) => { if (!array.length) return 0; const sorted = [...array].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))]; };
-    return {styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: this.attempts.map(a => ({...a})), adapter: this.driver?.adapterInfo ? {...this.driver.adapterInfo} : null,
+    return {initializing: !!this.initializing, environment: renderingEnvironment(this.view), styleObservation: this.releaseStyleActivity?.capabilities || null, requested: this.policy.backend, active: this.backend, text: this.policy.text, forcedColors: this.forcedColors?.matches || false, attempts: JSON.parse(JSON.stringify(this.attempts)), adapter: this.driver?.adapterInfo ? JSON.parse(JSON.stringify(this.driver.adapterInfo)) : null,
       frames: this.metrics.frames, redundantPointerOvers: this.metrics.redundantPointerOvers || 0, textStyleReuses: this.metrics.textStyleReuses || 0, sceneBuilds: this.metrics.sceneBuilds, unchangedFrames: this.metrics.unchangedFrames, invalidations: this.metrics.invalidations, buildP50Ms: percentile(this.metrics.builds, .5), buildP95Ms: percentile(this.metrics.builds, .95), submitCpuP50Ms: percentile(this.metrics.submissions, .5), submitCpuP95Ms: percentile(this.metrics.submissions, .95), last: this.metrics.last ? JSON.parse(JSON.stringify(this.metrics.last)) : null, driver: this.driver ? {...this.driver.stats} : null};
   }
   releaseDriver() { this.releaseStyleActivity?.(); this.releaseStyleActivity = null; this.observer?.disconnect(); this.disconnectResizeTargets(); this.observedElements.clear(); this.pointerTargets?.clear(); this.retained.clear(); this.adapter?.clear?.(); this.atlas?.reset?.(); this.animating = false; this.stylesDirty = true; this.driver?.dispose(); this.driver = null; this.canvas?.remove(); this.canvas = null; this.backend = 'html'; }
