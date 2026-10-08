@@ -8,6 +8,12 @@ export function optionalOverloads(procedure, context) {
   return !context.decimalCurrency && !!procedure?.params?.some(p => p.optional && key(p.type) === 'currency');
 }
 
+/** Standard modules overload implicitly; the explicit Overloads modifier is
+ * rejected there (BC36917). Classes and companion interfaces retain it. */
+export function optionalOverloadModifier(procedure, context, contract = false) {
+  return optionalOverloads(procedure, context) && (contract || context.module.kind !== 'module') ? 'Overloads ' : '';
+}
+
 export function declarationParameters(procedure, context) {
   return optionalOverloads(procedure, context)
     ? procedure.params.map(p => p.optional ? {...p, optional:false} : p)
@@ -78,7 +84,7 @@ export function emitOptionalOverloads(writer, procedure, context, {name=procedur
   const returns = procedure.kind === 'function' || procedure.accessor === 'get';
   for (let length = procedure.params.length - 1; length >= first; length--) {
     const accepted = procedure.params.slice(0, length);
-    const header = (contract ? '' : scope) + 'Overloads ' + (returns ? 'Function ' : 'Sub ') + identifier(name) + '(' +
+    const header = (contract ? '' : scope) + optionalOverloadModifier(procedure, context, contract) + (returns ? 'Function ' : 'Sub ') + identifier(name) + '(' +
       accepted.map(p => parameter({...p, optional:false}, context)).join(', ') + ')' +
       (returns ? ' As ' + context.netType(procedure.returnType) : '') + (contract ? '' : implementation);
     if (contract) { writer.line(header, context); continue; }

@@ -73,18 +73,22 @@ Public Function Price(Optional ByVal amount As Currency = 1.2345@) As Currency
 End Function
 ```
 
-Its preserving VB.NET representation has the following shape:
+Its preserving VB.NET representation in a standard module has the following shape:
 
 ```vb
-Public Overloads Function Price(ByVal amount As VbCurrency) As VbCurrency
+Public Function Price(ByVal amount As VbCurrency) As VbCurrency
     Return amount
 End Function
 
-Public Overloads Function Price() As VbCurrency
+Public Function Price() As VbCurrency
     Dim __vbDefault_amount As VbCurrency = VbCurrency.FromDecimal(1.2345D)
     Return Price(__vbDefault_amount)
 End Function
 ```
+
+Standard modules overload implicitly, so their declarations omit the `Overloads`
+modifier (which would cause compiler error BC36917). Class and interface
+declarations retain that modifier consistently across the overload set.
 
 Supplied matching ByRef arguments keep their original storage. Every omitted
 ByRef default gets fresh local storage in a forwarding overload. Calls omitting

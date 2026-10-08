@@ -1,4 +1,4 @@
-import {optionalOverloads, declarationParameters, emitOptionalOverloads} from './optional-parameters.js';
+import {optionalOverloadModifier, declarationParameters, emitOptionalOverloads} from './optional-parameters.js';
 import {emitFileAdapters} from './file-records.js';
 import {propertyPlan, accessorName} from './property-plan.js';
 import {canReturnDirectly} from './output-plan.js';
@@ -84,7 +84,7 @@ function emitProperty(writer,group,state,module,{contract=false}={}) {
       const scope=contract?'':accessor.scope==='private'?'Private ':accessor.scope==='friend'?'Friend ':'Public ';
       const name=accessorName(accessor.name,accessor.accessor),reader=accessor.accessor==='get';
       const body=createContext(state,module,accessor);
-      const header=scope+(optionalOverloads(accessor,body)?'Overloads ':'')+(reader?'Function ':'Sub ')+identifier(name)+'('+declarationParameters(accessor,body).map(p=>parameter(p,body)).join(', ')+')'+(reader?' As '+body.netType(accessor.returnType):'')+(contract?'':implementation(accessor,body,name));
+      const header=scope+optionalOverloadModifier(accessor,body,contract)+(reader?'Function ':'Sub ')+identifier(name)+'('+declarationParameters(accessor,body).map(p=>parameter(p,body)).join(', ')+')'+(reader?' As '+body.netType(accessor.returnType):'')+(contract?'':implementation(accessor,body,name));
       if(contract)writer.line(header,body);
       else{writer.open(header,body);procedureBody(writer,body);writer.close(reader?'End Function':'End Sub');writer.line();}
       emitOptionalOverloads(writer,accessor,body,{name,contract,scope,implementation:contract?'':implementation(accessor,body,name),parameter});
@@ -141,7 +141,7 @@ export function emitModule(state,module,path) {
     writer.open('Public Interface '+identifier('I'+module.name));
     for(const decl of module.declarations.filter(d=>d.scope==='public'&&!d.constant))writer.line('Property '+identifier(decl.name)+' As '+declarationType(decl,context));
     for(const proc of publicMembers(module).filter(p=>p.kind!=='property')){
-      writer.line((optionalOverloads(proc,context)?'Overloads ':'')+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,context).map(p=>parameter(p,context)).join(', ')+')'+(proc.kind==='function'?' As '+context.netType(proc.returnType):''));
+      writer.line(optionalOverloadModifier(proc,context,true)+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,context).map(p=>parameter(p,context)).join(', ')+')'+(proc.kind==='function'?' As '+context.netType(proc.returnType):''));
       emitOptionalOverloads(writer,proc,context,{contract:true,parameter});
     }
     for(const group of propertyGroups(module).values())if(group[0].scope==='public')emitProperty(writer,group,state,module,{contract:true});
@@ -167,7 +167,7 @@ export function emitModule(state,module,path) {
     if(constructor)header='Public Sub New()';
     else if(dispose){c.add('MIG_DETERMINISTIC_LIFETIME','Class_Terminate is emitted as IDisposable.Dispose; COM reference-counted destruction requires an explicit ownership migration.');header='Public Sub Dispose() Implements Global.System.IDisposable.Dispose';}
     else{
-      header=(proc.scope==='public'?'Public ':proc.scope==='friend'?'Friend ':'Private ')+(optionalOverloads(proc,c)?'Overloads ':'')+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,c).map(p=>parameter(p,c)).join(', ')+')'+(proc.kind==='function'?' As '+c.netType(proc.returnType):'')+implementation(proc,c);
+      header=(proc.scope==='public'?'Public ':proc.scope==='friend'?'Friend ':'Private ')+optionalOverloadModifier(proc,c)+(proc.kind==='function'?'Function ':'Sub ')+identifier(proc.name)+'('+declarationParameters(proc,c).map(p=>parameter(p,c)).join(', ')+')'+(proc.kind==='function'?' As '+c.netType(proc.returnType):'')+implementation(proc,c);
       const source=module.declarations.find(d=>d.withEvents&&key(proc.name).startsWith(key(d.name)+'_'));
       if(source){const event=proc.name.slice(source.name.length+1);header+=' Handles '+identifier(source.name)+'.'+identifier(event);}
     }

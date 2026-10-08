@@ -8,10 +8,11 @@ for(const codeStyle of ['native','compatibility'])test(codeStyle+': optional Cur
  const r=convertVbNetProject(OPTIONAL_FIXTURE,{codeStyle,platform:'AnyCPU'});
  assert.ok(r.success,JSON.stringify(r.diagnostics));
  const source=r.files['Application/Module1.vb'];
- assert.equal((source.match(/Overloads Function \[?Price\]?\(/g)||[]).length,3);
- assert.match(source,/Overloads Function \[?Price\]?\(\) As VbCurrency/);
+ assert.equal((source.match(/Public Function \[?Price\]?\(/g)||[]).length,3);
+ assert.match(source,/Public Function \[?Price\]?\(\) As VbCurrency/);
  assert.match(source,/ByRef \[?amount\]? As VbCurrency/);
  assert.doesNotMatch(source,/Optional .* As VbCurrency/);
+ assert.doesNotMatch(source,/\bOverloads\b/, 'standard module overloads must not emit the BC36917 modifier');
  assert.match(source,/Price\]?\(\)/);
  assert.ok(source.indexOf('Mark](2S)')<source.indexOf('Mark](1S)')||source.indexOf('Mark(2S)')<source.indexOf('Mark(1S)'));
  assert.match(source,/extra\]?:=VbCurrency.FromObject\(7S\)/);
@@ -56,4 +57,14 @@ test('read-only optional Currency indexes share overload lowering',()=>{
  const r=convertVbNetProject(input,{target:'library'});
  assert.ok(r.success,JSON.stringify(r.diagnostics));
  assert.match(r.files['Application/Value.vb'],/Overloads Function __vbGet_Amount\(\) As VbCurrency/);
+});
+
+for(const kind of ['module','class'])test(kind+': optional accessor overload modifiers follow the containing declaration',()=>{
+ const input={name:'OptionalAccessor',settings:{},modules:[{name:'Value',kind,code:'Public Property Get Amount(Optional ByVal value As Currency=1.2345@) As Currency\nAmount=value\nEnd Property'}]};
+ const r=convertVbNetProject(input,{target:'library'});
+ assert.ok(r.success,JSON.stringify(r.diagnostics));
+ const source=r.files['Application/Value.vb'];
+ assert.equal((source.match(/Function __vbGet_Amount\(/g)||[]).length,2);
+ if(kind==='module')assert.doesNotMatch(source,/\bOverloads\b/);
+ else assert.equal((source.match(/Public Overloads Function __vbGet_Amount\(/g)||[]).length,2);
 });
