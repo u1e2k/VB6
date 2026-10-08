@@ -4,9 +4,11 @@
  */
 const entry = (className, options = {}) => Object.freeze({className, commonControls:0, container:false, ...options});
 export const NATIVE_CONTROL_CATALOG = Object.freeze({
+  MSChart:entry('STATIC',{kernel:'chart'}),
+  MSFlexGrid:entry('STATIC',{kernel:'grid'}), MSHFlexGrid:entry('STATIC',{kernel:'grid'}), DataGrid:entry('STATIC',{kernel:'grid'}),
   CommandButton:entry('BUTTON'), Label:entry('STATIC'), TextBox:entry('EDIT'),
   CheckBox:entry('BUTTON'), OptionButton:entry('BUTTON'), Frame:entry('BUTTON',{container:true}),
-  ListBox:entry('LISTBOX'), ComboBox:entry('COMBOBOX'), Timer:entry(null),
+  ListBox:entry('LISTBOX'), ComboBox:entry('COMBOBOX'), Timer:entry(null),CommonDialog:entry(null,{nonvisual:true}),ImageList:entry(null,{nonvisual:true}),
   PictureBox:entry('STATIC',{container:true}), Image:entry('STATIC'),
   Shape:entry('STATIC'), Line:entry('STATIC'),
   HScrollBar:entry('SCROLLBAR'), VScrollBar:entry('SCROLLBAR'),
