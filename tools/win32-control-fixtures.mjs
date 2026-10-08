@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {newProject,createControl} from '../src/project/model.js';
 import {compileWin32} from '../src/native/compiler.js';
+import {extendNativeMetadataFixture} from './win32-control-metadata-fixture.mjs';
 const api=`Private Declare Sub ExitProcess Lib "kernel32" (ByVal code As Long)
 Private Declare Function SendValue Lib "user32" Alias "SendMessageW" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, ByVal lp As Long) As Long
 Private Declare Function SendRecord Lib "user32" Alias "SendMessageW" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, lp As Any) As Long
@@ -97,7 +98,7 @@ Private tabChanges As Long, previousTab As Integer`,
 End Sub`);
 }
 export function editControlFixture(){
-  const {control,add,check,finish}=fixture('AotControlEditing');
+  const f=fixture('AotControlEditing'),{control,add,check,finish}=f;
   control('PictureBox','Surface',{Width:6000,Height:4000,ScaleMode:1});
   control('RichTextBox','Rich',{Text:'Alpha beta'},'Surface');
   control('TextBox','Edit',{Text:''},'Surface');
@@ -123,7 +124,9 @@ export function editControlFixture(){
   add('Edit.Tag="owned tag"');check('Edit.Tag="owned tag"','per-control Tag owns a BSTR');
   add('For i=1 To 100\n Edit.FontSize=10+i/100\n Edit.FontName="Segoe UI"\n Edit.Tag="iteration" & CStr(i)\nNext');
   check('Edit.FontSize=11 And Edit.Tag="iteration100"','repeated owned font and Tag replacements remain usable');
-  return finish(`Private keyCalls As Long, mouseCalls As Long, mouseIndex As Integer, mouseButton As Integer
+  const metadata=extendNativeMetadataFixture(f);
+  return finish(`${metadata.declarations}
+Private keyCalls As Long, mouseCalls As Long, mouseIndex As Integer, mouseButton As Integer
 Private mouseX As Single, mouseY As Single`,
 `Private Sub Edit_KeyPress(KeyAscii As Integer)
  keyCalls=keyCalls+1
@@ -135,7 +138,8 @@ Private Sub Button_MouseDown(Index As Integer, Button As Integer, Shift As Integ
  mouseButton=Button
  mouseX=X
  mouseY=Y
-End Sub`);
+End Sub
+${metadata.handlers}`);
 }
 export function fileControlFixture(){
   const {control,add,check,finish}=fixture('AotControlFiles');

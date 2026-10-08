@@ -1,3 +1,4 @@
+import {initializeNativeObjectTag,disposeNativeStandaloneTags} from './control-metadata.js';
 /** Native HWND lowering. Runtime instructions are emitted per used control family;
  * this module itself is compiler code and is never embedded in a PE32 image. */
 import {NATIVE_CONTROL_CATALOG,nativeControlDependencies} from './control-catalog.js';
@@ -64,10 +65,11 @@ export const nativeControlMethods={
   },
   createNativeControls(module){
     const x=this.x;let order;
+    initializeNativeObjectTag(this,module);
     try{order=nativeControlOrder(module.controls.values());}catch(error){this.fail(error.message,module);}
     for(const control of order.ordered){
       const {model}=control,p=model.properties,type=model.type;
-      if(type==='Timer'){this.timer(control);continue;}
+      if(type==='Timer'){initializeNativeObjectTag(this,control);this.timer(control);continue;}
       const descriptor=control.nativeDescriptor,{style,ex}=nativeControlStyle(type,p),parent=order.parents.get(control)||module;
       control.nativeParent=parent;
       for(let i=0;i<control.initialState.length;i++)x.value(control.initialState[i]).store(control.state,i*4);
@@ -77,7 +79,7 @@ export const nativeControlMethods={
       if(control.oldProcedure)x.api('user32.dll','SetWindowLongW',[mem(control.handle),-4,'control-procedure:'+module.name+':'+control.key]).test().branch('e','error:7').store(control.oldProcedure);
       this.applyNativeControlFont(control);this.initializeNativeControlFont(control);
       const send=(msg,w=0,l=0)=>x.api('user32.dll','SendMessageW',[mem(control.handle),msg,w,l]);
-      if(p.Tag)x.api('oleaut32.dll','SysAllocString',[this.string(p.Tag)]).test().branch('e','error:7').store(control.state,28);
+      initializeNativeObjectTag(this,control);
       if(['TextBox','RichTextBox'].includes(type)) {
         if(p.MaxLength)send(type==='RichTextBox'?0x435:0xc5,type==='RichTextBox'?0:Number(p.MaxLength),type==='RichTextBox'?Number(p.MaxLength):0);
         if(p.PasswordChar)send(0xcc,String(p.PasswordChar).charCodeAt(0),0);
@@ -122,6 +124,7 @@ export const nativeControlMethods={
   },
   disposeNativeControls(module){
     const x=this.x;
+    disposeNativeStandaloneTags(this,module);
     if(module.tooltip){const skip=x.unique();x.value(mem(module.tooltip)).test().branch('e',skip).push().invoke('user32.dll','DestroyWindow').value(0).store(module.tooltip).label(skip);}
     for(const control of module.controls.values())if(control.state){
       this.disposeNativeFileControl(control);this.disposeNativeControlFont(control);
