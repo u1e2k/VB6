@@ -60,6 +60,11 @@ jobs:
                         if(r.backend!=='webgpu')throw Error(JSON.stringify(r.getStats()));
                         for(let i=0;i<5;i++)await new Promise(requestAnimationFrame);
                       }''')
+                      # The default pointer at (0,0) hits the replacing Text node.
+                      # Move it with real input, then drain that boundary before
+                      # measuring text-only retention. Do not suppress events.
+                      page.mouse.move(1000, 700)
+                      assert page.evaluate('document.elementFromPoint(1000,700)===document.documentElement')
                       startup=(root/'tests/fixtures/rendering-startup.mjs').read_text().replace('export default ','',1)
                       print('STARTUP', json.dumps(page.evaluate('('+startup+')(window.r)')), flush=True)
                       result=page.evaluate('''async()=>{
@@ -74,6 +79,7 @@ jobs:
                         const result={active:r.backend,styleReuses:r.metrics.textStyleReuses-start,retained,trace};r.dispose();return result;
                       }''')
                       print('CACHE_TRACE', json.dumps(result,ensure_ascii=True,indent=2), flush=True)
+                      assert result['active']=='webgpu' and result['styleReuses']==8 and result['retained']==[True]*8
                   finally:
                       browser.close()
           finally:
