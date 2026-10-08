@@ -1,5 +1,7 @@
 // Native AppKit widgets and the VB property/event boundary. MIT.
 #include "appkit.hpp"
+#include "appkit-edit.hpp"
+#include "appkit-control-utils.hpp"
 #include <cfloat>
 
 namespace vb6 {
@@ -69,10 +71,6 @@ void MacControl::applyFont(){
   if([widget respondsToSelector:@selector(setFont:)])[(id)widget setFont:font];
   if([widget isKindOfClass:NSTableView.class]){auto table=(NSTableView*)widget;for(NSTableColumn*c in table.tableColumns)[(NSCell*)c.dataCell setFont:font];table.rowHeight=std::max(16.0,std::ceil(font.ascender-font.descender+5));}
 }
-static NSTextView* textView(MacControl&c){return [c.widget isKindOfClass:NSTextView.class]?(NSTextView*)c.widget:nil;}
-static NSTextField* textField(MacControl&c){return [c.widget isKindOfClass:NSTextField.class]?(NSTextField*)c.widget:nil;}
-static NSTableView* tableView(MacControl&c){return [c.widget isKindOfClass:NSTableView.class]?(NSTableView*)c.widget:nil;}
-static void rangeCheck(int64_t index,size_t size){if(index<0||uint64_t(index)>=size)fail(381,"Invalid property array index");}
 void MacControl::initialize(){
   if(initialized)return;initialized=true;for(auto&p:spec.properties)properties[lower(p.name)]=p.value;
   properties["name"]=Value::string(fromUTF8(spec.name));if(spec.index>=0)properties["index"]=Value::integer(spec.index,Type::Integer);
@@ -139,9 +137,9 @@ void MacControl::refresh(){
   if([widget isKindOfClass:NSButton.class]){auto b=(NSButton*)widget;b.title=ns(caption);int n=int(number("value",0));b.state=n==2?NSControlStateValueMixed:n?NSControlStateValueOn:NSControlStateValueOff;}
   else if([widget isKindOfClass:NSBox.class])[(NSBox*)widget setTitle:ns(caption)];
   else if(auto f=textField(*this)){
-    NSString*desired=ns(spec.type=="Label"?caption:property("text",Value::string(u"")).string());if(![f.stringValue isEqualToString:desired])f.stringValue=desired;
+    NSString*desired=ns(spec.type=="Label"?caption:(f.currentEditor?nativeEditText(*this):property("text",Value::string(u"")).string()));if(![f.stringValue isEqualToString:desired])f.stringValue=desired;
     f.textColor=color(int64_t(number("forecolor",0)));f.backgroundColor=color(int64_t(number("backcolor",0xffffff)));f.alignment=number("alignment",0)==1?NSTextAlignmentRight:number("alignment",0)==2?NSTextAlignmentCenter:NSTextAlignmentLeft;f.editable=spec.type!="Label"&&!flag("locked");
-  }else if(auto e=textView(*this)){NSString*desired=ns(property("text",Value::string(u"")).string());if(![e.string isEqualToString:desired])e.string=desired;e.textColor=color(int64_t(number("forecolor",0)));e.backgroundColor=color(int64_t(number("backcolor",0xffffff)));e.editable=!flag("locked");}
+  }else if(auto e=textView(*this)){NSString*desired=e.hasMarkedText?e.string:ns(property("text",Value::string(u"")).string());if(![e.string isEqualToString:desired])e.string=desired;e.textColor=color(int64_t(number("forecolor",0)));e.backgroundColor=color(int64_t(number("backcolor",0xffffff)));e.editable=!flag("locked");}
   if([widget isKindOfClass:NSSlider.class]||[widget isKindOfClass:NSStepper.class]||[widget isKindOfClass:NSProgressIndicator.class]){
     double minimum=number("min",0),maximum=number("max",100),value=number("value",minimum);if(minimum>maximum||value<minimum||value>maximum)fail(380,"Value is outside Min/Max");
     [(id)widget setMinValue:minimum];[(id)widget setMaxValue:maximum];[(id)widget setDoubleValue:value];
@@ -164,11 +162,7 @@ void MacControl::timerChanged(){
   [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }
 void MacControl::changed(const std::string& name){
-  if(name=="text"){
-    Text value=textView(*this)?text(textView(*this).string):textField(*this)?text(textField(*this).stringValue):Text();
-    auto limit=number("maxlength",0);if(limit<0||limit>INT32_MAX)fail(380);if(limit&&value.size()>size_t(limit)){value.resize(size_t(limit));if(auto e=textView(*this))e.string=ns(value);else if(auto f=textField(*this))f.stringValue=ns(value);}
-    if(value==property("text",Value::string(u"")).string())return;properties["text"]=Value::string(value);event("change");return;
-  }
+  if(name=="text"){nativeEditChanged(*this);return;}
   if(name=="value"){
     if([widget isKindOfClass:NSButton.class]){
       auto b=(NSButton*)widget;int value=b.state==NSControlStateValueMixed?2:b.state==NSControlStateValueOn?1:0;
@@ -180,205 +174,4 @@ void MacControl::changed(const std::string& name){
   }
   event(name);
 }
-Value MacControl::get(Runtime&rt,const std::string&raw){
-  if(disposed)fail(91,"Control has been unloaded");auto name=lower(raw.empty()?defaultMember():raw);
-  if(name=="hwnd"||name=="handle")return Value::integer(handle);
-  if(name=="font")return createNativeFont(self());
-  if(name=="container"||name=="parent"){auto f=owner.lock();if(!f)fail(91);if(spec.parent.empty())return Value::object(f);return f->get(rt,spec.parent);}
-  if(name=="controls"){auto f=owner.lock();if(!f)fail(91);return host->formGet(f,"controls");}
-  if(name=="visible")return Value::boolean(menu?!menu.hidden:!view.hidden);
-  if(name=="text"){
-    if(auto e=textView(*this))return Value::string(text(e.string));if(auto f=textField(*this))return Value::string(text(f.stringValue));
-    if(auto t=tableView(*this);t&&grid.empty()){NSInteger index=t.selectedRow;return Value::string(index>=0&&size_t(index)<list.size()?list[size_t(index)]:Text());}
-  }
-  if(name=="selstart"||name=="sellength"||name=="seltext"){
-    NSRange range=NSMakeRange(0,0);Text value=get(rt,"text").string();if(auto e=textView(*this))range=e.selectedRange;else if(auto f=textField(*this)){auto editor=(NSTextView*)[f currentEditor];if(editor)range=editor.selectedRange;else range=NSMakeRange(size_t(number("selstart",0)),size_t(number("sellength",0)));}
-    range.location=std::min(range.location,value.size());range.length=std::min(range.length,value.size()-range.location);
-    return name=="selstart"?Value::integer(range.location):name=="sellength"?Value::integer(range.length):Value::string(value.substr(range.location,range.length));
-  }
-  if(name=="textrtf"&&spec.type=="RichTextBox"){NSData*data=[textView(*this)RTFFromRange:NSMakeRange(0,textView(*this).string.length)];return Value::string(fromUTF8(std::string(static_cast<const char*>(data.bytes),data.length)));}
-  if(name=="listcount")return Value::integer(list.size());
-  if(name=="listindex"){if([widget isKindOfClass:NSComboBox.class])return Value::integer([(NSComboBox*)widget indexOfSelectedItem]);if(auto t=tableView(*this))return Value::integer(t.selectedRow);return property(name,Value::integer(-1));}
-  if(name=="selcount")return Value::integer(selected.size());
-  if(name=="filename"&&spec.type=="FileListBox"){auto i=get(rt,"listindex").integral();return Value::string(i>=0&&size_t(i)<list.size()?list[size_t(i)]:Text());}
-  if(name=="value"&&[widget isKindOfClass:NSDatePicker.class]){auto c=[[NSCalendar currentCalendar]components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute|NSCalendarUnitSecond fromDate:((NSDatePicker*)widget).dateValue];return civilDate({int(c.year),int(c.month),int(c.day),int(c.hour),int(c.minute),int(c.second)});}
-  if(name=="nodes"||name=="listitems"||name=="columnheaders"||name=="panels"||name=="buttons"||name=="tabs"&&spec.type!="SSTab"||name=="listimages")return Value::object(items(name));
-  if(name=="selecteditem"){
-    if(spec.type=="TreeView"){id token=[(NSOutlineView*)widget itemAtRow:((NSOutlineView*)widget).selectedRow];return Value::object([token isKindOfClass:VB6OutlineToken.class]?((VB6OutlineToken*)token)->item:nullptr);}
-    if(spec.type=="ListView"){auto i=((NSTableView*)widget).selectedRow;auto collection=items("listitems");return Value::object(i>=0&&size_t(i)<collection->items.size()?collection->items[size_t(i)]:nullptr);}
-    if(spec.type=="TabStrip"){auto i=[(NSTabView*)widget indexOfTabViewItem:((NSTabView*)widget).selectedTabViewItem];auto collection=items("tabs");return Value::object(i>=0&&size_t(i)<collection->items.size()?collection->items[size_t(i)]:nullptr);}
-  }
-  if(name=="row"||name=="col"||name=="rows"||name=="cols"||name=="rowcount"||name=="columncount")return name=="rows"||name=="rowcount"?Value::integer(grid.size()):name=="cols"||name=="columncount"?Value::integer(grid.empty()?0:grid[0].size()):property(name,Value::integer(0));
-  if(name=="text"&&!grid.empty()){auto r=size_t(number("row",0)),c=size_t(number("col",0));if(r>=grid.size()||c>=grid[r].size())fail(381);return Value::string(grid[r][c]);}
-  if(name=="currentx")return Value::real(currentX,Type::Single);if(name=="currenty")return Value::real(currentY,Type::Single);
-  if(name=="scalewidth")return property(name,Value::real(view.bounds.size.width/unit(-1,true),Type::Single));if(name=="scaleheight")return property(name,Value::real(view.bounds.size.height/unit(-1,false),Type::Single));
-  if(name=="picture"||name=="image")return property(name,Value::object(nullptr));
-  if(name=="hDC"||name=="hdc")return invoke(rt,"getdc",{});
-  auto it=properties.find(name);if(it!=properties.end())return it->second;
-  if(name=="enabled")return Value::boolean(true);if(name=="tag")return Value::string(u"");if(name=="tabindex")return Value::integer(0,Type::Integer);
-  fail(438,"Unsupported native property "+spec.type+"."+raw);
-}
-void MacControl::set(Runtime&rt,const std::string&raw,Value value,bool){
-  if(disposed)fail(91);auto name=lower(raw.empty()?defaultMember():raw);
-  if(name=="name"||name=="index"||name=="hwnd"||name=="handle"||name=="listcount")fail(383,"Property is read-only");
-  if(name=="font"){auto font=value.asObject();for(const auto&entry:std::map<std::string,std::string>{{"name","fontname"},{"size","fontsize"},{"bold","fontbold"},{"italic","fontitalic"},{"underline","fontunderline"},{"strikethrough","fontstrikethru"}})set(rt,entry.second,font->get(rt,entry.first));return;}
-  if(name=="listindex"){
-    auto i=value.integral();if(i< -1||i>=int64_t(list.size()))fail(380);properties[name]=Value::integer(i);selected.clear();if(i>=0)selected.insert(size_t(i));
-    if([widget isKindOfClass:NSComboBox.class]){auto combo=(NSComboBox*)widget;if(i>=0)[combo selectItemAtIndex:i];else if(combo.indexOfSelectedItem>=0)[combo deselectItemAtIndex:combo.indexOfSelectedItem];}
-    else if(auto table=tableView(*this)){[table selectRowIndexes:i<0?NSIndexSet.indexSet:[NSIndexSet indexSetWithIndex:size_t(i)] byExtendingSelection:NO];}
-    event("click");return;
-  }
-  if(name=="selstart"||name=="sellength"||name=="seltext"){
-    Text current=get(rt,"text").string();size_t start=size_t(get(rt,"selstart").integral()),length=size_t(get(rt,"sellength").integral());
-    if(name=="seltext"){auto replacement=value.string();current.replace(start,length,replacement);set(rt,"text",Value::string(current));length=replacement.size();}
-    else{auto n=value.integral();if(n<0||uint64_t(n)>current.size())fail(380);if(name=="selstart"){start=size_t(n);length=0;}else length=std::min(size_t(n),current.size()-start);}
-    properties["selstart"]=Value::integer(start);properties["sellength"]=Value::integer(length);NSRange selection=NSMakeRange(start,length);
-    if(auto e=textView(*this))e.selectedRange=selection;else if(auto f=textField(*this)){if([f currentEditor])[(NSTextView*)[f currentEditor]setSelectedRange:selection];}return;
-  }
-  if(name=="textrtf"&&spec.type=="RichTextBox"){auto source=toUTF8(value.string());NSData*data=[NSData dataWithBytes:source.data() length:source.size()];NSAttributedString*rich=[[NSAttributedString alloc]initWithRTF:data documentAttributes:nullptr];if(!rich)fail(380,"Invalid RTF");[textView(*this).textStorage setAttributedString:rich];changed("text");return;}
-  if(name=="selecteditem"){
-    auto item=std::dynamic_pointer_cast<MacItem>(value.asObject());if(!item)fail(13);if(spec.type=="TreeView"){id token=outlineTokens[item->identity];if(!token){[(NSOutlineView*)widget reloadData];token=outlineTokens[item->identity];}if(!token)fail(380);NSInteger row=[(NSOutlineView*)widget rowForItem:token];if(row<0)fail(380);[(NSTableView*)widget selectRowIndexes:[NSIndexSet indexSetWithIndex:size_t(row)]byExtendingSelection:NO];}
-    else{auto collection=items(spec.type=="ListView"?"listitems":"tabs");auto it=std::find(collection->items.begin(),collection->items.end(),item);if(it==collection->items.end())fail(380);size_t i=size_t(it-collection->items.begin());if(spec.type=="ListView")[(NSTableView*)widget selectRowIndexes:[NSIndexSet indexSetWithIndex:i]byExtendingSelection:NO];else [(NSTabView*)widget selectTabViewItemAtIndex:i];}return;
-  }
-  if(name=="tab"&&spec.type=="SSTab"){auto i=value.integral();auto tabs=(NSTabView*)widget;if(i<0||i>=tabs.numberOfTabViewItems)fail(380);[tabs selectTabViewItemAtIndex:i];properties[name]=Value::integer(i,Type::Integer);return;}
-  if(name=="text"&&!grid.empty()){auto r=size_t(number("row",0)),c=size_t(number("col",0));if(r>=grid.size()||c>=grid[r].size())fail(381);grid[r][c]=value.string();reloadList();return;}
-  if(name=="rows"||name=="cols"||name=="rowcount"||name=="columncount"){
-    auto n=value.integral();if(n<0||n>100000)fail(380);auto rows=(name=="rows"||name=="rowcount")?size_t(n):grid.size(),cols=(name=="cols"||name=="columncount")?size_t(n):(grid.empty()?0:grid[0].size());resizeGrid(rows,cols);properties[name]=Value::integer(n);updateColumns();reloadList();return;
-  }
-  if(name=="row"||name=="col"){auto n=value.integral();if(n<0||name=="row"&&size_t(n)>=grid.size()||name=="col"&&(grid.empty()||size_t(n)>=grid[0].size()))fail(381);properties[name]=Value::integer(n);return;}
-  if(name=="currentx"||name=="currenty"){double n=value.floating();if(name=="currentx")currentX=n;else currentY=n;return;}
-  if(name=="picture"||name=="image"){
-    if(value.type!=Type::Object)fail(13);auto object=std::get<ObjectPtr>(value.payload);auto image=std::dynamic_pointer_cast<MacImage>(object);if(object&&!image)fail(13);
-    properties[name]=value;if([widget isKindOfClass:NSImageView.class])((NSImageView*)widget).image=image?image->image:nil;else if([widget isKindOfClass:NSButton.class])((NSButton*)widget).image=image?image->image:nil;view.needsDisplay=YES;return;
-  }
-  if(name=="text"||name=="caption"){
-    auto next=value.string(),old=property(name,Value::string(u"")).string();properties[name]=Value::string(next);refresh();
-    if(name=="text"&&next!=old)event("change");return;
-  }
-  const std::set<std::string>supported={"left","top","width","height","visible","enabled","tag","tooltiptext","backcolor","forecolor","fontname","fontsize","fontbold","fontitalic","fontunderline","fontstrikethru","alignment","locked","maxlength","value","min","max","smallchange","largechange","tickfrequency","interval","checked","tabindex","tabstop","scalemode","scaleleft","scaletop","scalewidth","scaleheight","drawcolor","drawstyle","drawmode","drawwidth","fillcolor","fillstyle","bordercolor","borderwidth","shape","borderstyle","stretch","sorted","multiselect","gridlines","fullrowselect","view","fixedrows","fixedcols","rowsel","colsel","textmatrix","simpletext","style","filter","filterindex","filename","dialogtitle","initdir","defaultext","flags","cancelerror","path","pattern","drive","charttype","rowlabel","columnlabel","row","col","tab","redraw","enabled","mousepointer","color","fontcharset"};
-  if(!supported.count(name))fail(438,"Unsupported native property "+spec.type+"."+raw);
-  if(name=="interval"){auto n=value.integral();if(n<0||n>65535)fail(380);}
-  if(name=="value"&&(spec.type=="CheckBox"||spec.type=="OptionButton")){auto n=value.integral();if(n<0||n>(spec.type=="CheckBox"?2:1))fail(380);}
-  if(name=="scalemode"){auto n=value.integral();if(n<0||n>7)fail(380);}
-  auto previous=property(name);properties[name]=value;
-  try{
-    if(name=="left"||name=="top"||name=="width"||name=="height")applyFrame();
-    else if(name.rfind("font",0)==0)applyFont();
-    else if(name=="interval"||name=="enabled"&&spec.type=="Timer")timerChanged();
-    else if(name=="path"||name=="pattern"||name=="drive")reloadFiles();
-    else if(name=="tooltiptext")view.toolTip=ns(value.string());
-    else if(name=="visible")view.hidden=!value.truth();
-    else refresh();
-  }catch(...){properties[name]=previous;throw;}
-}
-Ref MacControl::reference(Runtime&rt,const std::string&raw,Args args){
-  auto c=self();auto name=lower(raw);if(args.empty())return Object::reference(rt,name,args);
-  return {[c,&rt,name,args]{return c->invoke(rt,name,args);},[c,&rt,name,args](Value v,bool){auto all=args;all.emplace_back(v);c->invoke(rt,"let:"+name,all);},"variant",false,false};
-}
-Value MacControl::invoke(Runtime&rt,const std::string&raw,Args args){
-  if(disposed)fail(91);bool put=raw.rfind("let:",0)==0||raw.rfind("set:",0)==0;auto name=lower(put?raw.substr(4):raw);if(name.empty())name=defaultMember();
-  if(name=="list"||name=="itemdata"||name=="selected"){
-    if(args.size()!=(put?2:1))fail(450);auto index=args[0].value.integral();rangeCheck(index,list.size());size_t i=size_t(index);
-    if(put){if(name=="list")list[i]=args[1].value.string();else if(name=="itemdata")itemData[i]=static_cast<int32_t>(coerce(args[1].value,"long").integral());else{if(args[1].value.truth())selected.insert(i);else selected.erase(i);}reloadList();return {};}
-    return name=="list"?Value::string(list[i]):name=="itemdata"?Value::integer(itemData[i]):Value::boolean(selected.count(i));
-  }
-  if(name=="textmatrix"||name=="textarray"||name=="data"){
-    size_t count=name=="textmatrix"?2:0;bool chart=name=="data"&&spec.type=="MSChart";if(chart)count=0;else if(name!="textmatrix")count=1;
-    if(args.size()!=count+(put?1:0))fail(450);int64_t r=chart?int64_t(number("row",1))-1:name=="textmatrix"?args[0].value.integral():grid.empty()?0:args[0].value.integral()/int64_t(grid[0].size());int64_t c=chart?int64_t(number("column",1))-1:name=="textmatrix"?args[1].value.integral():grid.empty()?0:args[0].value.integral()%int64_t(grid[0].size());
-    if(r<0||c<0||size_t(r)>=grid.size()||size_t(c)>=grid[size_t(r)].size())fail(381);
-    if(put){grid[size_t(r)][size_t(c)]=args[count].value.string();reloadList();return {};}return Value::string(grid[size_t(r)][size_t(c)]);
-  }
-  if(name=="colwidth"||name=="rowheight"){
-    if(args.size()!=(put?2:1))fail(450);int i=int(args[0].value.integral());if(i<0)fail(381);auto&map=name=="colwidth"?columnWidths:rowHeights;if(put){double n=args[1].value.floating();if(n<0||n>300000)fail(380);map[i]=n/15;updateColumns();reloadList();return {};}return Value::real((map.count(i)?map[i]:name=="colwidth"?90:20)*15);
-  }
-  if(put&&args.size()==1){set(rt,name,args[0].value);return {};}
-  if(name=="print")return nativePrint(*this,std::move(args));
-  if(name=="paintpicture"){if(args.size()<3||args.size()>9)fail(450);auto image=std::dynamic_pointer_cast<MacImage>(args[0].value.asObject());if(!image||!image->image)fail(5);auto command=nativeCommand(*this,"image");command.image=image->image;auto origin=point(args[1].value.floating(),args[2].value.floating());double width=argument(args,3,Value::real(image->image.size.width/unit(-1,true))).floating(),height=argument(args,4,Value::real(image->image.size.height/unit(-1,false))).floating();command.coordinates={origin.x,origin.y,width*unit(-1,true),height*unit(-1,false)};if(args.size()>5){command.coordinates.push_back(argument(args,5,Value::real(0)).floating()*unit(-1,true));command.coordinates.push_back(argument(args,6,Value::real(0)).floating()*unit(-1,false));command.coordinates.push_back(argument(args,7,Value::real(width)).floating()*unit(-1,true));command.coordinates.push_back(argument(args,8,Value::real(height)).floating()*unit(-1,false));}appendCommand(*this,std::move(command));return {};}
-  if(name=="additem"){
-    if(args.empty()||args.size()>2)fail(450);Text item=args[0].value.string();int64_t index=integerArgument(args,1,list.size());if(index<0||index>int64_t(list.size()))fail(5);if(list.size()>=1000000)fail(7);
-    if(flag("sorted"))index=std::lower_bound(list.begin(),list.end(),item)-list.begin();list.insert(list.begin()+index,item);itemData.insert(itemData.begin()+index,0);selected.clear();properties["newindex"]=Value::integer(index);reloadList();return {};
-  }
-  if(name=="removeitem"){if(args.size()!=1)fail(450);auto index=args[0].value.integral();rangeCheck(index,list.size());list.erase(list.begin()+index);itemData.erase(itemData.begin()+index);selected.clear();reloadList();return {};}
-  if(name=="clear"){if(!args.empty())fail(450);list.clear();itemData.clear();selected.clear();for(auto&row:grid)for(auto&cell:row)cell.clear();reloadList();return {};}
-  if(name=="setfocus"){if(!args.empty())fail(450);if(!view||view.hidden||!flag("enabled",true))fail(5);auto window=view.window;if(!window||![window makeFirstResponder:widget])fail(5);return {};}
-  if(name=="refresh"){view.needsDisplay=YES;[view displayIfNeeded];return {};}
-  if(name=="move"){if(args.size()<2||args.size()>4)fail(450);const char*names[]={"left","top","width","height"};for(size_t i=0;i<args.size();i++)if(args[i].value.type!=Type::Missing)properties[names[i]]=args[i].value;applyFrame();return {};}
-  if(name=="zorder"){auto mode=integerArgument(args,0,0);if(mode!=0&&mode!=1)fail(5);auto parent=view.superview;if(parent){[view removeFromSuperview];[parent addSubview:view positioned:mode==0?NSWindowAbove:NSWindowBelow relativeTo:nil];}return {};}
-  if(name=="cls"){graphics.clear();currentX=currentY=0;view.needsDisplay=YES;return {};}
-  if(name=="textwidth"||name=="textheight"){
-    if(args.size()!=1)fail(450);NSFont*font=[NSFont systemFontOfSize:number("fontsize",8.25)*4/3];NSSize size=[ns(args[0].value.string())sizeWithAttributes:@{NSFontAttributeName:font}];return Value::real(name=="textwidth"?size.width/unit(-1,true):size.height/unit(-1,false),Type::Single);
-  }
-  if(name=="scalex"||name=="scaley"){if(args.empty()||args.size()>3)fail(450);bool x=name=="scalex";return Value::real(args[0].value.floating()*unit(int(integerArgument(args,1,number("scalemode",1))),x)/unit(int(integerArgument(args,2,number("scalemode",1))),x),Type::Single);}
-  if(name=="showopen"||name=="showsave"||name=="showcolor"||name=="showfont"||name=="showprinter")return host->dialog(*this,name);
-  if(name=="getdc")return host->api(rt,"user32.GetDC",{Arg(Value::integer(handle))});
-  if(name=="click"){event("click");return {};}
-  if(name=="loadfile"&&spec.type=="RichTextBox"){
-    auto file=std::filesystem::path(toUTF8(stringArgument(args,0)));NSError*error=nil;NSAttributedString*rich=[[NSAttributedString alloc]initWithURL:[NSURL fileURLWithPath:ns(fromUTF8(file.string()))]options:@{} documentAttributes:nullptr error:&error];if(!rich)fail(53,toUTF8(text(error.localizedDescription)));[textView(*this).textStorage setAttributedString:rich];changed("text");return {};
-  }
-  if(name=="savefile"&&spec.type=="RichTextBox"){
-    NSData*data=integerArgument(args,1,0)==1?[textView(*this).string dataUsingEncoding:NSWindowsCP1252StringEncoding allowLossyConversion:NO]:[textView(*this)RTFFromRange:NSMakeRange(0,textView(*this).string.length)];NSError*error=nil;if(!data||![data writeToFile:ns(stringArgument(args,0)) options:NSDataWritingAtomic error:&error])fail(75,error?toUTF8(text(error.localizedDescription)):"Text cannot be encoded");return {};
-  }
-  if(args.empty())return get(rt,name);fail(438,"Unsupported native method "+spec.type+"."+raw);
-}
-void MacControl::reloadFiles(){
-  list.clear();itemData.clear();selected.clear();
-  if(spec.type=="DriveListBox"){
-    NSArray<NSURL*>*volumes=[NSFileManager.defaultManager mountedVolumeURLsIncludingResourceValuesForKeys:nil options:0];for(NSURL*url in volumes)list.push_back(text(url.path));if(list.empty())list.push_back(u"/");properties["drive"]=Value::string(u"/");
-  }else{
-    auto folder=std::filesystem::path(toUTF8(property("path",Value::string(u"/")).string()));std::error_code error;if(!std::filesystem::is_directory(folder,error))fail(76);
-    auto pattern=property("pattern",Value::string(u"*.*")).string();if(pattern==u"*.*")pattern=u"*";
-    for(auto it=std::filesystem::directory_iterator(folder,error);!error&&it!=std::filesystem::directory_iterator();it.increment(error)){
-      bool directory=it->is_directory(error);if(error)break;auto name=fromUTF8(it->path().filename().string());if((spec.type=="DirListBox"&&directory)||(spec.type=="FileListBox"&&!directory&&like(name,pattern,true)))list.push_back(name);
-    }
-    if(error)fail(75,error.message());std::sort(list.begin(),list.end());
-  }
-  itemData.resize(list.size());reloadList();
-}
-void MacControl::reloadList(){
-  if([widget isKindOfClass:NSComboBox.class]){
-    auto combo=(NSComboBox*)widget;[combo removeAllItems];for(auto&item:list)[combo addItemWithObjectValue:ns(item)];auto i=number("listindex",-1);if(i>=0&&size_t(i)<list.size())[combo selectItemAtIndex:NSInteger(i)];combo.stringValue=ns(property(spec.type=="DriveListBox"?"drive":"text",Value::string(u"")).string());
-  }else if(auto table=tableView(*this)){[table reloadData];NSMutableIndexSet*indices=[NSMutableIndexSet indexSet];for(size_t i:selected)if(i<size_t(table.numberOfRows))[indices addIndex:i];[table selectRowIndexes:indices byExtendingSelection:NO];}
-  view.needsDisplay=YES;
-}
-void MacControl::resizeGrid(size_t rows,size_t cols){if(rows>100000||cols>10000||(cols&&rows>1000000/cols))fail(7,"Grid exceeds one million cells");grid.resize(rows);for(auto&row:grid)row.resize(cols);}
-void MacControl::updateColumns(){
-  auto table=tableView(*this);if(!table)return;for(NSTableColumn*column in table.tableColumns.copy)[table removeTableColumn:column];
-  size_t count=!grid.empty()?grid[0].size():spec.type=="ListView"?std::max(size_t(1),items("columnheaders")->items.size()):1;
-  table.headerView=(spec.type=="ListBox"||spec.type=="FileListBox"||spec.type=="DirListBox"||spec.type=="TreeView")?nil:[NSTableHeaderView new];
-  for(size_t i=0;i<count;i++){
-    auto column=[[NSTableColumn alloc]initWithIdentifier:[NSString stringWithFormat:@"%zu",i]];column.width=columnWidths.count(int(i))?columnWidths[int(i)]:90;
-    column.title=spec.type=="ListView"&&i<items("columnheaders")->items.size()?ns(items("columnheaders")->items[i]->properties["text"].string()):[NSString stringWithFormat:@"%zu",i+1];
-    column.editable=spec.type=="DataGrid";[table addTableColumn:column];if(spec.type=="TreeView"&&i==0)((NSOutlineView*)table).outlineTableColumn=column;
-  }
-}
-Value MacControlArray::get(Runtime&,const std::string&name){if(lower(name)=="count")return Value::integer(elements.size());if(lower(name)=="lbound")return Value::integer(elements.empty()?0:elements.begin()->first);if(lower(name)=="ubound")return Value::integer(elements.empty()?-1:elements.rbegin()->first);fail(438);}
-Value MacControlArray::invoke(Runtime&rt,const std::string&raw,Args args){
-  auto name=lower(raw);if(name.empty()||name=="item"){if(args.size()!=1)fail(450);int index=int(coerce(args[0].value,"integer").integral());auto it=elements.find(index);if(it==elements.end())fail(340,"Control array element does not exist");return Value::object(it->second);}
-  if(name=="load"){if(args.size()!=1)fail(450);int index=int(coerce(args[0].value,"integer").integral());if(index<0||elements.count(index))fail(360,"Control already loaded or invalid index");auto f=owner.lock();if(!f)fail(91);auto spec=prototype;spec.index=index;spec.properties.push_back({"index",Value::integer(index,Type::Integer)});spec.properties.push_back({"visible",Value::boolean(false)});elements[index]=host->createControl(f,std::move(spec),true);return {};}
-  if(name=="unload"){if(args.size()!=1)fail(450);int index=int(coerce(args[0].value,"integer").integral());auto it=elements.find(index);if(it==elements.end())fail(340);if(designElements.count(index))fail(362,"Cannot unload a design-time control");it->second->dispose();elements.erase(it);return {};}
-  if(args.empty())return get(rt,name);fail(438);
-}
-std::vector<Value>MacControlArray::enumerate(Runtime&){std::vector<Value>out;for(auto&entry:elements)out.push_back(Value::object(entry.second));return out;}
 } // namespace vb6
-
-@implementation VB6Canvas
--(BOOL)isFlipped{return YES;}
--(BOOL)acceptsFirstResponder{return YES;}
--(void)drawRect:(NSRect)dirty{if(auto c=model.lock())c->host->event([c,dirty]{vb6::drawControl(*c,dirty);});}
-@end
-@implementation VB6ControlDelegate
--(void)action:(id)sender{if(auto c=model.lock())c->host->event([c,sender]{
-  if([sender isKindOfClass:NSButton.class]&&c->spec.type=="CommandButton"||[sender isKindOfClass:NSMenuItem.class])c->event("click");
-  else if([sender isKindOfClass:NSTableView.class]){auto table=(NSTableView*)sender;c->properties["listindex"]=vb6::Value::integer(table.selectedRow);c->selected.clear();[table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger index,BOOL*){c->selected.insert(index);}];c->event("click");if(c->spec.type=="ListView"){auto value=c->get(*c->host->runtime,"selecteditem");if(value.type==vb6::Type::Object&&std::get<vb6::ObjectPtr>(value.payload))c->event("itemclick",{vb6::Arg(value)});}else if(c->spec.type=="TreeView"){auto value=c->get(*c->host->runtime,"selecteditem");if(value.type==vb6::Type::Object&&std::get<vb6::ObjectPtr>(value.payload))c->event("nodeclick",{vb6::Arg(value)});}}
-  else if([sender isKindOfClass:NSComboBox.class]){c->properties["listindex"]=vb6::Value::integer([(NSComboBox*)sender indexOfSelectedItem]);c->changed("text");c->event("click");}
-  else if(c->spec.type=="TextBox"||c->spec.type=="RichTextBox")c->changed("text");else c->changed("value");
-});}
--(void)doubleAction:(id)sender{(void)sender;if(auto c=model.lock())c->host->event([c]{c->event("dblclick");});}
--(void)controlTextDidChange:(NSNotification*)note{(void)note;if(auto c=model.lock())c->host->event([c]{c->changed("text");});}
--(void)textDidChange:(NSNotification*)note{(void)note;if(auto c=model.lock())c->host->event([c]{c->changed("text");});}
--(void)controlTextDidBeginEditing:(NSNotification*)note{(void)note;if(auto c=model.lock())c->host->event([c]{c->event("gotfocus");});}
--(void)controlTextDidEndEditing:(NSNotification*)note{(void)note;if(auto c=model.lock())c->host->event([c]{c->event("lostfocus");});}
--(BOOL)control:(NSControl*)control textShouldEndEditing:(NSText*)editor{(void)control;(void)editor;auto c=model.lock();if(!c)return YES;auto cancel=std::make_shared<vb6::Cell>(vb6::Value::boolean(false),"boolean");c->host->event([c,cancel]{c->event("validate",{vb6::Arg(vb6::cellRef(cancel))});});return !cancel->get().truth();}
--(void)comboBoxSelectionDidChange:(NSNotification*)note{[self action:note.object];}
--(void)tabView:(NSTabView*)tabs didSelectTabViewItem:(NSTabViewItem*)item{if(auto c=model.lock())c->host->event([c,tabs,item]{auto previous=c->number("tab",0);auto index=[tabs indexOfTabViewItem:item];c->properties["tab"]=vb6::Value::integer(index,vb6::Type::Integer);c->event("click",c->spec.type=="SSTab"?vb6::Args{vb6::Arg(vb6::Value::integer(int64_t(previous),vb6::Type::Integer))}:vb6::Args{});});}
-@end
