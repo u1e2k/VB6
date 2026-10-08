@@ -67,7 +67,6 @@ test('unparenthesized fixed-length String copy-back is not falsely implemented',
   assert.throws(()=>compile('Dim s As String * 8\nCall Text(s)','Private Sub Text(ByRef s As String)\nEnd Sub'),/Fixed-length String ByRef/);
 });
 for(const [decl,body,pattern]of [
- ['Private Sub P(ParamArray x() As Variant)\nEnd Sub','P',/ParamArray/],
  ['Private Sub P(Optional ByRef x() As Long)\nEnd Sub','P',/Optional.*array/i],
  ['Private Sub P(Optional x As Object)\nEnd Sub','P',/supported scalar/],
  ['Private Sub P(Optional x As Byte = 256)\nEnd Sub','P',/Invalid.*default|Overflow/i],

@@ -1,6 +1,7 @@
 /** Scalar VARIANT conformance in actual generated PE32 applications.
  * These programs use OleAut32, not the JavaScript runtime or a mock interpreter.
  */
+import {appendParamArrayChecks,NATIVE_PARAMARRAY_PROCEDURES,NATIVE_PARAMARRAY_BASE_MODULE} from './win32-paramarray-fixtures.mjs';
 import {newProject} from '../src/project/model.js';
 import {appendVariantReferenceChecks,NATIVE_VARIANT_REFERENCE_PROCEDURES} from './win32-variant-reference-fixtures.mjs';
 import {appendVariantDivisionChecks} from './win32-variant-division-fixtures.mjs';
@@ -78,6 +79,7 @@ export function nativeVariantFixture(){
  add('For i=1 To 1000\n v="owner" & CStr(i)\n w=Echo(v)\n values(1)=w\n ChangeByVal w\nNext');check('v="owner1000" And w=v And values(1)=v','repeated Variant/String/call/array ownership is stable');
  appendVariantDivisionChecks(add,check);
  appendVariantReferenceChecks(add,check);
+ appendParamArrayChecks(add,check);
  add('ExitProcess 0\nUnexpected:\nExitProcess 10000+Err.Number');
  const project=newProject('AotVariants');project.startup='Sub Main';project.modules=[{id:'m',name:'Entry',kind:'module',code:`Option Explicit
 Private sequence As Long
@@ -167,5 +169,5 @@ Public Function TextVariantEqual() As Boolean
  Dim v As Variant,w As Variant
  v="AbC":w="aBc"
  TextVariantEqual=v=w
-End Function`}];project.modules[0].code+='\n'+NATIVE_VARIANT_REFERENCE_PROCEDURES;return {project,checks};
+End Function`}];project.modules[0].code+='\n'+NATIVE_VARIANT_REFERENCE_PROCEDURES+'\n'+NATIVE_PARAMARRAY_PROCEDURES;project.modules.push({...NATIVE_PARAMARRAY_BASE_MODULE});return {project,checks};
 }

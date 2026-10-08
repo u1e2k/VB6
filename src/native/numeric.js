@@ -1,3 +1,4 @@
+import {lowerNativeParamArray} from './param-arrays.js';
 import {planNativeInStrArguments} from './call-plan.js';
 import {mem32} from './x86-operands.js';
 /** Native Single/Double lowering. Floating expressions return an immutable Double
@@ -147,7 +148,8 @@ export const nativeNumericMethods = {
     // order, even with mixed 4/8-byte ABI slots, recursion and array reallocation.
     plan.order.forEach(({node,index:i,omitted})=>{
       const p=signature.params[i],slot=this.arrayWorkspace(nativeParameterBytes(p),'call-argument');
-      if(!target.proc && key(p.type)==='string'){
+      if(p.paramArray){lowerNativeParamArray(this,node.args);}
+      else if(!target.proc && key(p.type)==='string'){
         const transfer=this.nativeExternalStringArgument(p,node);marshalledStrings.push(transfer);
         if(transfer.pin)callPins.push(transfer.pin);
       }else if(node.kind==='addressOf'){this.nativeCallbackArgument(p,node);}

@@ -39,7 +39,7 @@ export function storageLayout(compiler, decl, module, proc) {
     decl.nativeArray = true;
     if(key(decl.type)==='variant')compiler.nativeVariantArraysUsed=true;
     decl.nativeDynamic = !decl.bounds.length;
-    if (decl.parameter && (!decl.byRef || decl.bounds.length)) compiler.fail('Native array parameters must be unsized and ByRef', module);
+    if (decl.parameter && ((!decl.byRef&&!decl.paramArray) || decl.bounds.length)) compiler.fail('Native array parameters must be unsized and ByRef', module);
     if (decl.bounds.length > NATIVE_ARRAY_MAX_RANK) compiler.fail('Native fixed arrays support at most 60 dimensions', module);
     decl.nativeBounds = decl.bounds.map(([low, high]) => {
       const lower = boundValue(compiler, low, module, proc), upper = boundValue(compiler, high, module, proc);
@@ -106,7 +106,7 @@ export const nativeStorageMethods = {
     if(variable.recordOf)return this.recordAddress(variable);
     if (variable.owner?.form) this.x.call(variable.owner.initialize);
     if (variable.label) this.x.value(variable.label);
-    else if (variable.parameter && variable.byRef) this.x.value({argument: variable.offset});
+    else if (variable.parameter && (variable.byRef||variable.paramArray)) this.x.value({argument: variable.offset});
     else this.x.local(variable.offset);
   },
   zeroStorage(variable) {

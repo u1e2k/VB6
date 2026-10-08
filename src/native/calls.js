@@ -12,7 +12,8 @@ export const nativeCallMethods={
   prepareNativeParameters(context) {
     const defaults=new Map();let bytes=context.proc.kind==='function'&&key(context.proc.returnType)==='variant'?4:0;
     for(const p of context.proc.params) {
-      if(p.paramArray)this.fail('Native ParamArray requires Variant storage and is not yet lowered',context);
+      if(p.paramArray&&(p!==context.proc.params.at(-1)||p.bounds?.length!==0||key(p.type)!=='variant'||context.proc.params.some(q=>q.optional)))
+        this.fail('Native ParamArray must be the final unsized Variant array without Optional parameters',context);
       if(p.optional) {
         if(p.bounds!==null&&p.bounds!==undefined)this.fail('Optional native array parameters are not supported',context);
         if(!scalarTypes.has(key(p.type)))this.fail('Optional native parameters require a supported scalar type: '+p.name,context);
@@ -29,6 +30,7 @@ export const nativeCallMethods={
   },
   nativeCallPlan(target,args) {
     const signature=target.proc||target;
+    if(!target.proc&&signature.params.some(p=>p.paramArray))this.fail('Native external ParamArray ABI is not supported');
     const plan=planNativeArguments(signature,args,message=>this.fail(message));
     for(const entry of plan.slots) {
       const p=signature.params[entry.index];

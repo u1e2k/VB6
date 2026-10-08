@@ -112,6 +112,7 @@ export const nativeVariantMethods={
         if(name==='vartype'){x.value(8192+NATIVE_VARIANT_TYPES[key(v.type)]);return true;}
         if(name==='typename'){x.value(this.string(v.type+'()'));return true;}
         if(name==='isarray'){x.value(-1);return true;}
+        if(name==='ismissing'&&v.paramArray){x.value(0);return true;}
         this.fail(name+' does not accept a whole typed native array');
       }
       this.boxVariant(args[0]);
