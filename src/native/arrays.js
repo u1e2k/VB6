@@ -1,3 +1,4 @@
+import {assignNativeStringArray} from './string-arrays.js';
 /** Owned SAFEARRAY storage for fixed/dynamic native arrays. The internal array ABI
  * passes a descriptor slot by reference; it is never exposed to browser code. */
 const key = value => String(value).toLowerCase();
@@ -109,6 +110,7 @@ export const nativeArrayMethods = {
     this.x.push(variable.fixedLength || 0);this.rawStorageAddress(variable);this.x.push().call(A+'erase');
   },
   assignArrayStorage(variable, node) {
+    if(assignNativeStringArray(this,variable,node))return;
     const source=this.variable(node);
     if(!variable.nativeDynamic)this.fail('Whole-array assignment requires a dynamic destination');
     if(!source?.nativeArray || source.elementOf || key(variable.type)!==key(source.type) || (variable.fixedLength||0)!==(source.fixedLength||0))this.fail('Array assignment requires identical declared element types and fixed String lengths');

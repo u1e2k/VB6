@@ -1,3 +1,4 @@
+import {extendNativeStringArrayFixture,nativeStringArrayPolicyModule} from './win32-string-array-fixtures.mjs';
 import {newProject} from '../src/project/model.js';
 /** Counted string library contracts; actual execution is a separate Windows gate. */
 export function nativeStringLibraryFixture(){
@@ -59,9 +60,11 @@ export function nativeStringLibraryFixture(){
  add('Err.Clear\nOn Error GoTo 0\ns=Replace(String$(524288,"a"),"a","bb")');check('Len(s)=1048576 And Left$(s,1)="b" And Right$(s,1)="b"','Replace accepts the exact native BSTR length budget');
  add('For i=1 To 1000\ns=Replace(Replace("aabbaabb","aa","X"),"bb","Y")\nNext');check('s="XYXY"','nested replacement ownership survives repeated allocations');
  check('TextPolicy()="XXa" And TextSearch()=2','caller Option Compare and explicit binary overrides are kept across modules');
+ const arrays=extendNativeStringArrayFixture({add,check});
  add('ExitProcess 0');
  const project=newProject('AotStringLibrary');project.startup='Sub Main';project.modules=[{id:'m',name:'Entry',kind:'module',code:`Option Explicit
 Private sequence As Long
+${arrays.declarations}
 Private Declare Sub ExitProcess Lib "kernel32" (ByVal code As Long)
 Private Function Mark(ByVal s As String) As String
  If s="A" Then
@@ -75,6 +78,7 @@ Private Function MutateSource(ByRef source As String) As String
  source="changed"
  MutateSource="X"
 End Function
+${arrays.handlers}
 Private Sub NeverCalled()
  Dim unused As String
  unused="unreachable"
@@ -87,5 +91,5 @@ Public Function TextPolicy() As String
 End Function
 Public Function TextSearch() As Long
  TextSearch=InStr(string1:="AB",string2:="b")
-End Function`}];return {project,checks};
+End Function`},nativeStringArrayPolicyModule];return {project,checks};
 }

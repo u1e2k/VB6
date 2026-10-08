@@ -1,3 +1,5 @@
+import {emitNativeStringArrayHelpers} from './string-array-kernels.js';
+import {nativeStringArrayType,nativeStringArrayBuiltin} from './string-arrays.js';
 import {emitNativeReplace} from './string-replace.js';
 import {emitNativeCountedEqual} from './string-kernels.js';
 /** Counted UTF-16/BSTR library. Strings are never scanned for NUL terminators.
@@ -23,6 +25,7 @@ const specs={
 for(const fields of Object.values(specs)){for(const f of fields)Object.freeze(f);Object.freeze(fields);}Object.freeze(specs);
 export const nativeStringLibraryMethods={
   stringLibraryType(node){
+    const arrayType=nativeStringArrayType(this,node);if(arrayType)return arrayType;
     if(node.kind!=='call'||node.callee.kind!=='id')return null;
     const name=node.callee.name.toLowerCase().replace(/\$$/,'');
     if(!Object.hasOwn(specs,name)||this.resolveProcedure(node.callee))return null;
@@ -39,6 +42,7 @@ export const nativeStringLibraryMethods={
     this.x.emit(0x5a,0x59).push().emit(0x52,0x51).call(S+'strcomp');
   },
   stringLibraryBuiltin(node,name){
+    if(nativeStringArrayBuiltin(this,node,name))return true;
     if(!Object.hasOwn(specs,name)||this.resolveProcedure(node.callee))return false;
     const fields=specs[name],option=this.context?.module.module.optionCompare==='text'?1:0;
     const signature={name,params:fields.map(f=>({name:f[0],optional:f.length===3}))};
@@ -65,6 +69,7 @@ export const nativeStringLibraryMethods={
   }
 };
 export function emitNativeStringLibrary(c){
+  emitNativeStringArrayHelpers(c);
   const x=c.x;
   if(c.nativeReplaceUsed)emitNativeReplace(c);
   for(const name of ['trim','ltrim','rtrim']){
