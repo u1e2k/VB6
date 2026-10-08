@@ -40,7 +40,8 @@ test('Currency binary files do not silently adopt approved Decimal layout change
 test('FileGet arguments preserve handle, position and storage evaluation order',()=>{
  const input=project('Public Sub Main()\nDim x As Long\nGet #Handle(), Position(), x\nEnd Sub\nPublic Function Handle() As Integer\nHandle=1\nEnd Function\nPublic Function Position() As Long\nPosition=1\nEnd Function');
  const result=convert(input);assert.ok(result.success,JSON.stringify(result.diagnostics));
- assert.match(result.files['Application/Module1.vb'],/FileGet\(FileNumber:=Handle\(\), RecordNumber:=Position\(\), Value:=x\)/);
+ assert.match(result.files['Application/Module1.vb'],/__vbFileGetOrder_long\(Handle\(\), Position\(\), x\)/);
+ assert.match(result.files['Application/Module1.vb'],/FileGet\(fileNumber, value, recordNumber\)/);
 });
 
 test('resolved fixed-string length expressions use the verified bound layout',()=>{

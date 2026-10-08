@@ -109,6 +109,44 @@ preserving overload adapter. Source-class interfaces and their implementing
 methods expose consistent overloads. Read-only indexed getters can use the same
 plan; unsupported frontend signatures are not relaxed to force acceptance.
 
+## Named-argument evaluation
+
+The hosted .NET 10 `defaults` fixture exposed a real ordering failure: the
+frontend/VM observed `21` for `Price(extra:=Mark(2), amount:=Mark(1))`, while
+ordinary named VB.NET emission observed `12`. A named argument's textual position
+is not an evaluation-order guarantee. The original expected trace is unchanged.
+
+`call-order.js` emits a private, typed forwarding method only when supplied named
+arguments permute their formal parameter order. Calls use positional arguments in
+source order, and the forwarding method invokes the original declaration with
+positional references in formal order. These methods are cached per module and
+signature/permutation; they introduce no dispatcher, boxed argument vector or
+additional runtime dependency. Already ordered calls remain native.
+
+```vb
+' Source: Price(extra:=Mark(2), amount:=Mark(1))
+__vbCallOrder0(Mark(2), Mark(1))
+
+Private Function __vbCallOrder0(ByVal extra As VbCurrency,
+                               ByVal amount As VbCurrency) As VbCurrency
+    Return Price(amount, extra)
+End Function
+```
+
+An instance receiver is the first positional input and is evaluated once.
+Matching ByRef storage remains a managed reference, including two aliases to the
+same variable and mutations before a propagated exception. Explicit parentheses
+still create a value temporary. Omitted defaults use fresh declaration-bound
+local storage. No statements are hoisted outside the original expression, so
+loop tests, untaken branches and `On Error Resume Next` retain their boundaries.
+
+This adapter covers statically bound, fixed-arity Subs, Functions and property
+getters. Reordered event calls and ParamArray signatures require a separate
+adapter and remain blocking. Unknown late-bound signatures, setter-index/value
+reordering and every property-value/narrowing copy-back combination are not
+certified by this implementation. The source VM is a second execution path, not
+a licensed Microsoft VB6 oracle.
+
 ## Binary and random file records
 
 `file-record-layout.js` admits a scalar or recursively nested UDT only when its
@@ -133,10 +171,14 @@ file channels are keyed by the calling assembly; moving only the Get adapter int
 an external compatibility DLL would address a different channel table than an
 application-level `FileOpen`. No shared file-channel runtime is added.
 
-Named framework arguments retain source handle, position and storage evaluation
-order even though the framework signature declares its value parameter before
-its record number. Binary byte positions and random record positions remain
-framework operations. Array/Variant/Object wire descriptors, records containing
+A nonconstant position now uses an app-local typed positional adapter, capturing
+handle, position and then storage in source order. Named framework arguments alone
+do not establish that order: `Value` precedes `RecordNumber` in the framework
+signature. Scalar reads forward real ByRef storage; writes capture typed scalar,
+Currency, fixed-string or proven UDT values before invoking the framework.
+Existing Currency and UDT read adapters already have the correct positional
+signature. Literal and omitted positions retain direct scalar framework calls.
+Binary byte positions and random record positions remain framework operations. Array/Variant/Object wire descriptors, records containing
 compatibility-owned storage, and property destinations without a verified file
 reference adapter retain explicit diagnostics rather than guessed serialization.
 
@@ -159,6 +201,17 @@ constant binding and argument ordering. The SDK fixtures in
 a four-byte fixed ASCII string, a signed scaled Currency value, and a 12-byte
 nested record placed at random record number two. These are not just writer/reader
 round trips. They do not prove every locale/code-page or legacy file combination.
+
+`migration-call-order.test.mjs` and `migration-call-order-dotnet.test.mjs` exercise
+receiver capture, omitted defaults, lexical side effects, aliases, parentheses,
+exceptions and loop/branch placement in both output styles. The original failing
+optional-Currency fixture remains part of the hosted gate.
+
+`migration-file-order.test.mjs` and `migration-file-order-dotnet.test.mjs` check
+side-effectful handle/position/storage expressions, a throwing position, and
+independent 20-byte output goldens for Long, Currency, a fixed ASCII string and a
+UDT. The source VM's file bytes and generated .NET file bytes must separately match
+the same literal golden; output text and generated call syntax are also asserted.
 
 The shared SDK harness reports installed SDKs, actual commands, exit statuses and
 stdout/stderr under `reports/vbnet-migration/dotnet`. Missing SDKs are explicit

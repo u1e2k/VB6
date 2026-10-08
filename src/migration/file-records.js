@@ -29,6 +29,22 @@ function helper(context, id, type, currency = false) {
   return name;
 }
 
+/** The framework signature evaluates Value before RecordNumber. Capture a
+ * nonconstant position with a typed positional adapter before touching storage.
+ * Constant positions need no adapter, keeping the common output idiomatic. */
+function orderedFileHelper(context, action, id, type, {currency=false, record=false, fixed=false}={}) {
+  const name = '__vbFile' + (action === 'get' ? 'Get' : 'Put') + 'Order_' + id + (fixed ? '_Fixed' : '');
+  if (context.fileAdapters.has(name)) return name;
+  const writer = new CodeWriter('');
+  writer.open('Private ' + (context.module.kind === 'module' ? '' : 'Shared ') + 'Sub ' + identifier(name) +
+    '(ByVal fileNumber As Integer, ByVal recordNumber As Long, ' + (action === 'get' ? 'ByRef ' : 'ByVal ') + 'value As ' + type + ')');
+  const value = currency ? 'CLng(value.ToDecimal() * 10000D)' : record ? 'DirectCast(value, Global.System.ValueType)' : 'value';
+  writer.line(fileSystem + (action === 'get' ? 'FileGet' : 'FilePut') + '(fileNumber, ' + value + ', recordNumber' + (fixed ? ', True' : '') + ')');
+  writer.close('End Sub');
+  context.fileAdapters.set(name, writer.toString());
+  return name;
+}
+
 export function emitFileRecord(op, context, line) {
   if (op.op !== 'fileRecord') return false;
   const symbol = context.resolve(op.target), type = key(context.type(op.target));
@@ -47,12 +63,15 @@ export function emitFileRecord(op, context, line) {
     context.add('MIG_FILE_REFERENCE', 'Get requires a writable storage location; property accessor copy-back is not a verified file-read reference.');
   }
   const handle = e(op.handle);
+  const ordered = op.position && !(op.position.kind === 'literal' && typeof op.position.value === 'number');
   if (type === 'currency') {
     if (context.decimalCurrency) {
       context.add('MIG_BINARY_CURRENCY_MODERNIZATION', 'Decimal modernization changes Currency binary representation; select preserving Currency semantics for legacy files.');
       line("' Currency binary layout requires preserving semantics.");
     } else if (op.action === 'get') {
       line(identifier(helper(context, 'Currency', context.netType('Currency'), true)) + '(' + handle + ', ' + position + ', ' + target + ')');
+    } else if (ordered) {
+      line(identifier(orderedFileHelper(context, 'put', 'Currency', context.netType('Currency'), {currency:true})) + '(' + handle + ', ' + position + ', ' + target + ')');
     } else {
       line(fileSystem + 'FilePut(FileNumber:=' + handle + ', RecordNumber:=' + position + ', Value:=CLng(' + target + '.ToDecimal() * 10000D))');
     }
@@ -63,8 +82,13 @@ export function emitFileRecord(op, context, line) {
     line(identifier(helper(context, record.owner.name + '_' + record.name, context.netType(context.type(op.target)))) + '(' + handle + ', ' + position + ', ' + target + ')');
     return true;
   }
-  // Named arguments retain VB6's handle/position/storage evaluation order even
-  // though the framework API declares Value before RecordNumber.
+  if (ordered) {
+    const id = record ? record.owner.name + '_' + record.name : type;
+    line(identifier(orderedFileHelper(context, op.action, id, context.netType(context.type(op.target)), {record:!!record, fixed:!!symbol?.fixedLength})) +
+      '(' + handle + ', ' + position + ', ' + target + ')');
+    return true;
+  }
+  // A constant position has no observable evaluation to reorder with Value.
   line(fileSystem + (op.action === 'get' ? 'FileGet' : 'FilePut') + '(FileNumber:=' + handle +
     ', RecordNumber:=' + position + ', Value:=' + (record ? 'DirectCast(' + target + ', Global.System.ValueType)' : target) +
     (symbol?.fixedLength ? ', StringIsFixedLength:=True' : '') + ')');
