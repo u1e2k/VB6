@@ -1,6 +1,7 @@
+import {lifetimeModules} from './lifetimes.mjs';
 import {interfaceModules} from './interfaces.mjs';
 export function conformanceProject() {
-  return {schema:1,name:'NativeConformance',startup:'Sub Main',modules:[...interfaceModules(),
+  return {schema:1,name:'NativeConformance',startup:'Sub Main',modules:[...interfaceModules(),...lifetimeModules(),
     {name:'Counter',kind:'class',code:`Option Explicit
 Private n As Long
 Public Property Get Value() As Long
@@ -50,6 +51,7 @@ Public Sub Main()
   Kill "native-conformance.bin"
   Debug.Assert value = 11
   CheckNativeInterfaces
+  CheckNativeLifetimes
   Debug.Print "NATIVE_CONFORMANCE_OK"
 End Sub`}
   ]};

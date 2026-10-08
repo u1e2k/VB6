@@ -1,5 +1,6 @@
 // Native VB call frames, reference binding and structured error recovery. MIT.
 #include "vb6.hpp"
+#include "lifetime.hpp"
 namespace vb6 {
 static CellPtr makeCell(Frame& frame,const std::string&type,Bounds bounds,int arrayKind,size_t fixed,bool constant,bool autoNew){
   auto&rt=frame.runtime;Value initial;
@@ -29,7 +30,7 @@ Frame::Frame(Runtime&rt,std::shared_ptr<Instance> object,Procedure*proc,Args arg
       if(p.paramArray){
         auto array=std::make_shared<Array>("variant",Bounds{},true,rt.maxArrayElements);array->bounds={{0,static_cast<int32_t>(extras.size())-1}};array->allocated=true;
         for(auto&a:extras)array->values.push_back(coerce(a.value,"variant"));
-        auto cell=std::make_shared<Cell>(Value::array(array));locals[name]=cellRef(cell);arguments.emplace_back(locals.at(name));continue;
+        auto cell=std::make_shared<Cell>(Value::array(array));locals[name]=cellRef(cell);continue;
       }
       Arg arg=bound[i]?*bound[i]:Arg();
       if(arg.value.type==Type::Missing){if(!p.optional)fail(449);if(p.initial)arg=Arg(p.initial(*this));else if(lower(p.type)!="variant")arg=Arg(rt.defaultValue(p.type,this));}
@@ -51,7 +52,6 @@ Frame::Frame(Runtime&rt,std::shared_ptr<Instance> object,Procedure*proc,Args arg
         if(value.type!=Type::Missing&&!p.array)value=coerce((lower(p.type)=="variant"||typeCode(p.type)==Type::Object||typeCode(p.type)==Type::Record)?value:scalar(rt,value),p.type);
         auto cell=std::make_shared<Cell>(value,p.array?"variant":p.type);locals[name]=cellRef(cell);
       }
-      arguments.emplace_back(locals.at(name));
     }
     if(proc->isFunction)declare(proc->name,proc->returnType);
   }catch(...){--runtime.depth;throw;}
@@ -108,25 +108,25 @@ Value Frame::get(const std::string&raw){
 }
 Value Frame::call(const std::string&raw,Args args){
   auto name=lower(raw);
-  if(module.procedures.count(name))return runtime.invoke(self,name,args,true);
-  if(module.procedures.count(name+":get"))return runtime.invoke(self,name+":get",args,true);
-  if(auto it=locals.find(name);it!=locals.end())return callValue(runtime,it->second.get(),args);
-  if(auto it=self->fields.find(name);it!=self->fields.end())return callValue(runtime,it->second->get(),args);
-  if(module.kind=="form"){runtime.load(self);if(self->controls.count(name))return callValue(runtime,Value::object(self->controls.at(name)),args);}
+  if(module.procedures.count(name))return runtime.invoke(self,name,std::move(args),true);
+  if(module.procedures.count(name+":get"))return runtime.invoke(self,name+":get",std::move(args),true);
+  if(auto it=locals.find(name);it!=locals.end())return callValue(runtime,it->second.get(),std::move(args));
+  if(auto it=self->fields.find(name);it!=self->fields.end())return callValue(runtime,it->second->get(),std::move(args));
+  if(module.kind=="form"){runtime.load(self);if(self->controls.count(name))return callValue(runtime,Value::object(self->controls.at(name)),std::move(args));}
   std::shared_ptr<Instance> owner;
   for(auto&entry:runtime.modules){auto&m=entry.second;if(m.kind=="module"&&m.procedures.count(name)&&m.procedures.at(name).scope!="private"){
     if(owner)fail(5,"Ambiguous procedure: "+raw);owner=runtime.instance(entry.first);
   }}
-  if(owner)return runtime.invoke(owner,name,args);
-  auto builtin=runtime.builtins.find(name);if(builtin!=runtime.builtins.end())return builtin->second(*this,args);
-  if(module.kind=="form")return runtime.host->formCall(self,name,args);
+  if(owner)return runtime.invoke(owner,name,std::move(args));
+  auto builtin=runtime.builtins.find(name);if(builtin!=runtime.builtins.end())return builtin->second(*this,std::move(args));
+  if(module.kind=="form")return runtime.host->formCall(self,name,std::move(args));
   fail(453,"Unknown procedure: "+raw);
 }
 Value Frame::create(const std::string&type){return runtime.create(type);}
 Value Frame::callback(const std::string&module,const std::string&procedure){auto instance=runtime.instance(module);if(instance->module->kind!="module")fail(5,"AddressOf requires a standard module");auto found=instance->module->procedures.find(lower(procedure));if(found==instance->module->procedures.end()||found->second.external)fail(453,"Invalid callback procedure");return Value::object(std::make_shared<NativeCallback>(instance,lower(procedure)));}
 Value NativeCallback::invoke(Runtime&rt,const std::string&,Args args){auto instance=owner.lock();if(!instance)fail(91,"Native callback owner has been released");return rt.invoke(instance,procedure,std::move(args),true);}
 Ref Frame::propertyRef(const std::string&raw,Args args){auto name=lower(raw);auto object=self;auto*rt=&runtime;return {[object,rt,name,args]{return rt->invoke(object,name+":get",args,true);},[object,rt,name,args](Value value,bool set){auto all=args;all.emplace_back(value);rt->invoke(object,name+(set?":set":":let"),all,true);},"variant",false,false};}
-Value Frame::result(){if(handlerActive)runtime.error.clear();return procedure&&procedure->isFunction?locals.at(lower(procedure->name)).get():Value{};}
+Value Frame::result(){drainNativeFinalizers(runtime);if(handlerActive)runtime.error.clear();return procedure&&procedure->isFunction?locals.at(lower(procedure->name)).get():Value{};}
 Value Frame::with()const{if(withValues.empty())fail(91);return withValues.back();}
 bool Frame::forStart(const std::string&id,Ref variable,Value start,Value end,Value step){
   start=scalar(runtime,start);end=scalar(runtime,end);step=scalar(runtime,step);variable.set(start);fors[id]={variable,end,step};return binary(step.number()>=0?"<=":">=",variable.get(),end,module.textCompare).truth();
@@ -141,7 +141,7 @@ void Frame::redim(Ref ref,Bounds bounds,bool preserve,const std::string&explicit
   auto old=ref.get();if(old.type==Type::Array){if(!explicitType.empty()&&lower(explicitType)!=lower(old.asArray()->elementType))fail(13);ref.set(Value::array(old.asArray()->resized(bounds,preserve,runtime.maxArrayElements)));}
   else{auto type=explicitType.empty()?"variant":explicitType;auto prototype=runtime.defaultValue(type,this);auto init=[prototype]{return prototype.copy();};ref.set(Value::array(std::make_shared<Array>(type,bounds,true,runtime.maxArrayElements,0,init)));}
 }
-void Frame::mark(int current,int nextInstruction,int sourceLine){site=current;next=nextInstruction;line=sourceLine;}
+void Frame::mark(int current,int nextInstruction,int sourceLine){drainNativeFinalizers(runtime);site=current;next=nextInstruction;line=sourceLine;}
 bool Frame::handle(const Error& e){
   if(handlerActive||(!errorResumeNext&&errorHandler<0))return false;
   runtime.error.number=e.number;runtime.error.description=e.description;runtime.error.source=fromUTF8(e.source.empty()?module.name:e.source);runtime.error.erl=labelLine;
