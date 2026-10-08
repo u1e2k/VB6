@@ -21,7 +21,7 @@
 namespace vb6 {
 using Text = std::u16string;
 struct Runtime; struct Frame; struct Object; struct Array; struct Record; struct Cell;
-struct Module; struct Procedure; struct Instance; struct NativeHost;
+struct Module; struct Procedure; struct Instance; struct NativeHost; struct NativeLifetime;
 using ObjectPtr = std::shared_ptr<Object>;
 using CellPtr = std::shared_ptr<Cell>;
 struct Error : std::runtime_error {
@@ -240,6 +240,7 @@ struct Runtime {
   std::map<std::string,Value> constants;
   std::map<std::string,std::function<Value(Frame&,Args)>> builtins;
   std::unique_ptr<NativeHost> host;
+  std::shared_ptr<NativeLifetime> lifetime;
   std::map<int,std::shared_ptr<FileState>> files;
   std::map<std::string,std::map<std::string,Text>> settings;
   std::vector<std::string> commandLine;
