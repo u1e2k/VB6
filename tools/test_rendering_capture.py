@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from test_rendering_primitives import PrimitiveCaptureTests
 
 
 class CaptureTests(unittest.TestCase):
