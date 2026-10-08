@@ -1,3 +1,4 @@
+import {acquireWebGLContext} from './context.js';
 import {physicalSize} from './policy.js';
 import {encodeInstances, canReuseInstances, rememberInstances, prepareBatches} from './instances.js';
 const VERTEX = `#version 300 es
@@ -24,8 +25,7 @@ void main(){
 export class WebGLPainter {
   constructor(canvas, {onLost = () => {}} = {}) {
     this.canvas = canvas; this.name = 'webgl2'; this.textures = new Map(); this.stats = {frames: 0, drawCalls: 0, uploadedBytes: 0, bufferAllocations: 0, geometryPacks: 0, instanceUploads: 0};
-    const gl = this.gl = canvas.getContext('webgl2', {alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'});
-    if (!gl) throw new Error('WebGL2 unavailable');
+    const context = acquireWebGLContext(canvas), gl = this.gl = context.gl;
     this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.lost = event => { event.preventDefault(); if (!this.disposed) onLost('WebGL2 context lost'); }; canvas.addEventListener('webglcontextlost', this.lost);
     const shader = (type, source) => { const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { const log = gl.getShaderInfoLog(s); gl.deleteShader(s); throw new Error(log); } return s; };
@@ -37,7 +37,7 @@ export class WebGLPainter {
       this.uniform = gl.getUniformLocation(this.program, 'screen'); this.vao = gl.createVertexArray(); gl.bindVertexArray(this.vao); this.buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
       for (let i = 0; i < 6; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 96, i * 16); gl.vertexAttribDivisor(i, 1); }
       this.white = this.texture(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-      const extension = gl.getExtension('WEBGL_debug_renderer_info'); this.adapterInfo = {description: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)};
+      const extension = gl.getExtension('WEBGL_debug_renderer_info'); this.adapterInfo = {description: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), request: context.request, warnings: context.warnings};
     } catch (error) { this.dispose(); throw error; }
     finally { if (vertex) gl.deleteShader(vertex); if (fragment) gl.deleteShader(fragment); }
   }
