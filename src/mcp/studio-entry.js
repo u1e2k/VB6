@@ -1,3 +1,4 @@
+import {installXaml} from '../ide/xaml.js';
 import {VB6Studio, StudioAPI} from '../ide/main.js';
 import {installClassicExport} from '../ide/classic-build.js';
 import {installMacOSExport} from '../ide/macos-build.js';
@@ -13,4 +14,5 @@ if (globalThis.vb6Studio) installVbNetExport(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installMcp(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installCodingAgents(globalThis.vb6Studio, StudioAPI);
 if (globalThis.vb6Studio) installAutoLayout(globalThis.vb6Studio);
-export {installAutoLayout, VB6Studio, StudioAPI, installMcp};
+if (globalThis.vb6Studio) installXaml(globalThis.vb6Studio);
+export {installXaml, installAutoLayout, VB6Studio, StudioAPI, installMcp};
