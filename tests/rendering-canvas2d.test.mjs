@@ -18,9 +18,9 @@ test('adjacent clip runs preserve order including holes and textures',()=>{
   s.add(a,[1,0,0,1],{clip:a});s.native([1,1,2,2],a);s.add(b,[0,1,0,1],{clip:b});s.add(a,[1,1,1,1],{clip:a,page:{canvas:{},width:1,height:1}});
   painter.render(s);assert.equal(calls.clip,3);assert.equal(calls.draw,3);assert.equal(calls.clear,2);assert.equal(calls.depth,0);
 });
-test('equal endpoint colors use a solid fill regardless of array identity',()=>{
+test('explicit equal-endpoint gradients retain their raster path',()=>{
   const {painter,calls}=fixture(),s=new PaintScene(100,100);s.add([0,0,10,10],[1,0,0,1],{color2:[1,0,0,1]});
-  painter.render(s);assert.equal(calls.gradient,0);
+  painter.render(s);assert.equal(calls.gradient,1);
 });
 test('a failed draw restores clip state before the next frame',()=>{
   const {painter,context,calls}=fixture(),s=new PaintScene(100,100);s.add([0,0,10,10],[1,0,0,1]);
