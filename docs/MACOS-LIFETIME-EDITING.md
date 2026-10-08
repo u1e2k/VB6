@@ -52,6 +52,13 @@ bounded UTF-16 range; durable `SelStart`/`SelLength` state survives explicit foc
 changes. `SelStart` cancels the previous selection, lengths clamp to remaining
 text, and negative values fail without partially changing the selection.
 
+`appkit-edit-fields.mm` restores an explicit selection when Cocoa attaches its
+shared field editor, before the first edit notification. Native text, secure-text
+and combo cells retain their respective Cocoa base implementations. Detachment
+captures the range; a new mouse selection supersedes a pending programmatic
+range. This avoids treating `controlTextDidBeginEditing` as a focus notification
+or replacing the secure-input editor with a plain text view.
+
 Text and replacement setters commit the new string and insertion caret before
 raising `Change`. They suppress native notification feedback during mutation and
 do not overwrite a reentrant handler's subsequent edits. `SelText` replacement
@@ -67,6 +74,47 @@ handle and ByRef-buffer contracts remain distinct from real Win32 pointer ABIs.
 The existing SendMessage notification suppression is retained. This increment
 does not establish complete EM_SETSEL negative/reversed-range behavior,
 EM_REPLACESEL undo behavior or every Win32 edit message.
+
+## RichTextBox attributed selections
+
+`appkit-richtext.mm` implements `SelBold`, `SelItalic`, `SelUnderline`,
+`SelStrikeThru`, `SelColor`, `SelBackColor`, `SelFontName`, `SelFontSize`,
+`SelAlignment`, `SelRTF` and `TextRTF` through the same native VB member boundary.
+Character-property getters inspect every effective attributed run in the selected
+UTF-16 range and return `Null` for mixed values. At an insertion caret they read
+native typing attributes. Assigning `Null` is an invalid property value, not an
+instruction to discard existing formatting.
+
+Selected formatting transforms a temporary attributed substring before a single
+commit. Unselected runs and unrelated attributes survive; failed validation or
+font-family conversion does not partially format earlier runs. The selection is
+preserved before `Change` is dispatched. Caret-only character formatting changes
+insertion attributes without reporting a document-content change; subsequent
+`SelText` insertion uses those attributes rather than the character underneath the
+caret. Paragraph alignment applies to the affected paragraphs and restores the
+original character selection. The supported alignment values are left (0), right
+(1), center (2) and justified (3).
+
+Font sizes follow the existing host's 96-logical-pixel / 72-typographic-point
+mapping, with VB sizes rounded to half points. Family selection uses installed
+native fonts and rejects unavailable families; no font file is bundled or loaded
+from a project. These choices are explicit source-compatibility contracts, not
+pixel-equivalence or complete Windows font-substitution certification.
+
+RTF replacement parses in memory before mutating the document, limits the input
+to 16 MiB of UTF-8 transport data, and rejects invalid headers/import failures.
+`SelRTF` replaces only the selection and moves the insertion caret to the end of
+the replacement; `TextRTF` replaces the document and resets the caret. Both keep
+the stored plain text coherent with the native text view. Roundtrip regressions
+check text and formatting, not byte-for-byte RTF serialization. Cocoa can
+normalize the representation and unsupported document features. This is not an
+untrusted-document sandbox or a full RichEdit/OLE file-format implementation.
+
+General undo/redo integration, full selection-change event ordering, advanced
+paragraph indents/bullets/tabs, embedded OLE objects, rich printing, all Win32
+character-format messages and exhaustive clipboard/IME interactions remain
+outside this implementation. The existing whole-control font/appearance setters
+are separate from these selection properties.
 
 ## Lists and implementation boundaries
 
@@ -99,7 +147,14 @@ these executables and retains the existing interface/value checks.
 
 On Apple Silicon, `tests/appkit-edit.mm` exercises a real shared field editor,
 UTF-16 selection, reentrant changes, focus persistence, live text API buffers,
-rich-text attributes, user insertion limits and list identity. These assertions
+rich-text attributes, user insertion limits and list identity. The separate
+`tests/appkit-richtext.mm` exercises mixed selections, formatting preservation,
+insertion style, paragraph alignment, RTF roundtrips and rejection without partial
+mutation. `tests/macos-richtext.test.mjs` checks shared-frontend lowering and SDK
+source enrollment, not native widget behavior. The generated VB form fixture in
+`packages/macos-native/tests/richtext.mjs` is separately built as a signed arm64
+application and executed to exercise compiler lowering, form loading, `Change`
+events, mixed Variant values, RTF replacement and `On Error` together. These assertions
 are part of the existing native workflow alongside signed application and bridge
 execution. A Linux sanitizer pass is not an AppKit or Apple Silicon pass. Exact
 revision-specific results belong in CI artifacts and the pull request, not here.
@@ -114,3 +169,6 @@ edge case. No proprietary runtime binaries or fonts are redistributed.
 - Microsoft End statement: https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/end-statement
 - Apple NSControl currentEditor: https://developer.apple.com/documentation/appkit/nscontrol/currenteditor()
 - Microsoft EM_REPLACESEL: https://learn.microsoft.com/en-us/windows/win32/controls/em-replacesel
+- Apple field editor architecture: https://developer.apple.com/library/archive/documentation/TextFonts/Conceptual/CocoaTextArchitecture/TextFieldsAndViews/TextFieldsAndViews.html
+- Apple text editing and notifications: https://developer.apple.com/library/archive/documentation/TextFonts/Conceptual/CocoaTextArchitecture/TextEditing/TextEditing.html
+- Microsoft InkEdit properties (related RichEdit selection API, not an original VB6 oracle): https://learn.microsoft.com/en-us/windows/win32/tablet/inkedit-properties

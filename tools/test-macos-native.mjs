@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {buildMacOSPackage} from './build-macos-native.mjs';
 import {runTool,writeBuildKit,buildNativeKit} from '../packages/macos-native/src/build-driver.mjs';
 import {conformanceProject} from '../packages/macos-native/tests/conformance.mjs';
+import {richTextProject} from '../packages/macos-native/tests/richtext.mjs';
 const root=path.resolve(import.meta.dirname,'..');buildMacOSPackage(root);
 const {compileMacOS,createMacOSBuildKit,MacOSCompilerClient,verifyMacOSAppArchive}=await import('../packages/macos-native/dist/index.js');
 const sdk=path.join(root,'packages/macos-native'),native=path.join(sdk,'native');
@@ -64,6 +65,12 @@ try {
     await run(compiler,['-std=c++17','-arch','arm64','-isysroot',sdkPath,'-mmacosx-version-min=11.0','-fobjc-arc','-I',native,...uiSources,path.join(cache,built.runtimeSha256,'libvb6-native.a'),'-framework','AppKit','-framework','Foundation','-framework','CoreGraphics','-framework','QuartzCore','-o',ui]);
     await run('/usr/bin/codesign',['--sign','-','--timestamp=none',ui]);
     const uiOutput=await run(ui,[],{timeout:30000});assert.match(uiOutput,/APPKIT_CONFORMANCE_OK/);assert.match(uiOutput,/APPKIT_EDIT_SELECTION_LIST_OK/);assert.match(uiOutput,/APPKIT_RICH_SELECTION_OK/);report.checks.push('appkit-controls-events-api','appkit-live-edit-selection-lists','appkit-rich-selection-formatting');
+    const richKit=createMacOSBuildKit(richTextProject()),richDir=path.join(work,'rich-form-kit');
+    await writeBuildKit(richDir,richKit.files);
+    const richBuilt=await buildNativeKit(richDir,{out:path.join(work,'rich-form-out'),cache,jobs:3,log});
+    assert.equal(richBuilt.architecture,'arm64');assert.equal(richBuilt.signatureVerified,true);assert.equal(richBuilt.cacheHit,true);
+    assert.match(await run(richBuilt.executable,[]),/NATIVE_RICH_FORM_OK/);
+    report.checks.push('signed-generated-rich-form-execution');
     const reused=await buildNativeKit(kitDir,{out:path.join(work,'reused'),cache,jobs:3,log});assert.equal(reused.cacheHit,true);report.checks.push('native-cache-reuse');
     // Verify the exact signed bytes produced by ditto; do not repack the bundle.
     const archive=await verifyMacOSAppArchive(new Uint8Array(await fs.readFile(built.zip)),kit.options);

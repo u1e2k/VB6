@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {richTextProject} from '../packages/macos-native/tests/richtext.mjs';
 import {createForm,createControl} from '../src/project/model.js';
 import {compileMacOS,createMacOSBuildKit} from '../packages/macos-native/dist/index.js';
 
@@ -47,4 +48,12 @@ test('standalone source kit enrolls native rich formatting and editor cell hooks
   assert.ok(manifest.headers.includes('native/appkit-richtext.hpp'));
   assert.ok(kit.files['native/appkit-richtext.hpp']);
   assert.equal(kit.report.artifact,'native-source-build-kit');
+});
+
+test('native rich form acceptance fixture binds errors, events and mixed Variant values', () => {
+  const output=compileMacOS(richTextProject());
+  assert.equal(output.report.modules,2);
+  assert.match(output.files['main.cpp'],/m.procedures\["editor_change"\]/);
+  assert.match(output.files['main.cpp'],/f.call\("IsNull"/);
+  assert.match(output.files['main.cpp'],/f.onError\("next"/);
 });
