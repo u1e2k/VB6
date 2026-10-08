@@ -26,6 +26,49 @@ driver support. Chromium exposes detailed feature and process failures at
 require a browser restart. The page cannot enable a disabled or blocklisted GPU.
 Do not use the test harness's software-driver/unsafe flags as production advice.
 
+## Browser reports `GL_VENDOR = Disabled`, `GL_RENDERER = Disabled`
+
+These specific Chromium fields identify a disabled GL implementation, not a UI
+shader compilation error. A generic `BindToCurrentSequence failed` or null
+WebGPU adapter alone does not establish that diagnosis. Changing power hints
+cannot turn on a disabled browser implementation, so repeated WebGL2 hints stop
+when both explicit fields are present.
+
+In Chrome, open `chrome://settings/system` (Edge: `edge://settings/system`), enable
+**Use graphics acceleration when available**, save your work and relaunch the
+browser. If the setting is already enabled or controlled by an administrator,
+inspect `chrome://gpu` / `edge://gpu` and browser policy for driver, blocklist,
+command-line or GPU-process failures. This web page cannot change those settings.
+Browser-internal addresses must be copied into the address bar; a web link or
+an in-page “Enable GPU” button cannot perform this repair.
+
+Run **Measure Rendering**, then **Save Diagnostics...**. The report now includes
+the saved policy/candidate order and the latest separate, timestamped measurement
+from this IDE session. A WebGL2 failure in the measurement is retained even when
+WebGL2 was omitted from the saved renderer order. The diagnosis labels whether
+its evidence came from the live renderer or the last measurement. A subsequently
+working live GPU takes precedence over earlier measurement failures. Saving the
+report performs no additional GPU probes and sends no information to a server.
+
+A successful Canvas2D measurement does not make Canvas2D the active renderer.
+**Restore Default Backends** edits only the draft backend selectors; **OK** applies
+WebGPU → WebGL2 → Canvas2D → HTML / CSS and **Cancel** preserves the saved order.
+Text, snapping and exported-application options are not changed by this button.
+An explicit GPU-only order still falls back to HTML safely; it is not silently
+replaced. Current-frame geometry and timing summaries are empty/zero in HTML
+mode instead of showing stale values from a previous canvas backend. Frame
+counters remain explicitly labelled as renderer-lifetime totals.
+
+## Canvas2D fallback work
+
+The fallback reuses clipping and solid-fill state only for adjacent commands
+with identical state. It does not reorder paints, combine paths or remove any
+draws. A 10,000-quad scene with one clip/color needs one clip setup and one fill
+assignment, rather than 10,000 of each. Gradients (including equal endpoints),
+alpha, transparent holes, image revisions and fractional-DPI clipping retain
+their original raster operations. Exceptions restore the saved clipping state.
+`clipChanges` and `fillStyleChanges` report per-frame state changes, not GPU time.
+
 ## Acquisition invariants
 
 WebGPU tries high-performance, browser-default, low-power and finally a
@@ -51,7 +94,17 @@ python tools/browser-rendering-recovery.py --require-webgl2 --software-gpu
 ```
 
 Add `--headed` for visible-window execution. Reports and screenshots are under
-`reports/rendering/recovery`. Required GPU runs fail rather than silently skip an
+`reports/rendering/recovery`. The additional negative-browser suite runs with
+browser GPU implementations disabled and compares Canvas2D pixels against an
+independent one-command-at-a-time reference across seven pixel ratios:
+
+```sh
+python tools/browser-disabled-graphics.py
+python tools/browser-disabled-graphics.py --headed
+```
+
+Its reports are under `reports/rendering/disabled`. These test-only disabling
+flags do not ship. This negative suite does not replace the required-GPU cases. Required GPU runs fail rather than silently skip an
 unavailable API. `--offline` inlines local bundles for restricted environments;
 it does not waive a requested GPU requirement. Software-backed API execution is
 correctness evidence, not physical-hardware performance certification.
