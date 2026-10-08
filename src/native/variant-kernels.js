@@ -1,4 +1,5 @@
 import {emitNativeParamArrayHelpers} from './param-arrays.js';
+import {emitNativeVariantArrayHelpers} from './variant-array-kernels.js';
 /** Native Automation VARIANT kernels. Every externally visible write commits
  * from a complete owned temporary; a failed allocation/coercion preserves the
  * previous value. VARIANT is 16 bytes on the PE32 target, including DECIMAL.
@@ -17,6 +18,7 @@ export function emitNativeVariantHelpers(c){
  if(used.has('divide'))emitNativeVariantDivision(x);
  if(used.has('assign'))emitNativeVariantReferences(x);
  if(used.has('paramarray'))emitNativeParamArrayHelpers(c);
+ if(used.has('arrays'))emitNativeVariantArrayHelpers(c);
  const checked=x.unique();x.label(P+'check').test().branch('ns',checked);
  for(const [hr,error]of [[0x8002000a,6],[0x8007000e,7],[0x8002000b,9],[0x8002000d,10],[0x80020012,11],[0x80070057,5],[0x80020004,449]])x.compare(hr).branch('e','error:'+error);
  x.jump('error:13').label(checked).ret();
@@ -64,7 +66,7 @@ export function emitNativeVariantHelpers(c){
   x.push(addr(-16)).push(arg(8)).call(P+'publish').leave(20);
  }
  if(used.has('condition')){
-  const no=x.unique();x.label(P+'condition').enter(16).value(arg(8)).cmp(w('eax'),1).branch('e',no);
+  const no=x.unique();x.label(P+'condition').enter(16).value(arg(8)).cmp(mem16({base:'eax'}),1).branch('e',no);
   for(const offset of [-16,-12,-8,-4])x.mov(m(offset),0);
   x.push(0).push(11).push(arg(8)).push(addr(-16)).call(P+'change').movsx('eax',w('eax',8)).leave(4);
   x.label(no).value(0).leave(4);

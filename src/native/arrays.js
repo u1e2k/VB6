@@ -42,6 +42,7 @@ export const nativeArrayMethods = {
   releaseArrayPin(pin) {
     if(!pin)return;
     const x=this.x;x.push();this.rawStorageAddress(pin);x.push().call(A+'unpin').emit(0x58);
+    if(pin.parentPin)this.releaseArrayPin(pin.parentPin);
   },
   arrayRef(variable) {
     this.rawStorageAddress(variable);
@@ -80,6 +81,8 @@ export const nativeArrayMethods = {
   },
   redimArrayStorage(decl, preserve) {
     const x=this.x, variable=this.variable({kind:'id',name:decl.name});
+    if(variable?.paramArray)this.fail('ReDim cannot target a ParamArray parameter');
+    if(variable&&!variable.nativeArray&&key(variable.type)==='variant')return this.redimVariantArray(variable,decl,preserve);
     if(!variable?.nativeArray || variable.elementOf)this.fail('ReDim requires a declared native array: '+decl.name);
     if(!variable.nativeDynamic)this.fail('ReDim cannot resize a fixed native array: '+decl.name);
     if(decl.explicitType && key(decl.type)!==key(variable.type))this.fail('ReDim cannot change a typed array element type');
@@ -100,17 +103,22 @@ export const nativeArrayMethods = {
   arrayBoundCall(node, upper) {
     if(node.args.length<1||node.args.length>2)this.fail('LBound/UBound expects an array and optional dimension');
     const variable=this.variable(node.args[0]);
+    if((!variable?.nativeArray||variable.elementOf)&&this.type(node.args[0])==='variant')return this.variantArrayBoundCall(node,upper);
     if(!variable?.nativeArray||variable.elementOf)this.fail('LBound/UBound requires a native array');
     this.rawStorageAddress(variable);this.x.push();this.numeric(node.args[1] || {kind:'literal',value:1});
     this.x.emit(0x5b).push().emit(0x53).call(A+(upper?'upper':'lower'));
   },
   eraseStorage(node) {
     const variable=this.variable(node);
+    if(variable?.paramArray)this.fail('Erase cannot target a ParamArray parameter');
+    if(variable&&!variable.nativeArray&&key(variable.type)==='variant')return this.eraseVariantArray(variable);
     if(!variable?.nativeArray||variable.elementOf)this.fail('Native Erase requires an array');
     this.x.push(variable.fixedLength || 0);this.rawStorageAddress(variable);this.x.push().call(A+'erase');
   },
   assignArrayStorage(variable, node) {
+    if(variable.paramArray)this.fail('Whole-array ParamArray replacement is not yet lowered; assign its elements instead');
     if(assignNativeStringArray(this,variable,node))return;
+    if(this.assignNativeVariantArray(variable,node))return;
     const source=this.variable(node);
     if(!variable.nativeDynamic)this.fail('Whole-array assignment requires a dynamic destination');
     if(!source?.nativeArray || source.elementOf || key(variable.type)!==key(source.type) || (variable.fixedLength||0)!==(source.fixedLength||0))this.fail('Array assignment requires identical declared element types and fixed String lengths');

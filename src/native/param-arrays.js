@@ -21,8 +21,8 @@ export function lowerNativeParamArray(c,args) {
     else c.boxVariant(node);
     x.push().push(index);c.rawStorageAddress(owner);x.push().call(P+'put');
   });
-  // The existing unsized array ABI takes a SAFEARRAY**. ReDim/Erase in the callee
-  // update this very slot, so the owner's eventual VariantClear sees its value.
+  // The internal array ABI takes a SAFEARRAY**. The caller owns this slot;
+  // ReDim/Erase are invalid here; direct replacement is not yet lowered.
   c.rawStorageAddress(owner);x.add('eax',8);
   return owner;
 }

@@ -5,13 +5,16 @@
  * or borrowed BSTR escapes its owner. See WIN32-VARIANTS.md for the ABI contract.
  */
 import {mem16,mem32} from './x86-operands.js';
-export const NATIVE_VARIANT_TYPES=Object.freeze({empty:0,null:1,integer:2,long:3,single:4,double:5,currency:6,date:7,string:8,error:10,boolean:11,variant:12,decimal:14,byte:17});
+import {NATIVE_VARIANT_TYPES} from './variant-types.js';
+export {NATIVE_VARIANT_TYPES};
+import {nativeVariantArrayMethods} from './variant-arrays.js';
 const P='native:variant:',key=v=>String(v).toLowerCase(),at=(r,n=0)=>mem32({base:r,displacement:n});
 const binary={'+':'add','-':'subtract','*':'multiply','/':'divide','\\':'idiv',mod:'mod','^':'pow',and:'and',or:'or',xor:'xor',eqv:'eqv',imp:'imp','&':'cat'};
 const masks={'<':1,'=':2,'>':4,'<=':3,'>=':6,'<>':5};
 const conversions={cbyte:'byte',cint:'integer',clng:'long',csng:'single',cdbl:'double',ccur:'currency',cdate:'date',cbool:'boolean',cstr:'string',cdec:'decimal'};
 const predicates={isempty:0,isnull:1,iserror:10};
 export const nativeVariantMethods={
+  ...nativeVariantArrayMethods,
   useVariant(name='copy') {
     (this.nativeVariantsUsed ||= new Set()).add(name);
     if(name==='condition'||name==='assign')this.nativeVariantsUsed.add('change');
@@ -28,6 +31,7 @@ export const nativeVariantMethods={
     x.mov(at('eax'),tag).mov(at('eax',8),value);return v;
   },
   variantType(node) {
+    if(this.variantArrayType(node))return 'variant';
     if(node.kind==='nativeVariant'||node.kind==='empty'||node.kind==='literal'&&node.value===null)return 'variant';
     if(node.kind==='binary'&&(binary[key(node.op)]||masks[key(node.op)]!==undefined)&&[this.type(node.left),this.type(node.right)].includes('variant'))return 'variant';
     if(node.kind==='unary'&&['+','-','not'].includes(key(node.op))&&this.type(node.expr)==='variant')return 'variant';
@@ -42,9 +46,9 @@ export const nativeVariantMethods={
   /** Snapshot a value before evaluating any later operand or actual argument. */
   boxVariant(node) {
     const type=this.type(node),x=this.x;
-    if(type==='variant'){this.expression(node);return;}
     const array=this.variable(node);
-    if(array?.nativeArray&&!array.elementOf)this.fail('A native array inside a Variant is not yet lowered; use a typed Variant array');
+    if(array?.nativeArray&&!array.elementOf){this.boxNativeArray(array);return;}
+    if(type==='variant'){this.expression(node);return;}
     const tag=NATIVE_VARIANT_TYPES[type];if(tag===undefined)this.fail('Native Variant cannot box '+type);
     this.expression(node);x.push();
     const view=this.arrayWorkspace(16,'variant-view');this.zeroStorage(view);this.rawStorageAddress(view);x.popOperand('edx').mov(at('eax'),tag);
@@ -90,6 +94,7 @@ export const nativeVariantMethods={
     x.pushOperand('edx').pushOperand('ecx');this.rawStorageAddress(out);x.push().call(P+helper);return true;
   },
   variantBuiltin(node,name) {
+    if(this.variantArrayBuiltin(node,name))return true;
     if(!name||this.resolveProcedure(node.callee))return false;
     // Inspect RichEdit's mixed-format mask before a scalar or Variant coercion.
     if(this.nativeRichFormatNull(node,name))return true;
@@ -119,7 +124,7 @@ export const nativeVariantMethods={
       if(name==='vartype'){x.movzx('eax',mem16({base:'eax'}));return true;}
       if(name==='typename'){
         const done=x.unique();x.movzx('edx',mem16({base:'eax'}));
-        for(const [tag,text]of [[0,'Empty'],[1,'Null'],[2,'Integer'],[3,'Long'],[4,'Single'],[5,'Double'],[6,'Currency'],[7,'Date'],[8,'String'],[9,'Object'],[10,'Error'],[11,'Boolean'],[14,'Decimal'],[17,'Byte']]){
+        for(const [tag,text]of [[0,'Empty'],[1,'Null'],[2,'Integer'],[3,'Long'],[4,'Single'],[5,'Double'],[6,'Currency'],[7,'Date'],[8,'String'],[9,'Object'],[10,'Error'],[11,'Boolean'],[14,'Decimal'],[17,'Byte'],...[['Integer',2],['Long',3],['Single',4],['Double',5],['Currency',6],['Date',7],['String',8],['Boolean',11],['Variant',12],['Byte',17]].map(([n,t])=>[8192+t,n+'()'])]){
           const next=x.unique();x.cmp('edx',tag).branch('ne',next).value(this.string(text)).jump(done).label(next);
         }
         x.value(this.string('Unknown')).label(done);return true;

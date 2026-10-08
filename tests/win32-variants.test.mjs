@@ -8,7 +8,7 @@ import {nativeVariantFixture} from '../tools/win32-variant-fixtures.mjs';
 const project=(body,procedures='')=>({...newProject('VariantRegression'),startup:'Sub Main',modules:[{id:'m',name:'Entry',kind:'module',code:`Option Explicit\nSub Main()\n${body}\nEnd Sub\n${procedures}`}]});
 for(const optimization of [0,1,2])test('complete Variant fixture links deterministically at O'+optimization,()=>{
  const {project:p,checks}=nativeVariantFixture(),before=JSON.stringify(p),r=compileWin32(p,{optimization});
- assert.equal(checks.length,164);assert.deepEqual(r.bytes,compileWin32(p,{optimization}).bytes);assert.equal(JSON.stringify(p),before);
+ assert.equal(checks.length,214);assert.deepEqual(r.bytes,compileWin32(p,{optimization}).bytes);assert.equal(JSON.stringify(p),before);
  assert.equal(r.report.architecture,'x86');assert.equal(r.report.extraction,false);
  for(const name of ['VariantCopyInd','VariantClear','VariantChangeTypeEx','VarAdd','VarCmp','SafeArrayCreate','SafeArrayCopy'])assert.ok(JSON.stringify(r.report.imports).includes(name),name);
 });
@@ -34,7 +34,6 @@ for(const code of ['Dim value\nvalue=Null','Dim value As Variant\nvalue=CDec("0.
 });
 for(const [source,pattern]of [
  ['Dim v As Variant\nDim n As Long\nTakesLong v',/exact declared type/],
- ['Dim v As Variant\nDim a() As Long\nv=a',/array inside a Variant/],
  ['Dim v As Object',/Native storage/],
  ['Dim v As Variant\nv=New Collection',/expression|procedure|storage/]
 ])test('unsupported Variant boundary remains explicit: '+source.split('\n').at(-1),()=>assert.throws(()=>compileWin32(project(source,'Sub TakesLong(ByRef n As Long)\nEnd Sub')),pattern));
