@@ -7,6 +7,7 @@ const colorFields={backcolor:32,forecolor:36,fillcolor:40,fillstyle:44,shape:48,
 const editable=new Set(['TextBox','RichTextBox']);
 export const nativeControlPropertyMethods={
   nativeControlType(node){
+    const listType=this.nativeListType(node);if(listType)return listType;
     const itemType=nativeItemType(this,node);if(itemType)return itemType;
     const metadata=nativeMetadataType(this,node);if(metadata)return metadata;
     const gridType=this.nativeTabTextType(node)||this.gridType(node)||this.chartType(node);if(gridType)return gridType;
@@ -28,6 +29,7 @@ export const nativeControlPropertyMethods={
     return rect;
   },
   getNativeControlProperty(object,property){
+    if(this.nativeListProperty(object,property))return true;
     if(getNativeMetadataProperty(this,object,property))return true;
     if(property==='tabcaption'&&this.nativeTabText(object,null))return true;
     if(this.nativeTabVisibility(object,property))return true;
@@ -83,6 +85,7 @@ export const nativeControlPropertyMethods={
   },
   setNativeControlProperty(object,property,expr){
     if(object.nativeItem)this.fail('Native common-control item properties are currently read-only');
+    if(this.nativeListProperty(object,property,expr))return true;
     if(setNativeMetadataProperty(this,object,property,expr))return true;
     if(property==='tabcaption'&&this.nativeTabText(object,null,expr,true))return true;
     if(this.nativeTabVisibility(object,property,expr))return true;
@@ -137,6 +140,7 @@ export const nativeControlPropertyMethods={
   },
   nativeControlMethod(object,method,args){
     if(object.nativeItem)this.fail('Native common-control item method is not lowered: '+method);
+    if(this.nativeListMethod(object,method,args))return true;
     if(this.nativeTabTextMethod(object,method,args)||this.nativeGridMethod(object,method,args))return true;
     if(this.nativeImageListMethod(object,method,args)||this.nativeDialogMethod(object,method,args)||this.nativeRichTextMethod(object,method,args)||this.nativeCollectionMethod(object,method,args)||this.nativeFileMethod(object,method,args))return true;
     const type=object.model?.type,x=this.x;

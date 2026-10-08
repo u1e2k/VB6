@@ -32,9 +32,11 @@ export const nativeFlowMethods={
     return binding;
   },
   nativeFlowInstruction(ins,context,index) {
+    if(ins.op==='assign'&&this.nativeListAssignment(ins.target,ins.expr))return true;
     if(ins.op==='expr'&&ins.expr.kind==='member'&&String(ins.expr.name).toLowerCase()==='clear'){
       const object=this.object(ins.expr.object);
       if(object?.nativeCollection){this.nativeCollectionMethod(object,'clear',[]);return true;}
+      if(this.nativeListMethod(object,'clear',[]))return true;
     }
     const x=this.x,next=context.label+':'+(index+1);
     if(ins.op==='branch'){
