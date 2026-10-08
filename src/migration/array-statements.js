@@ -20,9 +20,15 @@ export function emitArrayStatement(op, context, line) {
         context.add('MIG_REDIM_TARGET', 'ReDim requires a resizable array or a scalar Variant, not fixed storage, ParamArray, or As New.');
         continue;
       }
+      const native=context.arrayPlan(symbol);
+      if(native){
+        const bounds=declaration.bounds.map(([,upper])=>'CInt('+expression(upper,context)+')');
+        line('ReDim '+(op.preserve?'Preserve ':'')+target+'('+bounds.join(', ')+')');
+        continue;
+      }
       // Interleave each lower and upper expression. Two separate arrays reorder side effects.
       const pairs = declaration.bounds.flatMap(([lower, upper]) => [lower ? expression(lower, context) : String(context.module.optionBase), expression(upper, context)]);
-      const bounds = 'VbArrayBounds.FromPairs(' + pairs.map(value => 'CInt(' + value + ')').join(', ') + ')';
+      const bounds = context.runtime('VbArrayBounds.FromPairs')+'(' + pairs.map(value => 'CInt(' + value + ')').join(', ') + ')';
       const preserve = op.preserve ? 'True' : 'False';
       if (isVariant(symbol)) {
         const record = [...context.compiled.modules.values()].some(module => Object.keys(module.types).some(type => key(type) === key(declaration.type)));
@@ -31,7 +37,7 @@ export function emitArrayStatement(op, context, line) {
           continue;
         }
         const type = declaration.explicitType ? ', GetType(' + context.netType(declaration.type) + '), ' + (key(declaration.type) === 'object' ? 'True' : 'False') : '';
-        line(target + ' = VbArrays.ResizeVariant(' + expression(node, context, {reference: true}) + ', ' + bounds + ', ' + preserve + type + ')');
+        line(target + ' = '+context.runtime('VbArrays.ResizeVariant')+'(' + expression(node, context, {reference: true}) + ', ' + bounds + ', ' + preserve + type + ')');
       } else if (isArray(symbol)) {
         if (declaration.explicitType && key(declaration.type) !== key(symbol.type)) {
           context.add('MIG_REDIM_ELEMENT_TYPE', 'ReDim cannot change a declared array element type; only a scalar Variant may hold different array types.');
@@ -52,7 +58,12 @@ export function emitArrayStatement(op, context, line) {
         context.add('MIG_ERASE_TARGET', 'Erase of ParamArray or a complex Variant location requires an explicit lifetime/address adapter.');
         continue;
       }
-      if (isVariant(symbol)) line(target + ' = VbArrays.EraseVariant(' + expression(node, context, {reference: true}) + ')');
+      const native=context.arrayPlan(symbol);
+      if(native){
+        line(native.fixed?'Global.System.Array.Clear('+target+', 0, '+target+'.Length)':'Erase '+target);
+        continue;
+      }
+      if (isVariant(symbol)) line(target + ' = '+context.runtime('VbArrays.EraseVariant')+'(' + expression(node, context, {reference: true}) + ')');
       else if (isArray(symbol)) line(target + '.Erase()');
       else context.add('MIG_ERASE_TARGET', 'Erase requires an array or Variant variable.');
     }

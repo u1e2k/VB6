@@ -15,7 +15,7 @@ export function validateCallSemantics(node, symbol, context) {
     const value = argument.kind === 'named' ? argument.expr : argument;
     if (!parameter?.byRef || value.kind === 'group' || value.kind === 'byval') continue;
     const source = context.resolve(value);
-    if (source?.arrayElement && !source.paramArray) {
+    if (source?.arrayElement && !source.paramArray && !(value.kind==='call'&&context.arrayPlan(context.resolve(value.callee))&&key(parameter.type)===key(source.type))) {
       context.add('MIG_ARRAY_ELEMENT_BYREF', 'A VB6 array element passed ByRef requires a live value-cell adapter; managed property copy-back cannot preserve aliasing or writes before an exception.');
     }
   }

@@ -15,3 +15,19 @@ const node: MigrationExpression = {kind:'binary',op:'+',left:{kind:'literal',val
 const args = parseMigrationArguments(['--help']);
 void runMigrationCli(['--help'], {stdout(message) { const text: string = message; void text; }});
 void [bytes,node,args];
+const typedSupport: MigrationPlugin = {
+  id: 'declared-support', requires: [], representationSafe: true,
+  expression({node}, context) {
+    if (node?.kind === 'id' && node.name === 'Pad') {
+      context.requireRuntime('VbRuntime.FixedString');
+      return {code: 'VbRuntime.FixedString("x", 4)', requires: ['VbRuntime.FixedString']};
+    }
+    return undefined;
+  }
+};
+const nativeResult = createVbNetMigrator({plugins:[typedSupport]}).convertProject(project, {
+  codeStyle: 'native', runtime: 'minimal', semanticPolicy: 'modernize', acceptedRules:['currency-decimal'],
+  runtimePackage: {id:'Company.Compatibility',version:'0.2.0'}
+});
+const featureNames: readonly string[] | undefined = nativeResult.report.runtime?.features;
+void featureNames;

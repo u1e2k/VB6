@@ -1,3 +1,5 @@
+import {canReturnDirectly} from './output-plan.js';
+import {finishRuntimeImports} from './runtime-plan.js';
 import {defaultIdentifierType} from '../language/default-types.js';
 import {key, identifier, qualified, CodeWriter} from './names.js';
 import {createContext, isBuiltin} from './context.js';
@@ -47,12 +49,13 @@ function procedureBody(writer,context) {
   const {proc}=context;inferredLocals(context);
   for(const param of proc.params)if(!param.byRef&&!param.paramArray){
     const record=[...context.compiled.modules.values()].some(module=>Object.keys(module.types).some(type=>key(type)===key(param.type)));
-    if(key(param.type)==='variant'||record){
-      const name=context.name(param.name),copy='VbRuntime.CopyValue('+name+')';
+    if(key(param.type)==='variant'||record&&(context.options.codeStyle!=='native'||context.record(param.type)?.copy)){
+      const name=context.name(param.name),copy=context.runtime('VbRuntime.CopyValue')+'('+name+')';
       writer.line(name+' = '+(record?'CType('+copy+', '+context.netType(param.type)+')':copy),context);
     }
   }
-  if(proc.kind==='function'||proc.accessor==='get'){
+  context.directReturn=context.options.codeStyle==='native'&&canReturnDirectly(proc)&&!context.representations.opaque;
+  if(!context.directReturn&&(proc.kind==='function'||proc.accessor==='get')){
     context.aliases.set(key(proc.name),'__vbResult');
     writer.line('Dim __vbResult As '+context.netType(proc.returnType)+' = '+defaultValue({type:proc.returnType,bounds:null},context));
   }
@@ -64,7 +67,7 @@ function procedureBody(writer,context) {
   // aliases distinguish it from general VbArray parameters.
   if(proc.code.some(op=>['onError','resume'].includes(op.op))&&proc.code.some(op=>op.op==='gosub'||op.op==='computedJump'&&op.gosub))context.add('MIG_GOSUB_RESUME','Combined GoSub and unstructured error resumption needs differential validation of synthetic continuation boundaries.');
   emitStatements(writer,context);
-  if(proc.kind==='function'||proc.accessor==='get')writer.line('Return __vbResult');
+  if(!context.directReturn&&(proc.kind==='function'||proc.accessor==='get'))writer.line('Return __vbResult');
 }
 function emitProperty(writer,group,state,module,{contract=false}={}) {
   const get=group.find(p=>p.accessor==='get'),set=group.find(p=>p.accessor==='let')||group.find(p=>p.accessor==='set'),proc=get||set,context=createContext(state,module,proc);
@@ -105,10 +108,11 @@ function field(writer,decl,context) {
   }else writer.line(variable(decl,context),{source:context.source,line:decl.line||1});
 }
 export function emitModule(state,module,path) {
+  state={...state,generatedFile:path};
   const writer=new CodeWriter(path),context=createContext(state,module);
   writer.line('Option Explicit On');writer.line('Option Strict '+(state.options.strict?'On':'Off'));writer.line('Option Infer On');writer.line('Option Compare '+(module.optionCompare==='text'?'Text':'Binary'));
-  writer.line('Imports System');writer.line('Imports Microsoft.VisualBasic');writer.line('Imports VB6.Compatibility');
-  if(state.target==='winforms')writer.line('Imports VB6.Compatibility.Windows');writer.line();
+  writer.line('Imports System');writer.line('Imports Microsoft.VisualBasic');
+  writer.runtimeImportStart=writer.lines.length;writer.line();writer.line();writer.line();
   // Generated identifiers are reserved only within converted modules, never
   // changed silently when the source already uses this prefix.
   if(/\b__vb\w*/i.test(module.source))context.add('MIG_GENERATED_NAME','Source uses the reserved migration identifier prefix __vb; rename it or supply a naming adapter.');
@@ -148,7 +152,7 @@ export function emitModule(state,module,path) {
     writer.open(header,c);if(constructor&&module.form)writer.line('InitializeComponent()');procedureBody(writer,c);writer.close(proc.kind==='function'?'End Function':'End Sub');writer.line();
   }
   for(const group of propertyGroups(module).values())emitProperty(writer,group,state,module);
-  if(state.entry?.kind==='main'&&key(state.entry.module)===key(module.name)){writer.open('Friend Sub __vbStart()');writer.line('[Main]()');writer.close('End Sub');}
+  if(!state.directEntry&&state.entry?.kind==='main'&&key(state.entry.module)===key(module.name)){writer.open('Friend Sub __vbStart()');writer.line('[Main]()');writer.close('End Sub');}
   writer.close(module.kind==='module'?'End Module':'End Class');
-  return {code:writer.toString(),mappings:writer.mappings};
+  return finishRuntimeImports(writer,context);
 }
