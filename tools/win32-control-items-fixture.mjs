@@ -87,6 +87,7 @@ Private Declare Function SetCursorPos Lib "user32" (ByVal x As Long, ByVal y As 
 Private Declare Function PostMessageW Lib "user32" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, ByVal lp As Long) As Long
 Private Declare Function GetMessageW Lib "user32" (message As MSGAPI, ByVal hwnd As Long, ByVal first As Long, ByVal last As Long) As Long
 Private Declare Function DispatchMessageW Lib "user32" (message As MSGAPI) As Long
+Private Declare Function PeekMessageW Lib "user32" (message As MSGAPI, ByVal hwnd As Long, ByVal first As Long, ByVal last As Long, ByVal remove As Long) As Long
 Private listCalls As Long, treeCalls As Long, outerIndex As Long, seenControlIndex As Integer
 Private beforeNested As String, afterNested As String, insideNested As String, outerKey As String, treeText As String, treeKey As String
 Private clearNested As Boolean, staleError As Long`,
@@ -126,6 +127,7 @@ Private Function PulseTree(ByVal item As Long) As Long
  Dim old As POINTAPI, point As POINTAPI, bounds As RECTAPI, message As MSGAPI, n As Long, packed As Long
  If GetCursorPos(old)=0 Then Exit Function
  On Error GoTo RestoreCursor
+ n=SendValue(Tree.hWnd,&H1114,0,item)
  bounds.left=item
  If SendRecord(Tree.hWnd,&H1104,1,bounds)=0 Then GoTo RestoreCursor
  point.x=bounds.left+2
@@ -133,14 +135,15 @@ Private Function PulseTree(ByVal item As Long) As Long
  packed=point.x+point.y*65536
  If ClientToScreen(Tree.hWnd,point)=0 Then GoTo RestoreCursor
  If SetCursorPos(point.x,point.y)=0 Then GoTo RestoreCursor
+ ' Queue the release before dispatch: COMCTL32 can pump input in its press handler.
+ ' Never wait for a release already consumed by that nested native loop.
  If PostMessageW(Tree.hWnd,&H201,1,packed)=0 Then GoTo RestoreCursor
+ If PostMessageW(Tree.hWnd,&H202,0,packed)=0 Then GoTo RestoreCursor
  n=GetMessageW(message,Tree.hWnd,&H201,&H201)
  If n<=0 Then GoTo RestoreCursor
  n=DispatchMessageW(message)
- If PostMessageW(Tree.hWnd,&H202,0,packed)=0 Then GoTo RestoreCursor
- n=GetMessageW(message,Tree.hWnd,&H202,&H202)
- If n<=0 Then GoTo RestoreCursor
- n=DispatchMessageW(message)
+ n=PeekMessageW(message,Tree.hWnd,&H202,&H202,1)
+ If n<>0 Then n=DispatchMessageW(message)
  PulseTree=1
 RestoreCursor:
  n=SetCursorPos(old.x,old.y)
