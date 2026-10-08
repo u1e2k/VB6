@@ -1,19 +1,11 @@
+import {formStamp} from './contract.js';
 import {formToXaml,compileFormXaml,synchronizeFormXaml,xamlEnabled} from './forms.js';
 import {normalizeProject} from '../project/model.js';
 import {renameSymbol} from '../editor/language-service.js';
 
 const clone = value => structuredClone(value);
 const moduleFor = (project,id) => { const module=project.modules.find(m=>m.id===id);if(!module?.form)throw new Error('The XAML form module no longer exists.');return module; };
-/** Canonical JSON, rather than a hash, avoids collision-based stale-write acceptance. */
-export function formStamp(form) {
-  const sort = (value,depth=0) => {
-    if(depth>128)throw new RangeError('Form metadata is too deeply nested.');
-    if(Array.isArray(value))return value.map(v=>sort(v,depth+1));
-    if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(k=>[k,sort(value[k],depth+1)]));
-    return value;
-  };
-  return JSON.stringify(sort(form));
-}
+export {formStamp};
 export function readXamlDocument(module,options={}) {
   if(!module?.form)throw new TypeError('XAML authoring requires a form module.');
   const state=module.xaml;
