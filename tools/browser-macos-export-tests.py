@@ -120,6 +120,9 @@ with sync_playwright() as pw:
         before = page.evaluate('JSON.stringify(vb6Studio.project)')
         check('Win32, Microsoft runtime, VB.NET and macOS exports remain independent', page.evaluate('''['exportWin32','exportClassic','exportVbNet','exportMacOS'].every(id=>vb6Studio.menu('File').some(i=>i?.id===id&&i.enabled))'''))
         dialog()
+        # Independent source exports carry ZIP creation timestamps. Keep timers
+        # running, but deliberately give the two builds different wall-clock times.
+        page.clock.set_fixed_time('2001-01-01T12:00:00Z')
         with page.expect_download() as item:
             page.get_by_role('button', name='Download Source Build Kit', exact=True).click()
         source = OUT/'source-kit.zip'
@@ -133,13 +136,22 @@ with sync_playwright() as pw:
             check('exported source driver parses independently', subprocess.run(['node','--check',str(driver)],capture_output=True).returncode==0)
         check('source export does not contact a compiler or mutate project', not requests and (not MEMORY or page.evaluate('__macTestFixture.requests.length')==0) and page.evaluate('JSON.stringify(vb6Studio.project)')==before)
         check('download link stays visible inside the active dialog', page.get_by_role('link', name='Save ZIP: NativeFixture-macos-source.zip').is_visible())
-        page.evaluate('''() => {const click=HTMLAnchorElement.prototype.click;window.restoreMacClick=()=>HTMLAnchorElement.prototype.click=click;HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('-macos-source.zip'))return;return click.call(this);};}''')
+        first_url = page.get_by_role('link', name='Save ZIP: NativeFixture-macos-source.zip').get_attribute('href')
+        page.evaluate('''() => {const click=HTMLAnchorElement.prototype.click;window.restoreMacClick=()=>HTMLAnchorElement.prototype.click=click;HTMLAnchorElement.prototype.click=function(){if(this.download.endsWith('-macos-source.zip')){window.suppressedMacDownload=this.href;return;}return click.call(this);};}''')
+        page.clock.set_fixed_time('2001-01-01T12:01:00Z')
         page.get_by_role('button', name='Download Source Build Kit', exact=True).click()
+        suppressed_url = page.evaluate('window.suppressedMacDownload')
+        check('suppressed automatic download retains its own manual-save URL', bool(suppressed_url) and suppressed_url != first_url and suppressed_url == page.get_by_role('link', name='Save ZIP: NativeFixture-macos-source.zip').get_attribute('href'))
+        # The retry oracle is the Blob offered by THIS build, not the earlier ZIP.
+        # Snapshot it before the manual click, then compare every downloaded byte.
+        expected_retry = bytes(page.evaluate('''async () => Array.from(new Uint8Array(await (await fetch(window.suppressedMacDownload)).arrayBuffer()))'''))
         with page.expect_download() as retry:
             page.get_by_role('link', name='Save ZIP: NativeFixture-macos-source.zip').click()
         retried = OUT/'source-kit-retry.zip'
         retry.value.save_as(retried)
-        check('manual save retries the exact source archive after a suppressed automatic click', source.read_bytes()==retried.read_bytes())
+        check('manual save retries the exact source archive after a suppressed automatic click', expected_retry==retried.read_bytes())
+        with zipfile.ZipFile(source) as first, zipfile.ZipFile(retried) as second:
+            check('distinct source-build timestamps do not change any exported file payload', first.infolist()[0].date_time != second.infolist()[0].date_time and first.namelist()==second.namelist() and all(first.read(name)==second.read(name) for name in first.namelist()))
         page.evaluate('void restoreMacClick()')
         page.get_by_label('macOS application name', exact=True).focus()
         page.keyboard.press('Shift+Tab')
