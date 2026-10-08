@@ -66,8 +66,19 @@ export function prepareNativeList(c,control){
   const data=control.model.properties.ItemData;
   if(data!==undefined&&(!Array.isArray(data)||data.length>(control.model.properties.List||[]).length||data.some(n=>!Number.isInteger(n)||n< -2147483648||n>2147483647)))
     c.fail('Native ItemData must be signed LONGs corresponding to saved List entries',control.module);
+  try{control.initialListSelection=nativeListInitialSelection(control.model.type,control.model.properties);}catch(error){c.fail(error.message,control.module);}
   control.listInfo='list-info:'+control.module.name+':'+control.key;
   c.data.align(4).label(control.listInfo).u32(0).u32(0xffffffff).reference(control.handle);
+}
+/** A VB ListIndex of -1 means no initial selection, never LB_SETSEL's
+ * select-all sentinel. Only a real item can initialize a multi-select caret. */
+export function nativeListInitialSelection(type,properties){
+  if(properties.ListIndex===undefined)return [];
+  const index=Number(properties.ListIndex);
+  if(!Number.isInteger(index)||index< -1||index>=(properties.List||[]).length)
+    throw new TypeError('Native initial ListIndex must be -1 or an existing zero-based item');
+  if(type==='ListBox'&&properties.MultiSelect)return index===-1?[]:[[0x183,1,index],[0x19e,index,0]];
+  return [[type==='ListBox'?0x186:0x14e,index,0]];
 }
 export function createNativeList(c,control){
   if(!isList(control))return;
@@ -78,6 +89,7 @@ export function createNativeList(c,control){
     // Use Windows' returned index: the saved list may be sorted on insertion.
     x.mov('ecx','eax').push(p.ItemData?.[index]??0).pushOperand('ecx').push(m.setdata).push(mem(control.handle)).invoke('user32.dll','SendMessageW').compare(-1).branch('e','error:381');
   }
+  for(const [msg,wp,lp]of control.initialListSelection)x.api('user32.dll','SendMessageW',[mem(control.handle),msg,wp,lp]);
 }
 export const nativeListMethods={
   nativeListType(node){

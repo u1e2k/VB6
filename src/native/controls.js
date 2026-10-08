@@ -99,7 +99,6 @@ export const nativeControlMethods={
       if(['CheckBox','OptionButton'].includes(type))send(0xf1,type==='OptionButton'?(p.Value?1:0):Number(p.Value||0));
       if(['ListBox','ComboBox'].includes(type)) {
         createNativeList(this,control);
-        if(p.ListIndex!==undefined){if(type==='ListBox'&&p.MultiSelect){send(0x183,1,Number(p.ListIndex));send(0x19e,Number(p.ListIndex),0);}else send(type==='ListBox'?0x186:0x14e,Number(p.ListIndex));}
       }
       if(NATIVE_SCROLL_CONTROLS.has(type)) {
         x.api('user32.dll','SetScrollRange',[mem(control.handle),2,Number(p.Min??0),Number(p.Max??32767),1]);

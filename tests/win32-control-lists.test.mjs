@@ -1,3 +1,4 @@
+import {nativeListInitialSelection} from '../src/native/control-lists.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {newProject,createControl} from '../src/project/model.js';
@@ -12,7 +13,7 @@ for(const optimization of [0,1,2])test(`native indexed-list fixture emits determ
   const {project:p,checks}=nativeControlFixtures().find(f=>f.project.name==='AotControlLists');
   const before=JSON.stringify(p),a=compileWin32(p,{optimization}),b=compileWin32(p,{optimization});
   assert.deepEqual(a.bytes,b.bytes);assert.equal(JSON.stringify(p),before);
-  assert.equal(a.report.target,'win32-aot');assert.equal(a.report.extraction,false);assert.equal(checks.length,32);
+  assert.equal(a.report.target,'win32-aot');assert.equal(a.report.extraction,false);assert.equal(checks.length,33);
   const v=new DataView(a.bytes.buffer,a.bytes.byteOffset,a.bytes.byteLength),pe=v.getUint32(0x3c,true);
   assert.equal(v.getUint32(pe,true),0x4550);assert.equal(v.getUint16(pe+4,true),0x14c);
   for(const symbol of ['SendMessageW','IsWindow','GetWindowLongW','SysAllocStringLen','SysReAllocStringLen','SysFreeString'])assert.ok(a.report.imports.some(i=>i.symbol===symbol),symbol);
@@ -35,4 +36,14 @@ for(const value of [[1.5],[-2147483649],[2147483648],['17'],[1,2],{},null])test(
 });
 test('unsupported List assignment is not silently redirected to a get or a global call',()=>{
   assert.throws(()=>compileWin32(project('Items.List(0)="new"')),/List\(index\) assignment is not yet lowered/);
+});
+
+test('initial no-selection never emits the native multi-select-all sentinel',()=>{
+  for(const MultiSelect of [1,2]){
+    assert.deepEqual(nativeListInitialSelection('ListBox',{List:['a','b'],ListIndex:-1,MultiSelect}),[]);
+    assert.deepEqual(nativeListInitialSelection('ListBox',{List:['a','b'],ListIndex:1,MultiSelect}),[[0x183,1,1],[0x19e,1,0]]);
+  }
+  assert.deepEqual(nativeListInitialSelection('ListBox',{List:[],ListIndex:-1,MultiSelect:0}),[[0x186,-1,0]]);
+  assert.deepEqual(nativeListInitialSelection('ComboBox',{List:[],ListIndex:-1}),[[0x14e,-1,0]]);
+  for(const ListIndex of [-2,2,0.5,NaN])assert.throws(()=>nativeListInitialSelection('ListBox',{List:['a','b'],MultiSelect:2,ListIndex}),/ListIndex/);
 });

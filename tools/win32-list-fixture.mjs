@@ -7,8 +7,10 @@ export function nativeListControlFixture(fixture){
   control('ComboBox','SortedCombo',{Sorted:true,List:['zeta','alpha'],ItemData:[23,-1],Top:1950});
   control('ListBox','Lists',{Index:3,List:['one','two','three'],MultiSelect:0,Left:2400});
   control('ListBox','Lists',{Index:7,List:['one','two','three'],MultiSelect:2,Left:2400,Top:750});
+  control('ListBox','Seeded',{List:['zero','one','two'],MultiSelect:1,ListIndex:1,Left:4800,Top:750});
   control('ListBox','Dead',{Top:2550});
   add('Dim n As Long, s As String, value As String');
+  check('Lists(7).SelCount=0 And Not Lists(7).Selected(0) And Not Lists(7).Selected(1) And Not Lists(7).Selected(2) And Seeded.SelCount=1 And Seeded.Selected(1) And Not Seeded.Selected(0)','initial multi-selection maps ListIndex=-1 to no selection and a nonnegative index to one selected item');
   check('Plain.ListCount=2 And Plain.List(0)="alpha" And Plain.List(index:=1)="omega"','List reads saved strings using zero-based and named indices');
   check('Plain.ItemData(0)=-1 And Plain.ItemData(1)=2147483647 And Combo.ItemData(0)=-2147483648','all signed LONG item values, including -1, are distinct from an invalid index');
   check('Plain.NewIndex=-1 And SortedList.NewIndex=-1 And Combo.NewIndex=-1','initial saved entries do not masquerade as AddItem calls');

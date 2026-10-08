@@ -1,4 +1,4 @@
-/** Real common controls: queued mouse messages, WM_NOTIFY, live Unicode text,
+/** Real common controls: queued native input, WM_NOTIFY, live Unicode text,
  * indexed ByRef callbacks, nesting and invalidation. No JS rendering substitute. */
 export function commonItemControlFixture(fixture){
   const {control,add,check,finish}=fixture('AotControlItemObjects');
@@ -84,7 +84,22 @@ End Type
 Private Declare Function GetCursorPos Lib "user32" (point As POINTAPI) As Long
 Private Declare Function ClientToScreen Lib "user32" (ByVal hwnd As Long, point As POINTAPI) As Long
 Private Declare Function SetCursorPos Lib "user32" (ByVal x As Long, ByVal y As Long) As Long
-Private Declare Function PostMessageW Lib "user32" (ByVal hwnd As Long, ByVal message As Long, ByVal wp As Long, ByVal lp As Long) As Long
+Private Type INPUT32
+ kind As Long
+ dx As Long
+ dy As Long
+ data As Long
+ flags As Long
+ time As Long
+ extra As Long
+End Type
+Private Type INPUTPAIR
+ down As INPUT32
+ up As INPUT32
+End Type
+Private Declare Function SendInput Lib "user32" (ByVal count As Long, inputs As INPUTPAIR, ByVal size As Long) As Long
+Private Declare Function SetForegroundWindow Lib "user32" (ByVal hwnd As Long) As Long
+Private Declare Function GetForegroundWindow Lib "user32" () As Long
 Private Declare Function GetMessageW Lib "user32" (message As MSGAPI, ByVal hwnd As Long, ByVal first As Long, ByVal last As Long) As Long
 Private Declare Function DispatchMessageW Lib "user32" (message As MSGAPI) As Long
 Private Declare Function PeekMessageW Lib "user32" (message As MSGAPI, ByVal hwnd As Long, ByVal first As Long, ByVal last As Long, ByVal remove As Long) As Long
@@ -124,8 +139,10 @@ Private Sub Tree_NodeClick(ByVal Node As Node)
  treeKey=Node.Key
 End Sub
 Private Function PulseTree(ByVal item As Long) As Long
- Dim old As POINTAPI, point As POINTAPI, bounds As RECTAPI, message As MSGAPI, n As Long, packed As Long
+ Dim old As POINTAPI, point As POINTAPI, bounds As RECTAPI, message As MSGAPI, n As Long, packed As Long, clicks As INPUTPAIR
  If GetCursorPos(old)=0 Then Exit Function
+ n=SetForegroundWindow(Me.hWnd)
+ If GetForegroundWindow()<>Me.hWnd Then Exit Function
  On Error GoTo RestoreCursor
  n=SendValue(Tree.hWnd,&H1114,0,item)
  bounds.left=item
@@ -135,10 +152,12 @@ Private Function PulseTree(ByVal item As Long) As Long
  packed=point.x+point.y*65536
  If ClientToScreen(Tree.hWnd,point)=0 Then GoTo RestoreCursor
  If SetCursorPos(point.x,point.y)=0 Then GoTo RestoreCursor
- ' Queue the release before dispatch: COMCTL32 can pump input in its press handler.
- ' Never wait for a release already consumed by that nested native loop.
- If PostMessageW(Tree.hWnd,&H201,1,packed)=0 Then GoTo RestoreCursor
- If PostMessageW(Tree.hWnd,&H202,0,packed)=0 Then GoTo RestoreCursor
+ ' SendInput populates the actual input queue and its screen-coordinate MSG.pt.
+ ' PostMessage mouse lParam alone is not a physical-input queue record.
+ ' Insert the complete pair before COMCTL32 can enter a nested input loop.
+ clicks.down.flags=2
+ clicks.up.flags=4
+ If SendInput(2,clicks,28)<>2 Then GoTo RestoreCursor
  n=GetMessageW(message,Tree.hWnd,&H201,&H201)
  If n<=0 Then GoTo RestoreCursor
  n=DispatchMessageW(message)
