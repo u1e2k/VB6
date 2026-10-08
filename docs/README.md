@@ -26,6 +26,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Language frontend](LANGUAGE-FRONTEND.md): scanning, declarations and diagnostics.
 - [VB.NET / .NET 10 migration](VBNET-MIGRATION.md): source conversion, ZIP export,
   reusable packages, compatibility runtime, extensions and conformance gates.
+- [VB.NET language and record lowering](VBNET-LANGUAGE-LOWERING.md): independent
+  property accessors, exact optional defaults, binary layouts and dispatch boundaries.
 - [Native-first VB.NET output and support policies](VBNET-NATIVE-FIRST.md).
 - [Compiler/runtime](COMPILER-RUNTIME.md) and [scalar/Variant semantics](SCALAR-COMPATIBILITY.md).
 - [Source debugger](DEBUGGER.md), [extended debugger contracts](DEBUGGER-COMPATIBILITY.md),
@@ -44,6 +46,8 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Auto Layout designer](auto-layout-designer.md): opt-in panel, canvas interaction,
   shared solver and export boundaries.
 - [Detached browser windows](BROWSER-WINDOWS.md).
+- [UI rendering backends](RENDERING.md): settings, native islands, lifecycle,
+  performance measurement and strict acceptance; [rendering source attribution](RENDERING-SOURCES.md).
 - [IDE themes](IDE-THEMES.md), [application themes](APPLICATION-THEMES.md) and
   [matching icon packs](THEME-ICON-PACKS.md).
 - [Classic icons](ICON-AUDIT.md), [classic HTML rendering and attribution](CLASSIC-HTML-RENDERING.md)
@@ -55,7 +59,6 @@ These guides describe the implemented system, not complete native VB6 parity.
   [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
 - [Win32 controls](WIN32-CONTROLS.md): native AOT control coverage, property and stream ownership, layout integration, output dependencies and Windows execution checks.
-- [Native x86 strings and metadata](NATIVE-STRING-METADATA.md): counted Replace/InStr, form/control/Timer Tag ownership and HWND-backed TabStop.
 - [Native grids, charts and tab pages](WIN32-GRIDS-CHARTS-TABS.md): storage, editing, GDI, ownership and execution gates.
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),

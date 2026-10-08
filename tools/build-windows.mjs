@@ -100,6 +100,16 @@ export async function stageWindows(options) {
   await fs.rm(stage, { recursive: true, force: true }); await fs.mkdir(path.join(stage, 'web'), { recursive: true });
   for (const file of ['main.cjs', 'preload.cjs', 'policy.cjs', 'smoke.cjs']) await fs.copyFile(path.join(root, 'desktop', file), path.join(stage, file));
   for (const file of ['boot.mjs', 'studio.mjs', 'runtime-document.mjs', 'gpu-probe.mjs', 'window-transport.mjs']) await fs.copyFile(path.join(root, 'desktop', file), path.join(stage, 'web', file));
+  // The desktop adapter imports the same loader as F5/Immediate in source.
+  // Relocate that dependency into the manifest-controlled, flat web directory;
+  // a packaged app has no ../src tree and the native protocol must not expose it.
+  // https://www.electronjs.org/docs/latest/api/protocol
+  const studioModule = path.join(stage, 'web', 'studio.mjs');
+  const studioSource = await fs.readFile(studioModule, 'utf8');
+  const sharedImport = "from '../src/ide/runtime-document.js'";
+  if (studioSource.split(sharedImport).length !== 2) throw new Error('Unexpected native studio loader import');
+  await fs.copyFile(path.join(root, 'src/ide/runtime-document.js'), path.join(stage, 'web/runtime-document-loader.mjs'));
+  await fs.writeFile(studioModule, studioSource.replace(sharedImport, "from './runtime-document-loader.mjs'"));
   await fs.copyFile(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
   await fs.copyFile(path.join(root, 'THIRD-PARTY-NOTICES.md'), path.join(stage, 'THIRD-PARTY-NOTICES.md'));
   await fs.copyFile(path.join(root, 'src/data/vendor/LICENSE.sql.js'), path.join(stage, 'LICENSE.sql.js'));

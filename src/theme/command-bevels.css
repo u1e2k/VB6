@@ -1,0 +1,50 @@
+/* Deterministic classic command-button edges.
+ * The inset-shadow staircase recommended by Jordan Scales / 98.css is retained
+ * as eight equivalent filled strips. Chromium 143 repeatedly alternated the
+ * bottom shadow row of unchanged classic buttons at fractional DPI, including
+ * in HTML-only mode. Filled layers preserve the bounds, padding, native glyphs,
+ * focus, pressed displacement and authored face color without per-frame JS.
+ * Source: https://news.ycombinator.com/item?id=49963404
+ * Layer order: https://www.w3.org/TR/css-backgrounds-3/#layering
+ * The complete 98.css MIT notice is retained in bevels.css and LICENSES/98.css.txt.
+ *
+ * Each strip is a hard stop in a full-box gradient, not a separately sized
+ * one-pixel image: image-size rounding at fractional DPR must not rescale the
+ * lower edge between otherwise identical native HTML captures. Both painters
+ * lower the same hard stops to clipped rectangles, with no DOM snapshot.
+ * Color-stop fixup: https://www.w3.org/TR/css-images-3/#color-stop-syntax
+ *
+ * Runtime BackColor uses an inline background shorthand. Edge-only longhands
+ * must survive that reset; the authored background color is never overridden.
+ *
+ * Reset at EVERY application theme boundary; an embedded classic form must not
+ * inherit its modern parent's material treatment (or vice versa).
+ */
+:root,[data-vb-theme] {
+ --command-edge-image:linear-gradient(to left,var(--vb-dark) 1px,transparent 1px),linear-gradient(to top,var(--vb-dark) 1px,transparent 1px),linear-gradient(to right,var(--vb-light) 1px,transparent 1px),linear-gradient(to bottom,var(--vb-light) 1px,transparent 1px),linear-gradient(to left,var(--vb-shadow) 2px,transparent 2px),linear-gradient(to top,var(--vb-shadow) 2px,transparent 2px),linear-gradient(to right,var(--vb-highlight) 2px,transparent 2px),linear-gradient(to bottom,var(--vb-highlight) 2px,transparent 2px);
+ --command-down-image:linear-gradient(to left,var(--vb-light) 1px,transparent 1px),linear-gradient(to top,var(--vb-light) 1px,transparent 1px),linear-gradient(to right,var(--vb-dark) 1px,transparent 1px),linear-gradient(to bottom,var(--vb-dark) 1px,transparent 1px),linear-gradient(to left,var(--vb-highlight) 2px,transparent 2px),linear-gradient(to top,var(--vb-highlight) 2px,transparent 2px),linear-gradient(to right,var(--vb-shadow) 2px,transparent 2px),linear-gradient(to bottom,var(--vb-shadow) 2px,transparent 2px);
+}
+[data-vb-theme^="fluent"],[data-vb-theme^="macos26"],[data-vb-theme^="x11"] {
+ --command-edge-image:none;
+ --command-down-image:none;
+}
+@media(forced-colors:none) {
+ .vb-command {
+   background-image:var(--command-edge-image)!important;
+   background-origin:border-box!important;background-clip:border-box!important;background-repeat:no-repeat!important;
+   background-size:100% 100%!important;
+   background-position:0 0!important;
+   box-shadow:var(--app-control-shadow,none);
+ }
+ .vb-command:hover:not(.disabled):not(:disabled):not([aria-disabled=true]) {
+   box-shadow:var(--app-hover-shadow,none);
+ }
+ .vb-command:active:not(.disabled):not(:disabled):not([aria-disabled=true]) {
+   background-image:var(--command-down-image)!important;
+   box-shadow:var(--app-pressed-shadow,none);
+ }
+ .vb-command:is(.disabled,:disabled,[aria-disabled=true]) {
+   background-image:var(--command-edge-image)!important;
+   box-shadow:var(--app-disabled-shadow,none);
+ }
+}

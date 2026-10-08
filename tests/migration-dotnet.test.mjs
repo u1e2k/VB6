@@ -1,47 +1,17 @@
+import {FILE_RECORD_FIXTURE,FILE_RECORD_EXPECTED} from './migration-file-record-fixtures.mjs';
+import {PROPERTY_FIXTURE,PROPERTY_EXPECTED} from './migration-property-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
-import {convertVbNetProject} from '../src/migration/index.js';
+import {harness,root,sdkAvailable,required,skip} from './migration-dotnet-support.mjs';
 import {CORE_FIXTURE,CORE_EXPECTED,project,formProject} from './migration-fixtures.mjs';
 
 import {VARIANT_ARRAY_FIXTURE,VARIANT_ARRAY_EXPECTED,CURRENCY_LOOP_FIXTURE,CURRENCY_LOOP_EXPECTED,SELECT_CASE_FIXTURE,SELECT_CASE_EXPECTED,ARRAY_RUNTIME_SOURCE} from './migration-semantics-fixtures.mjs';
 
-const root=path.resolve(import.meta.dirname,'..'),reportRoot=path.join(root,'reports/vbnet-migration/dotnet');
-const probe=spawnSync('dotnet',['--list-sdks'],{encoding:'utf8',timeout:15000});
-const sdkAvailable=probe.status===0&&/^10\.\d+\.\d+/m.test(probe.stdout);
-const required=process.env.VB6_REQUIRE_DOTNET==='1';
-const skip=sdkAvailable?false:'.NET 10 SDK is not installed; no generated VB compilation or execution was performed';
-const env={...process.env,DOTNET_CLI_TELEMETRY_OPTOUT:'1',DOTNET_SKIP_FIRST_TIME_EXPERIENCE:'1',DOTNET_NOLOGO:'1',NUGET_XMLDOC_MODE:'skip'};
-
 test('.NET 10 compilation gate is available when required by CI',{skip:!required&&!sdkAvailable},()=>{
   assert.ok(sdkAvailable,'VB6_REQUIRE_DOTNET=1 requires an installed .NET 10 SDK; skipping is not acceptable in migration CI.');
 });
-
-function harness(t,name,input,{target,patch,codeStyle='compatibility',runtime,semanticPolicy,acceptedRules,strict,rootNamespace}={}){
-  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'vb6-dotnet-'));
-  const result=convertVbNetProject(input,{platform:'AnyCPU',codeStyle,runtime,semanticPolicy,acceptedRules,strict,rootNamespace,...(target?{target}:{})});
-  assert.ok(result.success,JSON.stringify(result.diagnostics));
-  fs.mkdirSync(reportRoot,{recursive:true});
-  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
-  for(const [file,data] of Object.entries(result.files)){
-    const output=path.join(directory,file);fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,data);
-  }
-  if(patch)patch(directory,result);
-  const commands=[];
-  function dotnet(args){
-    const r=spawnSync('dotnet',args,{cwd:directory,encoding:'utf8',env,timeout:120000,maxBuffer:16*1024*1024});
-    commands.push({arguments:args,status:r.status,stdout:r.stdout,stderr:r.stderr,error:r.error?.message});
-    fs.writeFileSync(path.join(reportRoot,name+'.json'),JSON.stringify({sdk:probe.stdout,platform:process.platform,commands},null,2)+'\n');
-    assert.equal(r.status,0,(r.error?.message||'')+'\n'+r.stdout+'\n'+r.stderr);
-    return r.stdout;
-  }
-  dotnet(['build',result.projectFile,'--nologo','-v','minimal']);
-  const dll=path.join('Application','bin','Debug',result.report.targetFramework,result.report.project+'.dll');
-  return {directory,result,dotnet,run:()=>dotnet([dll]).trim().split(/\r?\n/)};
-}
 
 test('generated .NET console executes arrays, static locals, Currency, strings and GoSub',{skip,timeout:150000},t=>{
   const h=harness(t,'core',CORE_FIXTURE,{patch(directory){
@@ -353,4 +323,20 @@ test('native typed constant ranges execute without compatibility support',{skip,
  const input=project('Public Sub Main()\nDim value As Long\nvalue=4\nSelect Case value\nCase 0 To 5\nDebug.Print "hit"\nCase Else\nDebug.Print "miss"\nEnd Select\nEnd Sub');
  const h=harness(t,'native-constant-range',input,{codeStyle:'native',runtime:'none',strict:true});
  assert.deepEqual(h.run(),['hit']);assert.deepEqual(h.result.report.runtime.features,[]);
+});
+
+for(const codeStyle of ['native','compatibility'])test('property accessor execution: '+codeStyle,{skip,timeout:150000},t=>{
+ const h=harness(t,'property-accessors-'+codeStyle,PROPERTY_FIXTURE,{codeStyle});
+ assert.deepEqual(h.run(),PROPERTY_EXPECTED);
+});
+
+for(const codeStyle of ['native','compatibility'])test('legacy binary record execution: '+codeStyle,{skip,timeout:150000},t=>{
+ const h=harness(t,'binary-records-'+codeStyle,FILE_RECORD_FIXTURE,{codeStyle,patch:invariantCulture});
+ assert.deepEqual(h.run(),FILE_RECORD_EXPECTED);
+ // Independent byte goldens, not only a reader/writer round trip.
+ const scalar=Buffer.alloc(14);scalar.writeInt16LE(-1,0);scalar.write('AB  ',2,'ascii');scalar.writeBigInt64LE(-123456n,6);
+ assert.deepEqual(fs.readFileSync(path.join(h.directory,'scalar.bin')),scalar);
+ const row=Buffer.from([255,255,4,3,2,1,2,1,67,68,32,32]);
+ const file=fs.readFileSync(path.join(h.directory,'record.bin'));
+ assert.equal(file.length,24);assert.deepEqual(file.subarray(12),row);
 });

@@ -1,3 +1,6 @@
+import {orderedCall} from './call-order.js';
+import {bindOptionalArguments, optionalDefault} from './optional-parameters.js';
+import {accessorReference, propertyPlan, defaultPropertyCall} from './property-plan.js';
 import {nativeIntrinsic, valueNeedsCopy} from './native-intrinsics.js';
 import {validateCallSemantics} from './call-semantics.js';
 import {key, identifier, qualified, vbString} from './names.js';
@@ -15,6 +18,7 @@ export function expression(node, context, usage={}) {
   const replacement=context.hook('expression',{node,usage});if(replacement!==undefined)return replacement;
   if(!node)return 'Nothing';
   const e=(value,mode={})=>expression(value,context,mode);
+  const expanded=defaultPropertyCall(node,context);if(expanded)return e(expanded,usage);
   switch(node.kind) {
     case 'literal':
       if(node.value===null)return 'Global.System.DBNull.Value';
@@ -63,6 +67,8 @@ export function expression(node, context, usage={}) {
         
         if(symbol.autoNew&&symbol.local&&!usage.assignment)return context.runtime('VbRuntime.AutoNew')+'(Of '+context.netType(symbol.type)+')('+prefix+identifier(symbol.name)+', Function() New '+qualified(symbol.type)+'())';
         if(symbol.enumName)return prefix+identifier(symbol.enumName)+'.'+identifier(symbol.name);
+        const accessor=usage.assignment?null:accessorReference(symbol,context);
+        if(accessor&&!usage.assignment)return prefix+accessor+(usage.callee?'':'()');
         if(symbol.procedure&&symbol.kind!=='property'&&!usage.callee)return prefix+identifier(symbol.name)+'()';
         return prefix+identifier(symbol.name);
       }
@@ -95,6 +101,8 @@ export function expression(node, context, usage={}) {
         if(SIMPLE_MEMBERS[k])return obj+'.'+SIMPLE_MEMBERS[k];
         if(!['name','show','hide','close','refresh','focus','additem','removeitem','clear','move','setfocus','font','controls','count'].includes(k))context.add('MIG_CONTROL_MEMBER','No verified control-member adapter for '+node.name+'.');
       }
+      const accessor=usage.assignment?null:accessorReference(context.resolve(node),context);
+      if(accessor&&!usage.assignment)return (obj?obj+'.':'.')+accessor+(usage.callee?'':'()');
       return (obj?obj+'.':'.')+identifier(node.name);
     }
     case 'call': {
@@ -125,16 +133,19 @@ export function expression(node, context, usage={}) {
           if(member==='show'&&receiver.form)return context.runtime('VbForms.Show')+'('+[obj,...node.args.map(n=>e(n))].join(', ')+')';
         }
       }
-      const args=node.args.map((arg,index)=>{
-        const parameter=symbol?.params?.[index];
+      const emitArgument=(arg,parameter)=>{
         if(symbol?.external&&key(parameter?.type||'')==='string'&&arg.kind==='id'&&key(arg.name)==='vbnullstring')return 'Nothing';
         if(parameter?.byRef&&context.resolve(arg)?.autoNew&&context.resolve(arg)?.local)context.add('MIG_AS_NEW_BYREF','ByRef assignment to a lazy As New local requires a value-cell adapter.');
-        if(parameter&&arg.kind!=='missing'&&arg.kind!=='named'&&key(parameter.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+e(arg)+')':context.runtime('VbCurrency.FromObject')+'('+e(arg)+')';
+        if(parameter&&arg.kind!=='missing'&&key(parameter.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+e(arg)+')':context.runtime('VbCurrency.FromObject')+'('+e(arg)+')';
         return e(arg,{argument:true});
+      };
+      const ordered=orderedCall(node,symbol,context,emitArgument,e);
+      if(ordered!==null)return ordered;
+      const args=bindOptionalArguments(node,symbol,context,emitArgument)||node.args.map((arg,index)=>{
+        const p=arg.kind==='named'?symbol?.params?.find(param=>key(param.name)===key(arg.name)):symbol?.params?.[index];
+        if(arg.kind==='missing'&&p?.optional)return optionalDefault(symbol,p,context);
+        return arg.kind==='named'?identifier(arg.name)+':='+emitArgument(arg.expr,p):emitArgument(arg,p);
       });
-      if(symbol?.params)for(let i=0;i<args.length;i++)if(node.args[i]?.kind==='missing'){
-        const p=symbol.params[i];if(p?.optional)args[i]=p.initial?e(p.initial):key(p.type)==='variant'?context.runtime('VbMissing.Value'):defaultValue(p,context);
-      }
       const call=e(node.callee,{callee:true})+'('+args.join(', ')+')';
       if(symbol?.controlArray&&!usage.receiver&&!usage.reference&&!usage.callee&&!usage.assignment){const member=controlDefault(symbol.type,context);if(member)return call+'.'+(SIMPLE_MEMBERS[key(member)]||identifier(member));}
       return call;
@@ -177,10 +188,17 @@ export function boundsArguments(bounds,context) {
   return 'New Integer() {'+bounds.map(b=>b[0]?expression(b[0],context):context.module.optionBase).join(', ')+'}, New Integer() {'+bounds.map(b=>expression(b[1],context)).join(', ')+'}';
 }
 export function assignment(target,value,context,{objectSet=false,asReturn=false}={}) {
-  const symbol=context.resolve(target);
+  target=defaultPropertyCall(target,context)||target;
+  const callee=target.kind==='call'?target.callee:target,property=context.resolve(callee);
+  const plan=property?.kind==='property'?propertyPlan(property.owner||context.module,property.name,context):null;
+  // An assignment to the current getter's result variable is not a property set.
+  const resultVariable=callee.kind==='id'&&context.aliases.has(key(callee.name));
+  const accessor=plan?.methods&&!resultVariable&&!asReturn?accessorReference(property,context,objectSet?'set':'let'):null;
+  const setter=accessor?plan[objectSet?'set':'let']:null;
+  const symbol=setter?.params.at(-1)||context.resolve(target);
   if(symbol?.control&&!objectSet){const member=controlDefault(symbol.type,context);if(member)return assignment({kind:'member',object:target,name:member},value,context,{objectSet});}
   const native=context.arrayPlan(symbol),style=context.options.codeStyle==='native';
-  let right=expression(value,context,{reference:objectSet,nativeArray:!!native}),left=expression(target,context,{assignment:true});
+  let right=expression(value,context,{reference:objectSet,nativeArray:!!native}),left='';
   const wholeArray=symbol?.bounds!==undefined&&symbol.bounds!==null;
   if(wholeArray){
     if(symbol.bounds.length)context.add('MIG_FIXED_ARRAY_ASSIGN','Whole fixed-array assignment requires a verified copy adapter.');
@@ -194,6 +212,29 @@ export function assignment(target,value,context,{objectSet=false,asReturn=false}
     if(key(symbol?.type||'')==='currency')right=context.decimalCurrency?'CDec('+right+')':context.runtime('VbCurrency.FromObject')+'('+right+')';
     if(!objectSet&&symbol&&['object','variant'].includes(key(symbol.type))&&(!style||valueNeedsCopy(value,context)))right=context.runtime('VbRuntime.CopyValue')+'('+right+')';
     if(symbol&&context.record(symbol.type)&&(!style||context.record(symbol.type).copy))right='CType('+context.runtime('VbRuntime.CopyValue')+'('+right+'), '+context.netType(symbol.type)+')';
+  }
+  // Setters share the same lexical permutation plan as getters, but native
+  // properties remain assignments inside a Sub instead of getter-call lvalues.
+  const selectedSetter=plan?.[objectSet?'set':'let'];
+  if(selectedSetter&&!resultVariable&&!asReturn&&target.kind==='call'){
+    const boundSetter={...selectedSetter,owner:property.owner||context.module};
+    const call={kind:'call',callee,args:[...target.args,{kind:'named',name:selectedSetter.params.at(-1).name,expr:value}]};
+    validateCallSemantics(call,boundSetter,context);
+    const ordered=orderedCall(call,boundSetter,context,(arg,param)=>{
+      if(arg===value)return right;
+      if(key(param.type)==='currency'&&key(context.type(arg))!=='currency')return context.decimalCurrency?'CDec('+expression(arg,context)+')':context.runtime('VbCurrency.FromObject')+'('+expression(arg,context)+')';
+      return expression(arg,context,{argument:true});
+    },(node,usage)=>expression(node,context,usage),{accessor:objectSet?'set':'let'});
+    if(ordered!==null)return ordered;
+  }
+  if(!accessor)left=expression(target,context,{assignment:true});
+  if(accessor){
+    const args=target.kind==='call'?target.args:[];
+    validateCallSemantics({kind:'call',callee,args:[...args,value]},setter,context);
+    const prefix=callee.kind==='member'?expression(callee.object,context,{receiver:true,reference:true})+'.':property.owner&&property.owner!==context.module?qualified(property.owner.name)+'.':'';
+    const emitted=args.map(arg=>expression(arg,context,{argument:true}));
+    emitted.push((setter?identifier(setter.params.at(-1).name)+':=':'')+right);
+    return prefix+accessor+'('+emitted.join(', ')+')';
   }
   if(target.kind==='member'){
     const receiver=context.resolve(target.object),name=key(target.name),obj=expression(target.object,context,{receiver:true,reference:true});
