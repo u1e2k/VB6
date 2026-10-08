@@ -8,7 +8,7 @@ const fail={fail(message){throw new Error(message);}};
 function build(code) {
   const p=newProject('ArrayContract');p.startup='Sub Main';p.modules=[{id:'m',name:'ArrayModule',kind:'module',code}];return compileWin32(p);
 }
-for(const type of ['Byte','Integer','Long','Boolean','String']) {
+for(const type of ['Byte','Integer','Long','Boolean','String','Variant']) {
   test('dynamic '+type+' arrays have an owned, initially empty descriptor slot',()=>{
     const v=storageLayout(fail,{name:'a',type,bounds:[]},{optionBase:0});
     assert.equal(v.nativeArray,true);assert.equal(v.nativeDynamic,true);assert.equal(v.nativeBytes,4);
@@ -26,7 +26,6 @@ for(const [name,code] of [
   ['changing declared type','Dim a() As Long\nReDim a(2) As Byte'],
   ['excess rank','Dim a() As Long\nReDim a('+Array(61).fill('0').join(',')+')'],
   ['unsupported object elements','Dim a() As Object'],
-  ['unsupported Variant elements','Dim a() As Variant'],
   ['different fixed String lengths','Dim a() As String * 3\nDim b() As String * 4\na=b'],
 ])test('native arrays diagnose '+name,()=>assert.throws(()=>build('Public Sub Main()\n'+code+'\nEnd Sub')));
 for(const [name,param,arg,decl] of [

@@ -61,8 +61,9 @@ test('Currency stack return path transfers both registers after cleanup',()=>{
 test('Currency primitive queries and conversions compile in scalar and array contexts',()=>{
   compile('Dim a As Currency, b() As Currency, s As String, n As Long\ns = TypeName(a)\nn = VarType(b)\nn = LenB(a)\na = CCur("0.0001")\nn = CBool(a)');
 });
-test('Currency support does not silently admit unsupported Variant or Decimal storage',()=>{
-  for(const type of ['Variant','Decimal','Object'])assert.throws(()=>compile(`Dim a As ${type}`),/storage|Variant subtype/);
+test('Currency boxes into native Variant, while discrete Decimal and Object storage remain diagnosed',()=>{
+  assert.ok(compile('Dim a As Variant\na=922337203685477.5807@').bytes.length);
+  for(const type of ['Decimal','Object'])assert.throws(()=>compile(`Dim a As ${type}`),/storage|Variant subtype/);
 });
 
 test('Currency suffix and DefCur storage retain the Currency ABI',()=>{

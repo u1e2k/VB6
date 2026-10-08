@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {nativeLanguageFixture} from '../tests/fixtures/native-language.mjs';
 import {nativeLanguageFixture as continuationLanguageFixture} from './win32-language-fixtures.mjs';
 import {nativeStringLibraryFixture} from './win32-string-library-fixtures.mjs';
+import {nativeVariantFixture} from './win32-variant-fixtures.mjs';
 import {nativeWithControlsFixture} from './win32-with-controls-fixtures.mjs';
 import {newProject} from '../src/project/model.js';
 import {compileWin32} from '../src/native/compiler.js';
@@ -148,15 +149,15 @@ export function writeOptimizerFixtures(directory='reports/native-optimizer') {
   fs.mkdirSync(directory,{recursive:true});const reports=[],fixture=optimizerFixture();
   const arithmetic=win32Fixtures()[0];
   // The existing arithmetic fixture is an independent regression, not an optimizer oracle.
-  const continuation=continuationLanguageFixture(),strings=nativeStringLibraryFixture();
-  const fixtures=[fixture,nativeLanguageFixture(),continuation,strings,nativeWithControlsFixture(),{project:arithmetic,checks:['existing AOT arithmetic/recursion/scalar/Declare regression']}];
+  const continuation=continuationLanguageFixture(),strings=nativeStringLibraryFixture(),variants=nativeVariantFixture();
+  const fixtures=[fixture,nativeLanguageFixture(),continuation,strings,variants,nativeWithControlsFixture(),{project:arithmetic,checks:['existing AOT arithmetic/recursion/scalar/Declare regression']}];
   for(const {project,checks}of fixtures)for(const optimization of [0,1,2]) {
     const result=compileWin32(project,{optimization}),name=project.name+'-O'+optimization;
     const report={name,optimization,checks,sha256:createHash('sha256').update(result.bytes).digest('hex'),...result.report};
     fs.writeFileSync(path.join(directory,name+'.exe'),result.bytes);
     fs.writeFileSync(path.join(directory,name+'.build.json'),JSON.stringify(report,null,2)+'\n');reports.push(report);
   }
-  for(const {project,checks}of [continuation,strings]){
+  for(const {project,checks}of [continuation,strings,variants]){
     const result=compileWin32(project,{optimization:2,pruneUnusedProcedures:true}),name=project.name+'-O2-pruned';
     if(!result.report.optimization.removedProcedures.includes('proc:Entry:NeverCalled'))throw new Error('Unreachable fixture procedure was not pruned');
     const report={name,checks,sha256:createHash('sha256').update(result.bytes).digest('hex'),...result.report};

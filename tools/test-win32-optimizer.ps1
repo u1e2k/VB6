@@ -4,10 +4,10 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path $Directory).Path
 $plans = Get-Content (Join-Path $root 'builds.json') -Raw | ConvertFrom-Json
 $expected = @()
-foreach ($family in @('AotOptimizerRecords','AotArithmetic','AotLanguage','AotContinuationLanguage','AotStringLibrary','AotWithControls','AotAssembler','AotSpeedSize','AotCompactAssembler')) {
+foreach ($family in @('AotOptimizerRecords','AotArithmetic','AotLanguage','AotContinuationLanguage','AotStringLibrary','AotVariants','AotWithControls','AotAssembler','AotSpeedSize','AotCompactAssembler')) {
   foreach ($level in 0..2) {$expected += "$family-O$level"}
 }
-$expected += @('AotContinuationLanguage-O2-pruned','AotStringLibrary-O2-pruned','AotSpeedSize-O2-pruned')
+$expected += @('AotContinuationLanguage-O2-pruned','AotStringLibrary-O2-pruned','AotVariants-O2-pruned','AotSpeedSize-O2-pruned')
 if ($plans.Count -ne $expected.Count -or (Compare-Object ($plans.name | Sort-Object) ($expected | Sort-Object))) {throw 'Incomplete or duplicated native fixture/optimization matrix'}
 if (@($plans | Where-Object {-not $_.checks -or $_.checks.Count -lt 1}).Count) {throw 'Every native fixture must have explicit assertions'}
 $results = @()
@@ -46,4 +46,10 @@ foreach ($plan in $plans) {
   $report | ConvertTo-Json -Depth 10 | Write-Host
 }
 $results | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $root 'execution.json')
-if (@($results | Where-Object {-not $_.ok}).Count) { throw 'Native optimizer/record execution failed; see execution.json' }
+if (@($results | Where-Object {-not $_.ok}).Count) {
+  if (@($results | Where-Object {-not $_.ok -and $_.name -like 'AotVariants-*'}).Count) {
+    try { & (Join-Path $PSScriptRoot 'probe-win32-variant-arithmetic.ps1') -OutputPath (Join-Path $root 'variant-arithmetic-observations.json') }
+    catch { Write-Warning ('Independent Variant diagnostic failed: '+$_.Exception.Message) }
+  }
+  throw 'Native optimizer/record execution failed; see execution.json'
+}

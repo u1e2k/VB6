@@ -155,7 +155,12 @@ test('audit build: private handles, stale revisions, invalid offsets and project
  assert.equal((await modern(f,'tools/call',{name:'vb6.build.read',arguments:{artifactId:other.artifact.artifactId}})).error.code,-32602);
 });
 test('audit build: unsupported native constructs return diagnostics, not a pretend executable',async t=>{
- const f=fixture(t);f.ide.project.modules[0].code='Private Sub Form_Load()\nDim v As Variant\nv = 1\nEnd Sub';const r=await tool(f,'build.create',{target:'win32',expectedRevision:f.adapter.revision});assert.equal(r.valid,false);assert.ok(r.diagnostics.length);assert.equal(r.artifact,undefined);
+ const f=fixture(t);f.ide.project.modules[0].code='Private Sub Form_Load()\nDim v As Object\nSet v = New Collection\nEnd Sub';const r=await tool(f,'build.create',{target:'win32',expectedRevision:f.adapter.revision});assert.equal(r.valid,false);assert.ok(r.diagnostics.length);assert.equal(r.artifact,undefined);
+});
+test('audit build: supported owned Variant values produce a native executable',async t=>{
+ const f=fixture(t);f.ide.project.modules[0].code='Private Sub Form_Load()\nDim v As Variant\nv = 1\nv = v + 2\nEnd Sub';
+ const r=await tool(f,'build.create',{target:'win32',expectedRevision:f.adapter.revision});assert.equal(r.valid,true);assert.ok(r.artifact.size>0);
+ const first=await tool(f,'build.read',{artifactId:r.artifact.artifactId,count:2});assert.equal(Buffer.from(first.data,'base64').toString(),'MZ');
 });
 function groupFiles(){return [
  {path:'both.vbg',content:'VBGROUP 5.0\r\nProject=a.vbp\r\nProject=b.vbp\r\nStartupProject=a.vbp\r\n'},

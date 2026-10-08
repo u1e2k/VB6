@@ -23,8 +23,9 @@ test('named arguments and omitted default slots compile without mutating the aut
 test('Option Compare Text now lowers comparison expressions and Select Case using NLS',()=>{
  const p=project('Option Compare Text\nSub Main()\nDim s As String,n As Long\ns="a"\nIf s="A" Then n=1\nSelect Case s\nCase "A"\nn=n+1\nEnd Select\nn=StrComp(s,"A",-1)\nEnd Sub');assert.ok(compileWin32(p,{optimization:2}).bytes.length);
 });
-test('managed Null and object arguments remain unsupported rather than becoming empty strings',()=>{
- for(const body of ['Dim v As Variant\nv=Null\ns=Trim$(v)','Dim v As Object\ns=StrReverse(v)'])assert.throws(()=>compileWin32(project('Sub Main()\nDim s As String\n'+body+'\nEnd Sub')),/storage/);
+test('Null dollar-string conversion has a checked native path; unsupported Objects remain diagnosed',()=>{
+ assert.ok(compileWin32(project('Sub Main()\nDim s As String,v As Variant\nv=Null\nOn Error Resume Next\ns=Trim$(v)\nIf Err.Number<>94 Then Error 5\nEnd Sub')).bytes.length);
+ assert.throws(()=>compileWin32(project('Sub Main()\nDim s As String,v As Object\ns=StrReverse(v)\nEnd Sub')),/storage/);
 });
 test('Len and LenB indexed numeric/record values retain subscript calls and bounds checks',()=>{
  const p=project('Type P\n x As Long\nEnd Type\nType B\n points(0 To 1) As P\nEnd Type\nFunction Index() As Long\nIndex=1\nEnd Function\nSub Main()\nDim a(0 To 1) As Long,b As B,n As Long\nn=Len(a(Index()))+LenB(b.points(Index()))\nEnd Sub');

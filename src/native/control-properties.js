@@ -1,3 +1,4 @@
+import {nativeMetadataType,getNativeMetadataProperty,setNativeMetadataProperty} from './control-metadata.js';
 import {NATIVE_RANGE_CONTROLS,NATIVE_SCROLL_CONTROLS,NATIVE_DATE_CONTROLS,NATIVE_TAB_CONTROLS,NATIVE_DRAW_CONTROLS} from './control-plan.js';
 const mem=memory=>({memory}),lit=value=>({kind:'literal',value}),key=s=>String(s).toLowerCase();
 const rangeFields={min:0,max:4,value:8,smallchange:12,largechange:16,tickfrequency:20,increment:12};
@@ -5,6 +6,7 @@ const colorFields={backcolor:32,forecolor:36,fillcolor:40,fillstyle:44,shape:48,
 const editable=new Set(['TextBox','RichTextBox']);
 export const nativeControlPropertyMethods={
   nativeControlType(node){
+    const metadata=nativeMetadataType(this,node);if(metadata)return metadata;
     const gridType=this.nativeTabTextType(node)||this.gridType(node)||this.chartType(node);if(gridType)return gridType;
     if(node.kind==='call'&&node.callee.kind==='id'&&String(node.callee.name).toLowerCase()==='loadresstring')return 'string';
     const imageType=this.nativeImageListType(node);if(imageType)return imageType;
@@ -13,7 +15,7 @@ export const nativeControlPropertyMethods={
     if(node.kind!=='member')return null;
     const object=this.object(node.object);if(!object?.model)return null;
     const property=key(node.name),type=object.model.type;
-    if(['name','tag','textrtf','selrtf','simpletext','seltext','passwordchar','customformat','fontname','path','pattern','drive','filename'].includes(property))return 'string';
+    if(['textrtf','selrtf','simpletext','seltext','passwordchar','customformat','fontname','path','pattern','drive','filename'].includes(property))return 'string';
     if(property==='fontsize')return 'double';
     if(NATIVE_DATE_CONTROLS.has(type)&&property==='value')return 'date';
     return null;
@@ -24,6 +26,7 @@ export const nativeControlPropertyMethods={
     return rect;
   },
   getNativeControlProperty(object,property){
+    if(getNativeMetadataProperty(this,object,property))return true;
     if(property==='tabcaption'&&this.nativeTabText(object,null))return true;
     if(this.nativeTabVisibility(object,property))return true;
     if(this.getNativeChartProperty(object,property)||this.getNativeGridProperty(object,property)||this.getNativeImageListProperty(object,property)||this.getNativePictureProperty(object,property)||this.getNativeDialogProperty(object,property)||this.getNativeSelectionFormat(object,property)||this.getNativeRichTextProperty(object,property)||this.getNativeCollectionProperty(object,property)||this.getNativeFileProperty(object,property)||this.getNativeFontProperty(object,property))return true;
@@ -37,8 +40,6 @@ export const nativeControlPropertyMethods={
       x.emit(0x6b,0xc0,15);return true;
     }
     if(!type)return false;
-    if(property==='name'){x.value(this.string(object.model.name));return true;}
-    if(property==='tag'){this.ensure(object);this.nativeControlState(object);x.emit(0xff,0x70,28).call('native:string:copy');this.ownString();return true;}
     if(NATIVE_RANGE_CONTROLS.has(type)&&Object.hasOwn(rangeFields,property)) {
       this.ensure(object);
       if(property!=='value'){this.nativeControlState(object);x.emit(0x8b,0x40,rangeFields[property]);}
@@ -79,6 +80,7 @@ export const nativeControlPropertyMethods={
     return false;
   },
   setNativeControlProperty(object,property,expr){
+    if(setNativeMetadataProperty(this,object,property,expr))return true;
     if(property==='tabcaption'&&this.nativeTabText(object,null,expr,true))return true;
     if(this.nativeTabVisibility(object,property,expr))return true;
     if(this.setNativeChartProperty(object,property,expr)||this.setNativeGridProperty(object,property,expr)||this.setNativeImageBinding(object,property,expr)||this.setNativeImageListProperty(object,property,expr)||this.setNativePictureProperty(object,property,expr)||this.setNativeDialogProperty(object,property,expr)||this.setNativeSelectionFormat(object,property,expr)||this.setNativeRichTextProperty(object,property,expr)||this.setNativeFileProperty(object,property,expr)||this.setNativeFontProperty(object,property,expr))return true;
@@ -93,9 +95,6 @@ export const nativeControlPropertyMethods={
       x.emit(0x8b,0x43,12,0x2b,0x43,4,0x8b,0x4b,8,0x2b,0x0b,0x89,0xc2);x.push(0x14).emit(0x52,0x51,0xff,0x73,4,0xff,0x33).push(0).push(this.controlHandleRef(object)).invoke('user32.dll','SetWindowPos').test().branch('e','error:5');return true;
     }
     if(!type)return false;
-    if(property==='tag') {
-      this.textExpression(expr);x.push().call('native:string:copy').push();this.nativeControlState(object);x.emit(0x59,0x8b,0x58,28,0x89,0x48,28,0x53).invoke('oleaut32.dll','SysFreeString');return true;
-    }
     if(NATIVE_RANGE_CONTROLS.has(type)&&Object.hasOwn(rangeFields,property)) {
       this.nativeRangeHelpers ||= new Set();this.nativeRangeHelpers.add(type);
       this.numeric(expr);x.push().push(rangeFields[property]).push(this.controlHandleRef(object)).call('native:control:set-range:'+type);

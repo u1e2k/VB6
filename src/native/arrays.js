@@ -1,3 +1,4 @@
+import {assignNativeStringArray} from './string-arrays.js';
 /** Owned SAFEARRAY storage for fixed/dynamic native arrays. The internal array ABI
  * passes a descriptor slot by reference; it is never exposed to browser code. */
 const key = value => String(value).toLowerCase();
@@ -5,7 +6,7 @@ const A = 'native:array:';
 const DLL = 'oleaut32.dll';
 const arg = argument => ({argument});
 const addr = address => ({address});
-const VT = {byte:17, integer:2, long:3, boolean:11, string:8, single:4, double:5, currency:6, date:7};
+const VT = {byte:17, integer:2, long:3, boolean:11, string:8, single:4, double:5, currency:6, date:7, variant:12};
 // The old one-MiB quota was a compiler policy, not a SAFEARRAY limit. Keep
 // signed x86 count/offset arithmetic checked; actual allocation is OS-limited.
 // Eight-byte alignment makes all typed element quotas exact integers.
@@ -41,6 +42,7 @@ export const nativeArrayMethods = {
   releaseArrayPin(pin) {
     if(!pin)return;
     const x=this.x;x.push();this.rawStorageAddress(pin);x.push().call(A+'unpin').emit(0x58);
+    if(pin.parentPin)this.releaseArrayPin(pin.parentPin);
   },
   arrayRef(variable) {
     this.rawStorageAddress(variable);
@@ -79,6 +81,8 @@ export const nativeArrayMethods = {
   },
   redimArrayStorage(decl, preserve) {
     const x=this.x, variable=this.variable({kind:'id',name:decl.name});
+    if(variable?.paramArray)this.fail('ReDim cannot target a ParamArray parameter');
+    if(variable&&!variable.nativeArray&&key(variable.type)==='variant')return this.redimVariantArray(variable,decl,preserve);
     if(!variable?.nativeArray || variable.elementOf)this.fail('ReDim requires a declared native array: '+decl.name);
     if(!variable.nativeDynamic)this.fail('ReDim cannot resize a fixed native array: '+decl.name);
     if(decl.explicitType && key(decl.type)!==key(variable.type))this.fail('ReDim cannot change a typed array element type');
@@ -99,16 +103,22 @@ export const nativeArrayMethods = {
   arrayBoundCall(node, upper) {
     if(node.args.length<1||node.args.length>2)this.fail('LBound/UBound expects an array and optional dimension');
     const variable=this.variable(node.args[0]);
+    if((!variable?.nativeArray||variable.elementOf)&&this.type(node.args[0])==='variant')return this.variantArrayBoundCall(node,upper);
     if(!variable?.nativeArray||variable.elementOf)this.fail('LBound/UBound requires a native array');
     this.rawStorageAddress(variable);this.x.push();this.numeric(node.args[1] || {kind:'literal',value:1});
     this.x.emit(0x5b).push().emit(0x53).call(A+(upper?'upper':'lower'));
   },
   eraseStorage(node) {
     const variable=this.variable(node);
+    if(variable?.paramArray)this.fail('Erase cannot target a ParamArray parameter');
+    if(variable&&!variable.nativeArray&&key(variable.type)==='variant')return this.eraseVariantArray(variable);
     if(!variable?.nativeArray||variable.elementOf)this.fail('Native Erase requires an array');
     this.x.push(variable.fixedLength || 0);this.rawStorageAddress(variable);this.x.push().call(A+'erase');
   },
   assignArrayStorage(variable, node) {
+    if(variable.paramArray)this.fail('Whole-array ParamArray replacement is not yet lowered; assign its elements instead');
+    if(assignNativeStringArray(this,variable,node))return;
+    if(this.assignNativeVariantArray(variable,node))return;
     const source=this.variable(node);
     if(!variable.nativeDynamic)this.fail('Whole-array assignment requires a dynamic destination');
     if(!source?.nativeArray || source.elementOf || key(variable.type)!==key(source.type) || (variable.fixedLength||0)!==(source.fixedLength||0))this.fail('Array assignment requires identical declared element types and fixed String lengths');
@@ -146,7 +156,7 @@ export function emitNativeArrayHelpers(compiler) {
   }
 
   // redim(slot, vt, rank, bounds-in-declaration-order, preserve, fixedStringLength)
-  const noOld=x.unique(), counts=x.unique(), counted=x.unique(), byteLimit=x.unique(), halfLimit=x.unique(), doubleLimit=x.unique(), limitDone=x.unique();
+  const noOld=x.unique(), counts=x.unique(), counted=x.unique(), byteLimit=x.unique(), halfLimit=x.unique(), doubleLimit=x.unique(), variantLimit=x.unique(), limitDone=x.unique();
   const create=x.unique(), validate=x.unique(), preserveNow=x.unique(), success=x.unique(), publish=x.unique(), finish=x.unique();
   x.label(A+'redim').enter(24).value(arg(8)).emit(0x89,0xc3,0x8b,0x00);save(x,-4);
   x.test().branch('e',noOld).emit(0x66,0xf7,0x40,2,0x10,0).branch('ne','error:10')
@@ -156,10 +166,12 @@ export function emitNativeArrayHelpers(compiler) {
   x.label(counts).emit(0x85,0xff).branch('e',counted).emit(0x8b,0x06).compare(1).branch('l','error:9')
     .emit(0x0f,0xaf,0x45,0xf0).branch('o','error:7').compare(maxBytes).branch('g','error:7');save(x,-16);
   x.emit(0x83,0xc6,8,0x4f).jump(counts).label(counted);
+  if(compiler.nativeVariantArraysUsed)x.value(arg(12)).compare(12).branch('e',variantLimit);
   x.value(arg(12)).compare(17).branch('e',byteLimit).compare(2).branch('e',halfLimit).compare(11).branch('e',halfLimit).compare(5).branch('e',doubleLimit).compare(6).branch('e',doubleLimit).compare(7).branch('e',doubleLimit)
     .value(arg(-16)).compare(Math.floor(maxBytes/4)).branch('g','error:7').jump(limitDone);
   x.label(halfLimit).value(arg(-16)).compare(Math.floor(maxBytes/2)).branch('g','error:7').jump(limitDone);
   x.label(doubleLimit).value(arg(-16)).compare(Math.floor(maxBytes/8)).branch('g','error:7').jump(limitDone);
+  if(compiler.nativeVariantArraysUsed)x.label(variantLimit).value(arg(-16)).compare(Math.floor(maxBytes/16)).branch('g','error:7').jump(limitDone);
   x.label(byteLimit).label(limitDone).value(0);save(x,-12);
   x.value(arg(-4)).test().branch('e',create).value(arg(24)).test().branch('e',create);
   x.api(DLL,'SafeArrayGetDim',[arg(-4)]).emit(0x3b,0x45,16).branch('ne','error:9');
@@ -191,7 +203,13 @@ export function emitNativeArrayHelpers(compiler) {
   x.label(reset).emit(0x56).call(A+'count').emit(0x89,0xc7,0x66,0xf7,0x46,2,0,1).branch('e',numeric)
     .emit(0x57,0xff,0x76,12).call('native:string:clear');
   x.value(arg(12)).test().branch('e',eraseDone).push().emit(0x57,0xff,0x76,12).call('native:string:initialize-fixed').jump(eraseDone);
-  x.label(numeric).emit(0x89,0xf8,0x0f,0xaf,0x46,4,0x89,0xc1,0x8b,0x7e,12,0x31,0xc0,0xfc,0xf3,0xaa)
+  x.label(numeric);
+  if(compiler.nativeVariantArraysUsed){
+    const plain=x.unique(),loop=x.unique();
+    x.emit(0x66,0xf7,0x46,2,0,8).branch('e',plain).emit(0x8b,0x76,12).label(loop).testOperand('edi','edi').branch('e',eraseDone);
+    x.pushOperand('esi').invoke(DLL,'VariantClear').call(A+'check').add('esi',16).dec('edi').jump(loop).label(plain);
+  }
+  x.emit(0x89,0xf8,0x0f,0xaf,0x46,4,0x89,0xc1,0x8b,0x7e,12,0x31,0xc0,0xfc,0xf3,0xaa)
     .label(eraseDone).value(0).leave(8);
 
   // SafeArrayCopy deep-copies BSTRs. Validate and allocate before changing the

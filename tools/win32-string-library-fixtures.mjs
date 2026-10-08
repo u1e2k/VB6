@@ -1,3 +1,4 @@
+import {extendNativeStringArrayFixture,nativeStringArrayPolicyModule} from './win32-string-array-fixtures.mjs';
 import {newProject} from '../src/project/model.js';
 /** Counted string library contracts; actual execution is a separate Windows gate. */
 export function nativeStringLibraryFixture(){
@@ -28,9 +29,42 @@ export function nativeStringLibraryFixture(){
  add('Err.Clear\nn=InStrRev("abc","a",0)');check('Err.Number=5','zero reverse-search start is invalid');
  add('Err.Clear\nn=Abs(-32768)');check('Err.Number=6','Abs retains Integer intermediate overflow');
  add('Err.Clear\nOn Error GoTo 0\nFor i=1 To 2000\ns=StrReverse(Trim$(" abc "))\nNext');check('s="cba"','repeated allocating helpers retain per-statement ownership');
+
+ // These assertions execute in the existing O0/O1/O2 and O2-pruned Windows
+ // fixture matrix. They are not JS emulation of the generated machine code.
+ check('Replace("abcabc","ab","X")="XcXc"','Replace emits all non-overlapping substitutions');
+ check('Replace$("aaaaa","aa","X")="XXa"','Replace advances by the complete matched substring');
+ check('Replace("abcabc","a","XYZ",1,1)="XYZbcabc"','Replace count caps the number of substitutions');
+ check('Replace("abcabc","a","",1,-1)="bcbc"','Replace accepts an empty replacement');
+ check('Replace("abcabc","a","X",3)="cXbc"','Replace returns the suffix beginning at start');
+ check('Replace("abc","","X",2)="bc" And Replace("abc","b","X",2,0)="bc"','empty find and zero count retain the selected suffix');
+ check('Replace("","a","b")="" And Replace("abc","a","b",4)=""','empty or past-end replacement source');
+ check('Replace("abc","abcd","X")="abc" And Replace("abc","z","X")="abc"','unmatched searches copy the original suffix');
+ check('Replace("aAa","a","X",1,-1,0)="XAX" And Replace("aAa","a","X",1,-1,1)="XXX"','Replace binary and Windows NLS text modes');
+ check('Replace("abcabc","a","X",,1,)="Xbcabc"','Replace omitted trailing and interior defaults');
+ add('s="a" & ChrW(0) & "ba" & ChrW(0)\ns=Replace(s,ChrW(0),"XY")');
+ check('s="aXYbaXY" And Len(s)=7','Replace finds text after and including embedded NUL');
+ add('s=Replace("ababa","b",ChrW(0))');check('Len(s)=5 And AscW(Mid$(s,2,1))=0 And Right$(s,1)="a"','Replace retains NUL replacement code units');
+ check('Replace(ChrW(&HD800) & "X" & ChrW(&HDC00),"X",ChrW(0))=ChrW(&HD800) & ChrW(0) & ChrW(&HDC00)','binary Replace operates on UTF-16 units without surrogate rewriting');
+ add('sequence=0\ns=Replace(replace:=Mark("B"),find:=Mark("A"),expression:=Mark("A"))');
+ check('sequence=211 And s="B"','Replace named arguments retain source evaluation order');
+ add('sequence=0\nn=InStr(string2:=Mark("B"),string1:=Mark("A"))');
+ check('sequence=21 And n=0','InStr named arguments retain source evaluation order');
+ check('InStr(start:=2,string1:="aBc",string2:="b",compare:=1)=2 And InStr(,"abc","b")=2','InStr formal names and explicit omitted start');
+ add('s="abcabc"\ns=Replace(s,"a",MutateSource(s))');check('s="XbcXbc"','Replace snapshots earlier inputs before a later ByRef mutation');
+ add('s="abc"\nn=InStr(s,MutateSource(s))');check('n=0 And s="changed"','InStr snapshots its source before a later ByRef mutation');
+ add('On Error Resume Next\nErr.Clear\ns=Replace("abc","a","b",0)');check('Err.Number=5','invalid Replace start is recoverable');
+ add('Err.Clear\ns=Replace("abc","a","b",1,-2)');check('Err.Number=5','invalid Replace count is recoverable');
+ add('Err.Clear\ns=Replace("abc","a","b",1,-1,2)');check('Err.Number=5','unsupported Replace compare is recoverable');
+ add('Err.Clear\ns="unchanged"\ns=Replace(String$(524289,"a"),"a","bb")');check('Err.Number=7 And s="unchanged"','Replace checks final output budget before assignment');
+ add('Err.Clear\nOn Error GoTo 0\ns=Replace(String$(524288,"a"),"a","bb")');check('Len(s)=1048576 And Left$(s,1)="b" And Right$(s,1)="b"','Replace accepts the exact native BSTR length budget');
+ add('For i=1 To 1000\ns=Replace(Replace("aabbaabb","aa","X"),"bb","Y")\nNext');check('s="XYXY"','nested replacement ownership survives repeated allocations');
+ check('TextPolicy()="XXa" And TextSearch()=2','caller Option Compare and explicit binary overrides are kept across modules');
+ const arrays=extendNativeStringArrayFixture({add,check});
  add('ExitProcess 0');
  const project=newProject('AotStringLibrary');project.startup='Sub Main';project.modules=[{id:'m',name:'Entry',kind:'module',code:`Option Explicit
 Private sequence As Long
+${arrays.declarations}
 Private Declare Sub ExitProcess Lib "kernel32" (ByVal code As Long)
 Private Function Mark(ByVal s As String) As String
  If s="A" Then
@@ -40,11 +74,22 @@ Private Function Mark(ByVal s As String) As String
  End If
  Mark=s
 End Function
+Private Function MutateSource(ByRef source As String) As String
+ source="changed"
+ MutateSource="X"
+End Function
+${arrays.handlers}
 Private Sub NeverCalled()
  Dim unused As String
  unused="unreachable"
 End Sub
 Sub Main()
  ${body.join('\n ')}
-End Sub`}];return {project,checks};
+End Sub`},{id:'text',name:'TextPolicyModule',kind:'module',code:`Option Compare Text
+Public Function TextPolicy() As String
+ TextPolicy=Replace("aA","a","X") & Replace("Aa","A","",1,-1,0)
+End Function
+Public Function TextSearch() As Long
+ TextSearch=InStr(string1:="AB",string2:="b")
+End Function`},nativeStringArrayPolicyModule];return {project,checks};
 }

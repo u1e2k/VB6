@@ -62,13 +62,16 @@ These guides describe the implemented system, not complete native VB6 parity.
 - [Windows build targets](WINDOWS-BUILDS.md), [target validation](NATIVE-VALIDATION.md),
   [native compiler and optimizer](native-compiler-optimization.md),
   [direct Win32 AOT](WIN32-AOT.md) and [export troubleshooting](WIN32-EXPORT-TROUBLESHOOTING.md).
+- [Native strings and control metadata](NATIVE-STRING-METADATA.md): counted BSTRs,
+  Replace/InStr binding, Tag/Name lifetime and HWND-backed TabStop.
 - [Win32 controls](WIN32-CONTROLS.md): native AOT control coverage, property and stream ownership, layout integration, output dependencies and Windows execution checks.
 - [Native RichEdit selection and search](WIN32-RICHEDIT.md): mixed-format masks, Unicode search, line lookup and undo/redo.
 - [Native grids, charts and tab pages](WIN32-GRIDS-CHARTS-TABS.md): storage, editing, GDI, ownership and execution gates.
 - AOT language/ABI contracts: [numeric storage](WIN32-NUMERIC.md),
   [Currency](WIN32-CURRENCY.md), [Date](WIN32-DATES.md),
   [calendar intervals](WIN32-CALENDAR-INTERVALS.md), [arrays](WIN32-ARRAYS.md),
-  [calls](WIN32-CALLS.md), [bindings](WIN32-BINDINGS.md),
+  [calls](WIN32-CALLS.md), [Variants and ParamArray](WIN32-VARIANTS.md),
+  [bindings](WIN32-BINDINGS.md),
   [callbacks](WIN32-CALLBACKS.md) and [String interop](WIN32-STRING-INTEROP.md).
 - [COM/OLE services and reusable packages](COM-OLE.md): portable contracts, VB GetObject,
   native data/storage services, ownership, explicit permissions and support boundaries.
