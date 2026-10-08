@@ -13,8 +13,11 @@ export const xmlSpace = value => /^[\x20\t\r\n]*$/.test(value);
 export const qualifiedName = name => { const parts = String(name).split(':'); return {prefix: parts.length > 1 ? parts[0] : '', localName: parts.at(-1)}; };
 export const validXmlChar = cp => cp === 9 || cp === 10 || cp === 13 || cp >= 32 && cp <= 0xD7FF || cp >= 0xE000 && cp <= 0xFFFD || cp >= 0x10000 && cp <= 0x10FFFF;
 export function isXmlName(name) {
-  const chars = Array.from(String(name));
-  return !!chars.length && startChar.test(chars[0]) && chars.slice(1).every(c => nameChar.test(c)) && !/^:|:$/.test(name) && name.split(':').length <= 2;
+  const parts = String(name).split(':');
+  return parts.length <= 2 && parts.every(part => {
+    const chars = Array.from(part);
+    return !!chars.length && startChar.test(chars[0]) && chars.slice(1).every(c => nameChar.test(c));
+  });
 }
 export class SourceText {
   constructor(text, uri = '') {
@@ -63,7 +66,7 @@ export function escapeXml(value, attribute = true) {
 export function parseXaml(text, options = {}) {
   const source = new SourceText(text, options.uri), diagnostics = [], tokens = [], elements = [];
   const document = {kind: 'Document', source, children: [], elements, tokens, diagnostics, start: 0, end: source.text.length, root: null};
-  const input = source.text, maxLength = options.maxLength ?? 2_000_000, maxNodes = options.maxNodes ?? 50_000, maxDepth = options.maxDepth ?? 256;
+  const input = source.text, maxLength = options.maxLength ?? 2_000_000, maxNodes = options.maxNodes ?? 50_000, maxDepth = Math.min(options.maxDepth ?? 256, 256);
   const report = (code, message, start, end) => { if (diagnostics.length < 200) diagnostics.push(diagnostic(source, code, message, start, end)); };
   if (input.length > maxLength) { report('XAML0004', 'XAML source exceeds the configured size limit.', 0, input.length); return document; }
   let pos = input.charCodeAt(0) === 0xFEFF ? 1 : 0, count = 0;
@@ -93,7 +96,7 @@ export function parseXaml(text, options = {}) {
       if (raw.includes(']]>')) report('XAML0007', ']]> is not allowed in XML text.', start, pos);
       token('Text', start, pos); add({kind: 'Text', start, end: pos, value}); continue;
     }
-    if (input.startsWith('<!--', pos)) { delimited('Comment', '<!--', '-->'); continue; }
+    if (input.startsWith('\x3c!--', pos)) { delimited('Comment', '\x3c!--', '-->'); continue; }
     if (input.startsWith('<![CDATA[', pos)) { delimited('CData', '<![CDATA[', ']]>'); continue; }
     if (input.startsWith('<?', pos)) { delimited('ProcessingInstruction', '<?', '?>'); continue; }
     if (input.startsWith('<!', pos)) {
@@ -149,10 +152,8 @@ export function parseXaml(text, options = {}) {
       const key = attr.namespaceURI + '#' + attr.localName;
       if (seen.has(key)) report('XAML0018', 'Duplicate attribute ' + attr.name + '.', attr.start, attr.end); seen.add(key);
     }
-    if (!node.selfClosing) {
-      if (stack.length >= maxDepth) { report('XAML0004', 'XAML nesting limit exceeded.', start, pos); pos = input.length; }
-      else stack.push(node);
-    }
+    if (stack.length >= maxDepth) { report('XAML0004', 'XAML nesting limit exceeded.', start, pos); pos = input.length; }
+    else if (!node.selfClosing) stack.push(node);
   }
   for (const node of stack) { node.end = input.length; node.closeStart = input.length; report('XAML0011', 'Missing closing tag for ' + node.name + '.', node.start, node.openEnd); }
   const roots = document.children.filter(node => node.kind === 'Element'); document.root = roots[0] ?? null;
@@ -177,15 +178,32 @@ export function parseMarkupExtension(text, offset = 0) {
     while (pos < text.length && text[pos] !== '}') {
       const argStart = pos; let key = null;
       // A named argument's equals sign must occur before any nested value/quote/comma.
-      let look = pos; while (look < text.length && !/[=,{}'"]/.test(text[look])) look++;
-      if (text[look] === '=') { key = text.slice(pos, look).trim(); if (!key || !isXmlName(key)) fail('Invalid markup argument name.', pos, look); pos = look + 1; skip(); }
+      const named = /^([^\s=,{}()[\]'"]+)\s*=/.exec(text.slice(pos));
+      if (named) { key = named[1]; if (!isXmlName(key)) fail('Invalid markup argument name.', pos, pos + key.length); pos += named[0].length; skip(); }
       const valueStart = pos; let value;
       if (text[pos] === '{') value = read(depth + 1);
       else if (text[pos] === '"' || text[pos] === "'") {
         const quote = text[pos++], begin = pos; while (pos < text.length && text[pos] !== quote) pos++;
         value = {kind: 'Literal', value: text.slice(begin, pos), start: offset + begin, end: offset + pos};
         if (text[pos] === quote) pos++; else fail('Unterminated quoted markup argument.', begin, pos);
-      } else { while (pos < text.length && text[pos] !== ',' && text[pos] !== '}') pos++; value = {kind: 'Literal', value: text.slice(valueStart, pos).trim(), start: offset + valueStart, end: offset + pos}; }
+      } else {
+        const brackets = []; let quote = '';
+        while (pos < text.length) {
+          const c = text[pos];
+          if (quote) {
+            if (c === '^' && pos + 1 < text.length) { pos += 2; continue; }
+            if (c === quote) { if (text[pos + 1] === quote) { pos += 2; continue; } quote = ''; }
+          } else if (c === '"' || c === "'") quote = c;
+          else if (c === '(' || c === '[') brackets.push(c);
+          else if (c === ')' || c === ']') { if (brackets.pop() !== (c === ')' ? '(' : '[')) fail('Unbalanced binding path delimiters.', pos, pos + 1); }
+          else if ((c === ',' || c === '}') && !brackets.length) break;
+          pos++;
+        }
+        if (quote || brackets.length) fail('Unterminated binding path argument.', valueStart, pos);
+        const raw = text.slice(valueStart, pos), trimmed = raw.trim();
+        const begin = valueStart + raw.length - raw.trimStart().length;
+        value = {kind: 'Literal', value: trimmed, start: offset + begin, end: offset + begin + trimmed.length};
+      }
       if (key && args.some(a => a.name === key)) fail('Duplicate markup argument ' + key + '.', argStart, pos);
       args.push({name: key, value, start: offset + argStart, end: offset + pos}); skip();
       if (text[pos] === ',') { pos++; skip(); if (text[pos] === '}') fail('Expected an argument after comma.', pos - 1, pos); }
