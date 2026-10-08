@@ -90,7 +90,13 @@
     "build:vbnet-migration": "node tools/build-vbnet-migration.mjs",
     "test:migration": "node --test tests/migration-*.test.mjs",
     "test:migration:browser": "python tools/browser-migration-tests.py",
-    "pack:vbnet-migration": "node tools/pack-vbnet-migration.mjs"
+    "pack:vbnet-migration": "node tools/pack-vbnet-migration.mjs",
+    "build:macos": "node tools/build-macos.mjs",
+    "build:macos-package": "node tools/build-macos-native.mjs",
+    "macos:bridge": "node tools/serve-macos.mjs",
+    "test:macos": "node --test tests/macos-*.test.mjs",
+    "test:macos:native": "node tools/test-macos-native.mjs",
+    "test:macos:browser": "python tools/browser-macos-export-tests.py"
   },
   "engines": {
     "node": ">=22"

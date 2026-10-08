@@ -62,3 +62,7 @@ packages/vbnet-runtime-windows/obj/
 
 # Standalone renderer SDK: generated and checked by the exact artifact manifest.
 /dist/vb6-rendering.js
+
+# Reproducible Apple Silicon compiler bundle and native execution outputs.
+/dist/vb6-macos.js
+/artifacts/macos-native/

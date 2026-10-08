@@ -329,12 +329,10 @@ jobs:
       - run: python tools/test_rendering_capture.py
       - run: python -m playwright install --with-deps chromium
       - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
-      - name: Resolve browser executable
+      - name: Verify and select the installed browser for this display mode
         run: |
-          python - <<'PY' >> "$GITHUB_ENV"
-          from playwright.sync_api import sync_playwright
-          with sync_playwright() as p: print('CHROMIUM_PATH=' + p.chromium.executable_path)
-          PY
+          python tools/test_rendering_browser.py
+          python tools/rendering_browser.py --display ${{ matrix.display }} >> "$GITHUB_ENV"
       - name: Actual GPU API execution and exact theme pixels
         env:
           DISPLAY_MODE: ${{ matrix.display }}
