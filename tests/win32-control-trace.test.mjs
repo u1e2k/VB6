@@ -35,3 +35,11 @@ test('failure-only tracing reports startup VB errors without changing the author
  assert.match(startup.code,/TraceExit code/);
  assert.equal(traced.modules.length,project.modules.length+1);
 });
+
+test('failure-only common-item trace includes click result and actual queued coordinates',()=>{
+ const {project}=nativeControlFixtures().find(f=>f.project.name==='AotControlItemObjects');
+ const before=JSON.stringify(project),traced=traceControlFixture(project);
+ assert.equal(JSON.stringify(project),before);
+ for(const marker of ['Tree click: result=','PulseTree item=','Client point=','Screen point=','GetMessage result=','Restore cursor: result='])assert.ok(traced.modules[0].code.includes(marker),marker);
+ for(const optimization of [0,1,2])assert.ok(compileWin32(traced,{optimization}).bytes.length);
+});
