@@ -5,7 +5,10 @@ export function extendNativeFormatFixture({add,check}) {
   check('VarType(Format(7,"0"))=vbString And VarType(Format$(7,"0"))=vbString','Format Variant and Format$ String retain their source-visible result subtype');
   check('Format$(DateSerial(2024,2,29),"yyyymmdd")="20240229"','Format date fields retain leap day without a JS date formatter');
   check('Format$(TimeSerial(13,4,9),"hhnnss")="130409"','Format time fields distinguish minutes and months');
-  check('Format$(DateSerial(2024,1,7),"w",vbSunday)="1" And Format$(DateSerial(2024,1,7),"w",vbMonday)="7"','VB Sunday-based first-day values map to Automation Monday-based values');
+  check('Format$(DateSerial(2024,1,7),"w",vbSunday)="1" And Format$(DateSerial(2024,1,7),"w",vbMonday)="7"','VB Sunday-based first-day values match installed Automation and DatePart');
+  add('For i=1 To 7');
+  check('CLng(Format$(DateSerial(2024,1,7),"w",i))=DatePart("w",DateSerial(2024,1,7),i)','all seven Format weekday conventions agree with the native calendar kernel');
+  add('Next');
   check('Format$(123)="123" And Format$(123,,, )="123"','omitted Format mask and week parameters use documented defaults');
   check('IsNull(Format(Null,"0"))','Format preserves Null as a Variant');
   add('sequence=0\ns=Format$(format:=Mark("@"),expression:=Mark("A"))');

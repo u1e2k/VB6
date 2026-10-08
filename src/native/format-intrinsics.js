@@ -26,7 +26,9 @@ export function nativeFormatBuiltin(c,node,name){
     const i=entry.index,expr=entry.omitted?{kind:'literal',value:fields[i][1]}:entry.node;
     if(i===0)c.boxVariant(expr);else if(i===1)c.textExpression(expr);else {
       c.numeric(expr);x.compare(0).branch('l','error:5').compare(i===2?7:3).branch('g','error:5');
-      if(i===2){const done=x.unique(),sunday=x.unique();x.test().branch('e',done).compare(1).branch('e',sunday).sub('eax',1).jump(done).label(sunday).value(7).label(done);}
+      // The installed Windows VarFormat ABI uses VB's Sunday=1 convention,
+      // as independently exercised by DatePart and the native fixture. Do not
+      // remap it using the contradictory Monday-first documentation table.
     }
     const slot=c.arrayWorkspace(4,'format-argument');x.mov(local(slot.offset),'eax');slots[i]=slot;
   }
