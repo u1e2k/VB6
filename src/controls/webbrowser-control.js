@@ -8,7 +8,7 @@ export const WEB_BROWSER_METADATA = Object.freeze({
   displayName:'Microsoft Web Browser — HTML5', baseName:'WebBrowser', defaultEvent:'DocumentComplete',
   description:'SHDocVw-compatible source control using an isolated modern HTML document. No Internet Explorer or native ActiveX is loaded.',
   properties:[...Object.entries(WEB_BROWSER_DEFAULTS).map(([name,value])=>({name,default:booleans.has(name)?!!value:value})),
-    ...WEB_BROWSER_READONLY.map(name=>({name,readOnly:true})),{name:'NavigationStatus',readOnly:true}],
+    ...WEB_BROWSER_READONLY.filter(name=>name!=='Name').map(name=>({name,readOnly:true})),{name:'NavigationStatus',readOnly:true}],
   events:WEB_BROWSER_EVENTS
 });
 
@@ -16,29 +16,28 @@ export const WEB_BROWSER_METADATA = Object.freeze({
  * control arrays and host disposal intact. No monkey-patching BrowserControl.
  */
 export class WebBrowserControl extends BrowserControl {
-  build(){this.browserWaiters=new Set();this.webBrowser=new WebBrowserController(this);}
+  build(){this.webBrowser=new WebBrowserController(this);}
   get(name){return this.webBrowser?.handles(name)?this.webBrowser.get(name):super.get(name);}
   set(name,value,fromDOM=false){if(this.webBrowser?.handles(name))return this.webBrowser.set(name,value);return super.set(name,value,fromDOM);}
   refresh(){super.refresh();this.webBrowser?.refresh();}
   event(name,args=[],coalesce=false,current=()=>true){
     const vm=this.vm,instance=this.instance,valid=()=>!this.design&&!this.disposed&&!this.webBrowser?.closed&&current();
-    if(!vm||!valid())return Promise.resolve();
+    if(!vm||!valid()||['stopped','error'].includes(vm.state)||(vm.immediateContext&&!vm.immediateEvents))return Promise.resolve();
     const proc=instance?.module?.procedures.get((this.model.name+'_'+name).toLowerCase());
     if(!proc)return Promise.resolve();
+    const key=this.model.id+':webbrowser:'+name;
+    if(coalesce&&vm.eventQueue.some(event=>event.key===key))return Promise.resolve();
+    if(vm.eventQueue.length>=1000)return Promise.reject(new WebBrowserError('Browser event queue limit',7));
     const values=this.props.Index!==undefined?[Number(this.props.Index),...args]:args;
-    const enqueue=()=>vm.enqueueInput(instance,this.model.id+':webbrowser:'+name,()=>vm.callProcedure(instance,proc,values),{coalesce,valid});
-    // enqueueInput intentionally rejects paused input. Browser completion is not
-    // disposable pointer input: retain it until Resume, checking navigation
-    // identity again before it enters the ordinary debugger-aware VM queue.
-    if(vm.state!=='paused')return enqueue();
-    if(this.browserWaiters.size>=128)return Promise.reject(new WebBrowserError('Paused browser event limit',7));
-    return new Promise((resolve,reject)=>{
-      let unsubscribe;const finish=()=>{unsubscribe?.();this.browserWaiters.delete(cancel);};
-      const cancel=()=>{finish();resolve();};this.browserWaiters.add(cancel);
-      unsubscribe=vm.on('state',()=>{if(vm.state==='paused')return;finish();if(valid()&&['running','idle'].includes(vm.state))enqueue().then(resolve,reject);else resolve();});
+    // Use the VM's ordinary queued-action contract, not its disposable pointer
+    // input queue. Debugger Pause must retain DocumentComplete/ByRef events;
+    // the generation predicate prevents a superseded document from firing.
+    return new Promise(resolve=>{
+      vm.eventQueue.push({instance,key,action:()=>valid()?vm.callProcedure(instance,proc,values):undefined,resolve});
+      vm.processEvents();
     });
   }
-  dispose(){this.webBrowser?.dispose();for(const cancel of this.browserWaiters||[])cancel();this.browserWaiters?.clear();super.dispose();}
+  dispose(){this.webBrowser?.dispose();super.dispose();}
 }
 
 /** Add only missing registrations; preserve explicit trusted host overrides.

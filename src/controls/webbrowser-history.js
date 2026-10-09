@@ -8,9 +8,11 @@ export class WebBrowserHistory {
   commit(entry,{index=null,replace=false,noHistory=false}={}){
     if(index!==null){if(!Number.isInteger(index)||index<0||index>=this.entries.length)throw new WebBrowserError('Invalid history index',5);this.index=index;this.transient=false;return;}
     if(noHistory){this.transient=true;return;}
-    this.entries=this.entries.slice(0,this.index+1);
+    // Refresh/replacement changes the current entry, not the forward list.
+    // A transient no-history page must not overwrite its previous real entry.
+    if(replace&&this.transient)return;
     if(replace&&this.index>=0)this.entries[this.index]={...entry};
-    else{this.entries.push({...entry});this.index++;}
+    else{this.entries=this.entries.slice(0,this.index+1);this.entries.push({...entry});this.index++;}
     this.transient=false;
     let bytes=this.entries.reduce((n,e)=>n+(e.html?.length||0)*2+e.url.length*2,0);
     while(this.entries.length>1&&(this.entries.length>limits.history||bytes>limits.historyBytes)){
