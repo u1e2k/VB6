@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real HTTP separate-origin AppBlock/MCP host tests. No opaque-origin substitute."""
 from __future__ import annotations
-import argparse, functools, http.server, json, os, shutil, subprocess, threading
+import argparse, functools, http.server, json, os, re, shutil, subprocess, threading
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +106,12 @@ try:
             expect(app.locator('#delivery')).to_have_text('Queued')
             check(page.evaluate('vb6Studio.codingAgents.conversations.active.followups.items[0].text')=='Explain counter 1','App did not await the reviewed exact message')
             passed('IDE AppBlock RPC awaits actual approval and propagates acceptance or denial')
+            # Accepted follow-ups intentionally activate the agent's MDI window.
+            # Reactivate the existing app window through the real IDE command;
+            # do not force-click through the overlapping agent pane.
+            page.evaluate('vb6Studio.intelligentUI.open()')
+            expect(page.locator('[data-mdi-key="tool:intelligent-ui"]')).to_have_class(re.compile(r'\bmdi-active\b'))
+            expect(app.get_by_role('button',name='Count: 1',exact=True)).to_be_visible()
             app.get_by_role('button',name='Ask agent',exact=True).click()
             page.get_by_role('button',name='Queue reviewed message',exact=True).wait_for()
             page.evaluate('vb6Studio.intelligentUI.setEnabled(false)')
