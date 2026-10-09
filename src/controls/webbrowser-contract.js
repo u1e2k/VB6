@@ -2,7 +2,7 @@
  * References: Microsoft IWebBrowser2::Navigate2 / DWebBrowserEvents2 and the
  * WHATWG iframe sandbox specification (see docs/WEBBROWSER.md).
  */
-export const WEB_BROWSER_ALIASES = Object.freeze(['WebBrowser', 'SHDocVw.WebBrowser', 'Shell.Explorer', 'Shell.Explorer.2']);
+export const WEB_BROWSER_ALIASES = Object.freeze(['WebBrowser', 'SHDocVw.WebBrowser', 'SHDocVwCtl.WebBrowser', 'Shell.Explorer', 'Shell.Explorer.2']);
 export const isWebBrowser = type => WEB_BROWSER_ALIASES.some(name => name.toLowerCase() === String(type).toLowerCase());
 export const WEB_BROWSER_CONSTANTS = Object.freeze({
   READYSTATE_UNINITIALIZED: 0, READYSTATE_LOADING: 1, READYSTATE_LOADED: 2,
