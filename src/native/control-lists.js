@@ -11,6 +11,10 @@ import {MAX_NATIVE_STRING} from './storage.js';
 const key=v=>String(v).toLowerCase(),isList=o=>['ListBox','ComboBox'].includes(o?.model?.type);
 const at=(base,displacement=0)=>mem32({base,displacement}),local=n=>at('ebp',n),arg=argument=>({argument});
 const mem=memory=>({memory});
+// WinUser.h: LB_SETSEL=0x0185. 0x0183 is LB_SELITEMRANGEEX and has
+// different wParam/lParam semantics (equal endpoints deselect the item).
+// https://learn.microsoft.com/windows/win32/controls/lb-setsel
+const LB_SETSEL=0x185;
 const message={ListBox:{count:0x18b,getdata:0x199,setdata:0x19a,add:0x180,insert:0x181,remove:0x182,clear:0x184,length:0x18a,text:0x189,select:0x186,current:0x188,sort:2},
   ComboBox:{count:0x146,getdata:0x150,setdata:0x151,add:0x143,insert:0x14a,remove:0x144,clear:0x14b,length:0x149,text:0x148,select:0x14e,current:0x147,sort:0x100}};
 function send(c,s,msg,w=0,l=0){c.x.api('user32.dll','SendMessageW',[arg(s.offset),msg,w,l]);}
@@ -56,7 +60,7 @@ function property(c,object,name,args,value){
   // LB_SETSEL only works for multi-select controls. Query actual style so a
   // statically indexed group can contain both single and multi-select entries.
   const single=x.unique(),done=x.unique();x.api('user32.dll','GetWindowLongW',[arg(s.offset),-16]).and('eax',0x808).test().branch('e',single);
-  send(c,s,0x183,arg(candidate.offset),arg(index.offset));x.compare(-1).branch('e','error:381').jump(done).label(single);
+  send(c,s,LB_SETSEL,arg(candidate.offset),arg(index.offset));x.compare(-1).branch('e','error:381').jump(done).label(single);
   const choose=x.unique();x.value(arg(candidate.offset)).test().branch('ne',choose);
   send(c,s,m.current);x.cmp('eax',local(index.offset)).branch('ne',done);send(c,s,m.select,-1);x.jump(done).label(choose);
   send(c,s,m.select,arg(index.offset));x.compare(-1).branch('e','error:381').label(done);return true;
@@ -77,7 +81,7 @@ export function nativeListInitialSelection(type,properties){
   const index=Number(properties.ListIndex);
   if(!Number.isInteger(index)||index< -1||index>=(properties.List||[]).length)
     throw new TypeError('Native initial ListIndex must be -1 or an existing zero-based item');
-  if(type==='ListBox'&&properties.MultiSelect)return index===-1?[]:[[0x183,1,index],[0x19e,index,0]];
+  if(type==='ListBox'&&properties.MultiSelect)return index===-1?[]:[[LB_SETSEL,1,index],[0x19e,index,0]];
   return [[type==='ListBox'?0x186:0x14e,index,0]];
 }
 export function createNativeList(c,control){

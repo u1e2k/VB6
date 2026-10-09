@@ -41,7 +41,7 @@ test('unsupported List assignment is not silently redirected to a get or a globa
 test('initial no-selection never emits the native multi-select-all sentinel',()=>{
   for(const MultiSelect of [1,2]){
     assert.deepEqual(nativeListInitialSelection('ListBox',{List:['a','b'],ListIndex:-1,MultiSelect}),[]);
-    assert.deepEqual(nativeListInitialSelection('ListBox',{List:['a','b'],ListIndex:1,MultiSelect}),[[0x183,1,1],[0x19e,1,0]]);
+    assert.deepEqual(nativeListInitialSelection('ListBox',{List:['a','b'],ListIndex:1,MultiSelect}),[[0x185,1,1],[0x19e,1,0]]);
   }
   assert.deepEqual(nativeListInitialSelection('ListBox',{List:[],ListIndex:-1,MultiSelect:0}),[[0x186,-1,0]]);
   assert.deepEqual(nativeListInitialSelection('ComboBox',{List:[],ListIndex:-1}),[[0x14e,-1,0]]);
