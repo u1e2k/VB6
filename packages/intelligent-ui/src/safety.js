@@ -8,13 +8,14 @@ export function safeKey(key) {
   if (typeof key !== 'string' || ['__proto__', 'prototype', 'constructor', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'].includes(key)) throw new UIError('unsafe_key', 'Unsafe property name.');
   return key;
 }
-export function boundedData(value, limit = LIMITS.dataBytes) {
+export function boundedData(value, limit = LIMITS.dataBytes, {maxText = LIMITS.text} = {}) {
+  if (!Number.isSafeInteger(maxText) || maxText < 1 || maxText > 250000) throw new UIError('data_limit', 'Invalid text allowance.');
   let size = 0, nodes = 0; const active = new Set();
   const visit = (value, depth) => {
     if (depth > LIMITS.depth || ++nodes > 20000) throw new UIError('data_limit', 'UI data is too deeply nested or too large.');
     if (value === null || typeof value === 'boolean') { size += 5; return value; }
     if (typeof value === 'number') { if (!Number.isFinite(value)) throw new UIError('data_number', 'UI numbers must be finite.'); size += 24; return value; }
-    if (typeof value === 'string') { size += value.length * 2 + 2; if (size > limit || value.length > LIMITS.text) throw new UIError('data_limit', 'UI data exceeds its size limit.'); return value; }
+    if (typeof value === 'string') { size += value.length * 2 + 2; if (size > limit || value.length > maxText) throw new UIError('data_limit', 'UI data exceeds its size limit.'); return value; }
     if ((!Array.isArray(value) && !record(value)) || active.has(value)) throw new UIError('data_type', 'UI data must be acyclic JSON, without functions or host objects.');
     active.add(value); const result = Array.isArray(value) ? [] : Object.create(null), keys = Object.keys(value);
     if (keys.length > LIMITS.items) throw new UIError('data_limit', 'UI collection exceeds its item limit.');

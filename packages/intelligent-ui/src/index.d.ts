@@ -10,7 +10,7 @@ export type Catalog = Readonly<Record<string,Readonly<Record<string,string|reado
 export interface StateSnapshot {state:Record<string,Json>}
 export class UIError extends Error {code:string;offset:number;constructor(code:string,message:string,offset?:number)}
 export const LIMITS:Readonly<Record<string,number>>;
-export function boundedData<T>(value:T,limit?:number):T;
+export function boundedData<T>(value:T,limit?:number,options?:{maxText?:number}):T;
 export function safeUrl(value:string):string;
 export function normalizeAction(action:unknown):UIAction;
 export const CATALOG:Catalog;
@@ -22,10 +22,10 @@ export class StreamingCompiler {source:string;document:CompiledUI|null;revision:
 export class UIRuntime {version:number;tree:UINode[];constructor(options?:{catalog?:Catalog});update(source:string,options?:UIOptions):UIResult;apply(document:CompiledUI,options?:{data?:Record<string,Json>}):UIResult;dispatch(id:string,args?:Json[],expectedVersion?:number):UIResult;snapshot():StateSnapshot;restore(snapshot:StateSnapshot):void;dispose():void}
 export function diffTrees(before:UINode[],after:UINode[]):UIOperation[];
 export interface RenderFactoryResult {node:HTMLElement;childHost?:HTMLElement;update?:(props:Record<string,Json>,previous:Record<string,Json>)=>void;dispose?:()=>void}
-export type RenderFactory = (context:{document:Document;id:string;onEvent:(event:string,args:Json[])=>void})=>RenderFactoryResult;
+export type RenderFactory = (context:{document:Document;id:string;onEvent:(event:string,args:Json[])=>void;onAction:(action:UIAction)=>unknown})=>RenderFactoryResult;
 export interface RendererOptions {onEvent?:(id:string,args:Json[])=>unknown;onAction?:(action:UIAction)=>unknown;onError?:(error:Error)=>void;factories?:Record<string,RenderFactory>;allowResource?:(url:string)=>boolean}
 export class DOMRenderer {constructor(root:HTMLElement,options?:RendererOptions);apply(operations:UIOperation[]):void;dispose():void}
-export interface SurfaceOptions extends Pick<RendererOptions,'factories'|'allowResource'> {workerSource?:string;catalog?:Catalog;snapshot?:StateSnapshot;onAction?:(action:UIAction,surface:UISurface)=>unknown;onUpdate?:(result:UIResult,surface:UISurface)=>void}
+export interface SurfaceOptions extends Pick<RendererOptions,'factories'|'allowResource'> {workerSource?:string;catalog?:Catalog;snapshot?:StateSnapshot;onAction?:(action:UIAction,surface:UISurface)=>unknown;onUpdate?:(result:UIResult,surface:UISurface)=>void;resolveReference?:(id:string|null,context:{type:string;query:string;signal:AbortSignal})=>UIReference|null|Promise<UIReference|null>;approveResource?:(url:string)=>boolean|Promise<boolean>;subscribeReferences?:(listener:(event:{id:string|null;revision:number})=>void)=>()=>void}
 export class UISurface {root:HTMLElement;viewport:HTMLElement;client:UIClient;version:number;result?:UIResult;constructor(root:HTMLElement,options?:SurfaceOptions);update(source:string,options?:UIOptions):Promise<UIResult>;event(id:string,args:Json[]):Promise<UIResult|undefined>;snapshot():StateSnapshot;restart():void;dispose():void}
 export class UIClient {backend:'worker'|'bounded-main';constructor(options?:{workerSource?:string;window?:Window|object;timeout?:number;snapshot?:StateSnapshot;catalog?:Catalog});request(method:'update',payload:{source:string;options?:UIOptions}):Promise<UIResult>;request(method:'event',payload:{id:string;args?:Json[];version?:number}):Promise<UIResult>;snapshot():StateSnapshot;dispose():void}
 export function startUIWorker(scope:{addEventListener(type:"message",listener:(event:{data:any})=>void):void;postMessage(message:unknown):void}):void;
@@ -33,6 +33,20 @@ export function splitUIMessage(text:string):({kind:'text';id:string;text:string}
 export const MCP_UI_URI:string,MCP_UI_MIME:string,MCP_APP_VERSION:string;
 export const MCP_UI_META:Readonly<object>,UI_TOOL_SCHEMAS:Readonly<Record<string,object>>,UI_TOOL_REQUIRED:Readonly<Record<string,string[]>>,UI_TOOL_DESCRIPTIONS:Readonly<Record<string,string>>;
 export interface UIOwner {principal?:string;sessionKey?:string;signal?:AbortSignal}
-export class McpUIService {constructor(options?:{onChange?:(event:{type:string;result:Json;owner:string})=>void;maxDocuments?:number;maxOwners?:number;resourceHtml?:string});capture(tool:string,result:Json,context:UIOwner):void;run(method:'catalog'|'present'|'update'|'read'|'list'|'close',args:Record<string,Json>,context:UIOwner):any;resources():object[];readResource(uri:string):object[];revoke(owner:string):void;clear():void;dispose():void}
+export class McpUIService {constructor(options?:{onChange?:(event:{type:string;result:Json;owner:string})=>void;maxDocuments?:number;maxOwners?:number;resourceHtml?:string});capture(tool:string,result:Json,context:UIOwner):void;reference(id:string,context:UIOwner):UIReference|null;run(method:'catalog'|'present'|'update'|'read'|'list'|'close',args:Record<string,Json>,context:UIOwner):any;resources():object[];readResource(uri:string):object[];revoke(owner:string):void;clear():void;dispose():void}
 export class McpAppClient {ready:boolean;context:Record<string,Json>;capabilities:Record<string,Json>;constructor(options?:{window?:Window;hostOrigin?:string;timeout?:number;onNotification?:(method:string,params:Record<string,Json>)=>unknown;onTeardown?:()=>void});connect():Promise<any>;request(method:string,params?:Record<string,Json>):Promise<any>;notify(method:string,params:Record<string,Json>):void;dispose():void}
 export function startMcpApp(options?:{root?:HTMLElement}):{client:McpAppClient;surface:UISurface;ready:Promise<void>;dispose():void};
+
+export interface AppCsp {connectDomains?:string[];resourceDomains?:string[];frameDomains?:string[];baseUriDomains?:string[]}
+export interface UIReference {kind:'image'|'images'|'entity'|'citation';title?:string;src?:string;url?:string;details?:Json;items?:{src:string;alt?:string;title?:string;url?:string}[];provenance:{source:string;capturedAt?:string;revision?:number|null}}
+export class UIReferenceStore {revision:number;constructor(options?:{maxEntries?:number;maxBytes?:number});put(id:string,value:UIReference):UIReference;get(id:string):UIReference|null;list():{id:string;kind:string;title:string;provenance:UIReference['provenance']}[];delete(id:string):boolean;clear():void;subscribe(listener:(change:{id:string|null;revision:number})=>void):()=>void;dispose():void}
+export function validateReference(value:unknown):UIReference;
+export function createReferenceFactories(options?:{resolveReference?:SurfaceOptions['resolveReference'];allowResource?:(url:string)=>boolean;approveResource?:(url:string)=>boolean|Promise<boolean>;onAction?:(action:UIAction)=>unknown;subscribe?:SurfaceOptions['subscribeReferences']}):Record<string,RenderFactory>;
+export function normalizeAppCsp(input?:AppCsp):Required<AppCsp>;
+export function appProxyUrl(value:string,hostOrigin:string,csp?:AppCsp):URL;
+export function sandboxCsp(input?:AppCsp,options?:{proxy?:boolean;parentOrigin?:string}):string;
+export function startSandboxProxy(window?:Window):{dispose():void};
+export interface AppHostOptions {proxyUrl:string;html:string;csp?:AppCsp;hostContext?:Record<string,Json>;tools?:{name:string;_meta?:{ui?:{visibility?:string[]}}}[];resourceUris?:string[];callTool?:(name:string,args:Record<string,Json>,context:{signal:AbortSignal})=>unknown;readResource?:(uri:string,context:{signal:AbortSignal})=>unknown;onMessage?:(message:Record<string,Json>,context:{signal:AbortSignal})=>unknown;onContext?:(context:Record<string,Json>,options:{signal:AbortSignal})=>unknown;openLink?:(url:string,context:{signal:AbortSignal})=>unknown;downloadFile?:(files:Record<string,Json>,context:{signal:AbortSignal})=>unknown;approve?:(action:{method:string;params:Record<string,Json>},context:{signal:AbortSignal})=>boolean|Promise<boolean>;onError?:(error:Error)=>void;timeout?:number}
+export class McpAppHost {ready:boolean;frame:HTMLIFrameElement;constructor(root:HTMLElement,options:AppHostOptions);setToolInput(args:Record<string,Json>,options?:{partial?:boolean}):void;setToolResult(result:Record<string,Json>):void;updateHostContext(context:Record<string,Json>):void;listAppTools():Promise<unknown>;callAppTool(name:string,args?:Record<string,Json>):Promise<unknown>;cancel():void;teardown():Promise<void>;dispose():void}
+export function appBlockDocument(html:string):string;
+export function createAppBlockFactory(options?:{proxyUrl?:string|(()=>string);approveApp?:(app:{html:string;title:string;proxyUrl:string})=>boolean|Promise<boolean>;approveAction?:AppHostOptions['approve'];onAction?:(action:UIAction)=>unknown;hostContext?:()=>Record<string,Json>}):RenderFactory;

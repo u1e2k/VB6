@@ -30,7 +30,17 @@
       "import": "./src/mcp.js",
       "default": "./src/mcp.js"
     },
-    "./styles.css": "./src/styles.css"
+    "./styles.css": "./src/styles.css",
+    "./host": {
+      "types": "./src/host.d.ts",
+      "import": "./src/app-host.js",
+      "default": "./src/app-host.js"
+    },
+    "./references": {
+      "types": "./src/references.d.ts",
+      "import": "./src/references.js",
+      "default": "./src/references.js"
+    }
   },
   "files": [
     "src",

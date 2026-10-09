@@ -16,7 +16,7 @@ export class DOMRenderer {
     const d=this.doc,make=(tag,cls)=>{const n=d.createElement(tag);if(cls)n.className=cls;return n;};
     if(type==='#text'){const node=d.createTextNode('');return {id,type,node,host:node,props:{},children:[]};}
     if(type!=='markdown'&&!Object.hasOwn(CATALOG,type)&&!Object.hasOwn(this.factories,type))throw new UIError('component','Unsupported rendered component.');
-    const custom=this.factories[type]?.({document:d,id,onEvent:(event,args)=>this.event(id,event,args)});
+    const custom=this.factories[type]?.({document:d,id,onAction:action=>this.action(action),onEvent:(event,args)=>this.event(id,event,args)});
     if(custom){custom.node.classList.add('iui-component');return {id,type,node:custom.node,host:custom.childHost||custom.node,custom,props:{},children:[]};}
     const node=make(tags[type]||'div','iui-component iui-'+type),r={id,type,node,host:node,props:{},children:[]};
     if(inputs[type]){r.label=make('span','iui-input-label');r.input=make(inputs[type]==='textarea'?'textarea':'input');if(inputs[type]!=='textarea')r.input.type=inputs[type];r.host=make('span','iui-input-content');node.append(r.label,r.input,r.host);r.input.id='iui-field-'+(++DOMRenderer.sequence);r.label.id=r.input.id+'-label';r.input.setAttribute('aria-labelledby',r.label.id);
@@ -110,9 +110,15 @@ export class DOMRenderer {
     r.view.textContent=p.alt||p.label||'Waiting for host-resolved image data.';
   }
   tabs(r){
-    const tabs=[...this.records.values()].filter(n=>n.parent===r.id&&n.type==='tab').sort((a,b)=>a.index-b.index),value=r.props.value??r.selected??tabs[0]?.props.value;
-    const stamp=JSON.stringify(tabs.map(n=>[n.id,n.props.label,n.props.value]))+':'+value;if(r.tabStamp===stamp)return;r.tabStamp=stamp;r.nav.replaceChildren();
-    for(const [i,tab] of tabs.entries()){const selected=tab.props.value===value||value===undefined&&i===0;tab.node.hidden=!selected;tab.node.setAttribute('role','tabpanel');const button=this.doc.createElement('button');button.type='button';button.setAttribute('role','tab');button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;button.textContent=tab.props.label||tab.props.value||'Tab '+(i+1);button.onclick=()=>{r.selected=tab.props.value;if(r.props.onChange)this.event(r.id,'onChange',[tab.props.value]);else this.tabs(r);};button.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;r.nav.children[next]?.click();r.nav.children[next]?.focus();};r.nav.append(button);}
+    const tabs=[...this.records.values()].filter(n=>n.parent===r.id&&n.type==='tab'&&!n.props.hidden).sort((a,b)=>a.index-b.index),key=tab=>tab.props.value??tab.id;
+    let value=r.props.value??r.selected??(tabs[0]?key(tabs[0]):null);if(!tabs.some(tab=>key(tab)===value))value=tabs[0]?key(tabs[0]):null;
+    for(const tab of this.records.values())if(tab.parent===r.id&&tab.type==='tab')tab.node.hidden=!!tab.props.hidden||key(tab)!==value;
+    const stamp=JSON.stringify(tabs.map(n=>[n.id,n.props.label,key(n)]))+':'+value;if(r.tabStamp===stamp)return;r.tabStamp=stamp;r.nav.replaceChildren();
+    for(const [i,tab] of tabs.entries()){
+      const selected=key(tab)===value,button=this.doc.createElement('button');tab.node.setAttribute('role','tabpanel');tab.node.tabIndex=0;tab.node.id='iui-panel-'+this.scopeId+'-'+encodeURIComponent(tab.id);button.id=tab.node.id+'-tab';button.setAttribute('aria-controls',tab.node.id);tab.node.setAttribute('aria-labelledby',button.id);button.type='button';button.setAttribute('role','tab');button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;button.textContent=tab.props.label||tab.props.value||'Tab '+(i+1);
+      button.onclick=()=>{r.selected=key(tab);if(r.props.onChange)this.event(r.id,'onChange',[key(tab)]);else this.tabs(r);};
+      button.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;r.nav.children[next]?.click();r.nav.children[next]?.focus();};r.nav.append(button);
+    }
   }
   app(){throw new UIError('app_host','Install an explicitly isolated AppBlock renderer; generated JavaScript is disabled by default.');}
   dispose(){if(this.disposed)return;this.disposed=true;for(const r of this.records.values()){r.custom?.dispose?.();r.frame?.remove();}this.records.clear();this.root.replaceChildren();}

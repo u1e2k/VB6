@@ -17,7 +17,7 @@ export class McpAppClient {
     try{message=boundedData(event.data,500000);}catch{return;}if(!record(message)||message.jsonrpc!=='2.0')return;
     if(message.id!==undefined&&!message.method){const pending=this.pending.get(message.id);if(!pending)return;clearTimeout(pending.timer);this.pending.delete(message.id);if(message.error)pending.reject(new UIError('host',String(message.error.message||'Host rejected the request.')));else pending.resolve(message.result);return;}
     if(message.method==='ping'&&message.id!==undefined){this.send({jsonrpc:'2.0',id:message.id,result:{}});return;}
-    if(message.method==='ui/resource-teardown'&&message.id!==undefined){this.onTeardown();this.send({jsonrpc:'2.0',id:message.id,result:{}});this.dispose();return;}
+    if(message.method==='ui/resource-teardown'&&message.id!==undefined){try{this.onTeardown();}finally{this.send({jsonrpc:'2.0',id:message.id,result:{}});this.dispose();}return;}
     if(!this.ready)return;
     if(message.method==='ui/notifications/host-context-changed')this.context={...this.context,...message.params};
     if(message.id!==undefined){this.send({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Unsupported app request.'}});return;}
@@ -28,16 +28,17 @@ export class McpAppClient {
 export function startMcpApp({root=globalThis.document?.getElementById('intelligent-ui-root')}={}){
   if(!root)throw new UIError('root','MCP App root is missing.');const win=root.ownerDocument.defaultView;let surface,lastUI=null,cancelled=false,observer=null;
   const status=root.ownerDocument.createElement('p');status.textContent='Connecting to MCP Apps host…';root.append(status);const host=root.ownerDocument.createElement('div');root.append(host);
-  const context=value=>{root.dataset.theme=value.theme||'light';const vars=value.styles?.variables||{};for(const [source,target] of [['--color-background-primary','--iui-bg'],['--color-text-primary','--iui-text'],['--color-border-primary','--iui-edge'],['--color-background-secondary','--iui-face']])if(typeof vars[source]==='string'&&win.CSS?.supports('color',vars[source]))surface.viewport.style.setProperty(target,vars[source]);};
-  const show=async ui=>{if(!ui||typeof ui.source!=='string')return;cancelled=false;lastUI=ui;await surface.update(ui.source,{data:ui.data||{},partial:false});status.textContent=ui.title||'Intelligent UI';};
+  const context=value=>{root.dataset.theme=value.theme||'light';const vars=value.styles?.variables||{};for(const [source,target] of [['--color-background-primary','--iui-bg'],['--color-text-primary','--iui-text'],['--color-border-primary','--iui-edge'],['--color-background-secondary','--iui-face']]){surface.viewport.style.removeProperty(target);if(typeof vars[source]==='string'&&win.CSS?.supports('color',vars[source]))surface.viewport.style.setProperty(target,vars[source]);}};
+  const show=async ui=>{if(cancelled||!ui||typeof ui.source!=='string')return;if(lastUI&&lastUI.id!==ui.id){surface.dispose();surface=makeSurface();}lastUI=ui;await surface.update(ui.source,{data:ui.data||{},partial:false});status.textContent=ui.title||'Intelligent UI';};
   const client=new McpAppClient({window:win,onTeardown:()=>{observer?.disconnect();surface?.dispose();},onNotification:async(method,params)=>{
+    if(cancelled&&method.startsWith('ui/notifications/tool-'))return;
     if(method==='ui/notifications/tool-input-partial'&&typeof params.arguments?.source==='string')await surface.update(params.arguments.source,{partial:true,data:params.arguments.data||{}});
     else if(method==='ui/notifications/tool-input'&&typeof params.arguments?.source==='string')await surface.update(params.arguments.source,{data:params.arguments.data||{}});
     else if(method==='ui/notifications/tool-result')await show(params.structuredContent?.ui);
     else if(method==='ui/notifications/tool-cancelled'){cancelled=true;status.textContent='Tool cancelled. Last UI retained; source and fallback remain available.';}
     else if(method==='ui/notifications/host-context-changed')context(client.context);
   }});
-  surface=new UISurface(host,{onAction:async action=>{if(cancelled||!client.ready)throw new UIError('cancelled','This tool view is not active.');action=normalizeAction(action);let result;
+  const makeSurface=()=>new UISurface(host,{onAction:async action=>{if(cancelled||!client.ready)throw new UIError('cancelled','This tool view is not active.');action=normalizeAction(action);let result;
     if(action.type==='message')result=await client.request('ui/message',{role:'user',content:[{type:'text',text:action.args[0]}]});
     else if(action.type==='context')result=await client.request('ui/update-model-context',{structuredContent:{intelligentUI:action.args[0]}});
     else if(action.type==='link')result=await client.request('ui/open-link',{url:safeUrl(action.args[0])});
@@ -46,6 +47,7 @@ export function startMcpApp({root=globalThis.document?.getElementById('intellige
     else throw new UIError('capability','This action is not supported by the MCP App host.');
     if(result?.isError)throw new UIError('host','Host declined the action.');
   },onUpdate:()=>client.notify('ui/notifications/size-changed',{height:Math.min(2000,Math.ceil(root.scrollHeight)),width:Math.ceil(root.clientWidth)})});
+  surface=makeSurface();
   observer=win.ResizeObserver?new win.ResizeObserver(()=>client.notify('ui/notifications/size-changed',{height:Math.min(2000,Math.ceil(root.scrollHeight))})):null;observer?.observe(root);
   const ready=client.connect().then(info=>{context(info.hostContext||{});status.textContent='Waiting for tool data…';}).catch(error=>{status.textContent=error.message;});
   return {client,surface,ready,dispose(){observer?.disconnect();surface.dispose();client.dispose();}};

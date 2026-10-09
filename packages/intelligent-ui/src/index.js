@@ -1,3 +1,10 @@
+import {McpAppHost, normalizeAppCsp, appProxyUrl} from './app-host.js';
+import {createAppBlockFactory, appBlockDocument} from './app-block.js';
+import {startSandboxProxy,sandboxCsp} from './sandbox.js';
+export {McpAppHost,normalizeAppCsp,appProxyUrl,createAppBlockFactory,appBlockDocument,startSandboxProxy,sandboxCsp};
+import {UIReferenceStore, validateReference} from './references.js';
+import {createReferenceFactories} from './reference-renderer.js';
+export {UIReferenceStore, validateReference, createReferenceFactories};
 import {UIError, LIMITS, boundedData, safeUrl} from './safety.js';
 import {CATALOG, createCatalog, catalogDescription} from './catalog.js';
 import {compile, StreamingCompiler, classifyUpdate} from './compiler.js';
