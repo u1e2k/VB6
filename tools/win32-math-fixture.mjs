@@ -15,12 +15,14 @@ export function nativeMathControlFixture(fixture){
  add('d=Rnd(-1)\nRandomize 42');check('Rnd=a And Rnd=b And Rnd=c','negative Rnd followed by the same explicit Randomize repeats a sequence');
  add('sequence=0\nRandomize SeedValue()\na=Rnd');check('sequence=1 And a>=0 And a<1','Randomize evaluates its explicit numeric argument exactly once');
  add('Randomize\na=Rnd');check('sequence=1 And a>=0 And a<1','omitted Randomize uses system time, not a user procedure named Timer');
- check('RGB(255,0,0)=&HFF And RGB(0,255,0)=&HFF00 And RGB(0,0,255)=&HFF0000 And VarType(RGB(1,2,3))=vbLong','RGB places red in the low byte and returns a Long');
+ check('RGB(255,0,0)=255 And RGB(0,255,0)=65280 And RGB(0,0,255)=16711680 And VarType(RGB(1,2,3))=vbLong','RGB places red in the low byte and returns a Long');
  check('RGB(256,1000,32767)=&HFFFFFF And RGB(1.5,2.5,"3")=&H30202','RGB clamps upper components and performs native numeric argument conversions');
  add('sequence=0\nn=RGB(blue:=ColorValue(3),red:=ColorValue(1),green:=ColorValue(2))');
  check('n=&H30201 And sequence=312','named RGB arguments evaluate lexically while retaining red/green/blue ABI positions');
+ // Unsuffixed &H8000..&HFFFF are negative VB Integer literals, not the
+ // positive Long COLORREF oracle. Decimal vectors avoid signed-width ambiguity.
  for(const [index,color]of [0,0x800000,0x008000,0x808000,0x000080,0x800080,0x008080,0xc0c0c0,0x808080,0xff0000,0x00ff00,0xffff00,0x0000ff,0xff00ff,0x00ffff,0xffffff].entries())
-  check(`QBColor(${index})=&H${color.toString(16)} And VarType(QBColor(${index}))=vbLong`,'QBColor '+index+' uses the documented DOS palette');
+  check(`QBColor(${index})=${color} And VarType(QBColor(${index}))=vbLong`,'QBColor '+index+' uses the documented DOS palette');
  check('Abs(Sin(1)-0.8414709848078965)<0.000000000001 And Abs(Cos(1)-0.5403023058681398)<0.000000000001','Sin and Cos use radian Double arguments');
  check('Abs(Tan(1)-1.5574077246549023)<0.000000000001 And Abs(Atn(1)-0.7853981633974483)<0.000000000001','Tan and Atn return independently known Double values');
  check('Abs(Exp(1)-2.718281828459045)<0.000000000001 And Abs(Log(2)-0.6931471805599453)<0.000000000001','Exp and Log use natural base Double functions');

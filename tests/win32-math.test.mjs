@@ -25,3 +25,16 @@ test('unused transcendental families do not add installed CRT imports',()=>{
  const a=compile('Dim n As Long\nn=RGB(1,2,3)+QBColor(7)');assert.ok(!a.report.imports.some(i=>i.dll==='ucrtbase.dll'));
  const b=compile('Dim d As Double\nd=Sin(1)');assert.deepEqual(b.report.imports.filter(i=>i.dll==='ucrtbase.dll').map(i=>i.symbol),['sin']);
 });
+
+
+test('native color oracles are positive COLORREF values, not signed Integer hex literals',()=>{
+ const {project:p,checks}=nativeControlFixtures().find(f=>f.project.name==='AotControlMath');
+ const code=p.modules[0].code;
+ assert.ok(code.includes('RGB(0,255,0)=65280'));
+ // These are the three palette entries whose unsuffixed hexadecimal spelling
+ // would denote a negative 16-bit Integer in the language under test.
+ for(const [index,value] of [[2,32768],[10,65280],[14,65535]])
+  assert.ok(code.includes(`QBColor(${index})=${value}`));
+ assert.equal(checks.filter(s=>s.startsWith('QBColor ')).length,16);
+ assert.ok(code.includes('VarType(RGB(1,2,3))=vbLong'));
+});
