@@ -122,6 +122,10 @@ jobs:
         env:
           VB6_BROWSER: ${{ matrix.browser }}
         run: python tools/browser-html-retention.py
+      - name: HTML5 WebBrowser source API, isolated DOM, designer and deployment origins
+        env:
+          VB6_BROWSER: ${{ matrix.browser }}
+        run: python tools/browser-webbrowser-tests.py
       - name: Microsoft runtime EXE dialog, downloads and cancellation (synthetic compiler)
         env:
           VB6_BROWSER: ${{ matrix.browser }}
@@ -189,6 +193,7 @@ jobs:
             reports/exporter
             reports/com-ole
             reports/classic-export
+            reports/webbrowser/${{ matrix.browser }}
           if-no-files-found: ignore
           retention-days: 7
   win32-system-contracts:
