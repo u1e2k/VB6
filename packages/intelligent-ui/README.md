@@ -71,10 +71,11 @@ supplies factories backed by its actual `BrowserControl` implementation.
 Images do not initiate requests unless an embedder supplies an explicit
 `allowResource(url) === true` policy. `AsyncImage`/`AsyncImageGroup` and entity or
 citation references require a host resolver/factory; there is no built-in search,
-image generation, or fabricated citation database. `AppBlock` is recognized and
-kept inert: the default renderer never executes arbitrary HTML/JavaScript. A host
-can supply an independently isolated renderer as a trusted factory. Do not mount
-untrusted raw HTML in the host document or assume iframe CSP blocks self-navigation.
+image generation, or fabricated citation database. `AppBlock` is recognized but inert in the default DOM renderer. The package now
+provides `createAppBlockFactory` for explicitly reviewed execution through a
+separately hosted sandbox proxy. It never executes source in the IDE document.
+Do not mount untrusted raw HTML in the host document or assume iframe CSP alone
+is an operating-system network firewall or a CPU-availability guarantee.
 
 ## Actions and state
 
@@ -137,12 +138,58 @@ reviewed messages/context, links, host-proxied tools and teardown. Text/JSON too
 results remain usable when a client does not render Apps. The service does not
 implement an MCP transport itself.
 
-This package includes an **app-side client**, not a generic browser host for
-third-party MCP Apps. Such a host must implement the MCP Apps sandbox proxy and
-separate-origin requirements and enforce the declared CSP/permissions. The app
-checks message source, supports an explicit host origin, bounds requests, and
-rejects unsupported methods. Only inline/fullscreen availability is advertised;
-downloads, picture-in-picture and arbitrary app-exposed tools are not implemented.
+The package includes both an **app-side client** and **connection-scoped host**.
+`McpAppHost` requires an HTTP(S) parent and a different sandbox origin. It checks
+message source and origin, restricts app-visible tools and readable resource URIs
+to an explicit connection catalog, bounds requests, and requires an injected
+approval callback for actions. Unsupported methods fail explicitly. Inline and
+fullscreen are supported; picture-in-picture is not advertised. Optional trusted
+callbacks enable resource reads and downloads; app-exposed tools are available
+only after the app declares the capability. The default IDE does not grant raw
+AppBlocks project or tool access.
+
+`dist/intelligent-ui-sandbox.html` implements the intermediate proxy and opaque
+inner iframe. Serve it on a **dedicated origin with CSP response headers**, not as
+an ordinary same-origin IDE asset. `tools/serve-intelligent-ui-sandbox.mjs` is the
+repository's read-only loopback companion. The exact embedding origin is required;
+there are no credentials, project files, writable endpoints, or request proxies
+in this service. HTTPS embedders may need a separately deployed HTTPS sandbox due
+to mixed-content or private-network browser policies. Those restrictions are not
+bypassed by the library.
+
+```js
+import {McpAppHost} from '@vb6/intelligent-ui/host';
+const app = new McpAppHost(root, {
+  proxyUrl: 'https://sandbox.example.org/intelligent-ui-sandbox.html',
+  html: trustedTemplate,
+  tools: connectionTools,
+  callTool: (name, args, {signal}) => connection.callTool(name, args, {signal}),
+  approve: request => showExactRequestApproval(request)
+});
+app.setToolInput(argumentsFromModel);
+app.setToolResult(resultFromTool);
+// Revocation and unmount must release both frames and pending requests.
+app.dispose();
+```
+
+CSP metadata permits exact HTTP(S) origins, plus WS(S) for connections; wildcard
+origins are deliberately rejected. The companion enforces restrictive response
+headers inherited by the inner frame and its allowed navigations. Treat the
+sandbox endpoint as trusted deployment code. Browser frame isolation does not
+promise that hostile arbitrary code cannot consume CPU or navigate its own frame.
+No camera, microphone, clipboard, geolocation or payment permission is requested.
+
+## Inspected references
+
+`UIReferenceStore` and `createReferenceFactories` provide cancellable trusted
+resolution for `image`, `AsyncImage`, `AsyncImageGroup`, `Entity` and `Cite`.
+Records require provenance. Image URLs are loaded only under an explicit resource
+policy or an affirmative per-URL approval; images are not searched or generated
+by this package. The MCP service includes immutable, bounded `ui.references`
+snapshots from inspected tool captures; model-supplied `data.references` is not
+used as trusted provenance. Updated documents carry fresh reference snapshots.
+A caller cannot read another caller's records. Factories propagate the surface's
+exact action guard rather than gaining an independent route to host effects.
 
 ## Bounds and validation
 
