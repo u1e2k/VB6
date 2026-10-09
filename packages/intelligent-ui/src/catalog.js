@@ -5,7 +5,7 @@ const specs = {
   box:{}, row:{}, column:{}, grid:{columns:'columns'}, title:{level:'level'}, text:{}, caption:{}, bold:{}, italic:{}, code:{}, codeBlock:{language:'string'}, quote:{}, divider:{}, list:{ordered:'boolean'}, listItem:{}, badge:{},
   button:{onClick:'event',submit:'boolean'}, link:{href:'url',onClick:'event'},
   slider:{min:'number',max:'number',step:'positive',value:'number',onChange:'event'},
-  input:{value:'string',placeholder:'string',type:['text','number','email','search','date'],onChange:'event',required:'boolean'},
+  input:{value:'primitive',placeholder:'string',type:['text','number','email','search','date'],onChange:'event',required:'boolean'},
   textarea:{value:'string',placeholder:'string',rows:'rows',onChange:'event',required:'boolean'},
   checkbox:{checked:'boolean',value:'boolean',onChange:'event'}, radio:{checked:'boolean',value:'string',name:'string',onChange:'event'},
   select:{value:'string',onChange:'event',required:'boolean'}, option:{value:'string'},

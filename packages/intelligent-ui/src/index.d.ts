@@ -1,0 +1,38 @@
+export type Json = null | boolean | number | string | Json[] | {[key:string]:Json};
+export interface Diagnostic {code:string;message:string;offset?:number}
+export interface CompiledUI {version:1;program:{children:Json[]};constants:Record<string,string>;diagnostics:Diagnostic[];recoveryDiagnostics:Diagnostic[];fallbackMarkdown:string;partial:boolean}
+export interface UINode {id:string;type:string;props:Record<string,Json>;children:UINode[];text?:string}
+export type UIOperation = {op:'create';id:string;type:string}|{op:'remove';id:string}|{op:'set';id:string;props:Record<string,Json>;text:string|null}|{op:'place';id:string;parent:string;index:number};
+export interface UIAction {type:'message'|'copy'|'link'|'tool'|'context'|'entity';args:Json[]}
+export interface UIResult {kind:string;version:number;operations:UIOperation[];tree:UINode[];diagnostics:Diagnostic[];recoveryDiagnostics:Diagnostic[];fallbackMarkdown:string;actions:UIAction[]}
+export interface UIOptions {partial?:boolean;data?:Record<string,Json>}
+export type Catalog = Readonly<Record<string,Readonly<Record<string,string|readonly string[]>>>>;
+export interface StateSnapshot {state:Record<string,Json>}
+export class UIError extends Error {code:string;offset:number;constructor(code:string,message:string,offset?:number)}
+export const LIMITS:Readonly<Record<string,number>>;
+export function boundedData<T>(value:T,limit?:number):T;
+export function safeUrl(value:string):string;
+export function normalizeAction(action:unknown):UIAction;
+export const CATALOG:Catalog;
+export function createCatalog(extensions?:Record<string,Record<string,string|readonly string[]>>):Catalog;
+export function catalogDescription(catalog?:Catalog):{name:string;properties:Catalog[string]}[];
+export function compile(source:string,options?:{partial?:boolean;catalog?:Catalog}):CompiledUI;
+export function classifyUpdate(previous:CompiledUI|null,next:CompiledUI):'program'|'constants'|'none';
+export class StreamingCompiler {source:string;document:CompiledUI|null;revision:number;constructor(options?:{catalog?:Catalog});append(chunk:string):{kind:string;revision:number;document:CompiledUI};replace(source:string,partial?:boolean):ReturnType<StreamingCompiler['append']>;finish():ReturnType<StreamingCompiler['append']>}
+export class UIRuntime {version:number;tree:UINode[];constructor(options?:{catalog?:Catalog});update(source:string,options?:UIOptions):UIResult;apply(document:CompiledUI,options?:{data?:Record<string,Json>}):UIResult;dispatch(id:string,args?:Json[],expectedVersion?:number):UIResult;snapshot():StateSnapshot;restore(snapshot:StateSnapshot):void;dispose():void}
+export function diffTrees(before:UINode[],after:UINode[]):UIOperation[];
+export interface RenderFactoryResult {node:HTMLElement;childHost?:HTMLElement;update?:(props:Record<string,Json>,previous:Record<string,Json>)=>void;dispose?:()=>void}
+export type RenderFactory = (context:{document:Document;id:string;onEvent:(event:string,args:Json[])=>void})=>RenderFactoryResult;
+export interface RendererOptions {onEvent?:(id:string,args:Json[])=>unknown;onAction?:(action:UIAction)=>unknown;onError?:(error:Error)=>void;factories?:Record<string,RenderFactory>;allowResource?:(url:string)=>boolean}
+export class DOMRenderer {constructor(root:HTMLElement,options?:RendererOptions);apply(operations:UIOperation[]):void;dispose():void}
+export interface SurfaceOptions extends Pick<RendererOptions,'factories'|'allowResource'> {workerSource?:string;catalog?:Catalog;snapshot?:StateSnapshot;onAction?:(action:UIAction,surface:UISurface)=>unknown;onUpdate?:(result:UIResult,surface:UISurface)=>void}
+export class UISurface {root:HTMLElement;viewport:HTMLElement;client:UIClient;version:number;result?:UIResult;constructor(root:HTMLElement,options?:SurfaceOptions);update(source:string,options?:UIOptions):Promise<UIResult>;event(id:string,args:Json[]):Promise<UIResult|undefined>;snapshot():StateSnapshot;restart():void;dispose():void}
+export class UIClient {backend:'worker'|'bounded-main';constructor(options?:{workerSource?:string;window?:Window|object;timeout?:number;snapshot?:StateSnapshot;catalog?:Catalog});request(method:'update',payload:{source:string;options?:UIOptions}):Promise<UIResult>;request(method:'event',payload:{id:string;args?:Json[];version?:number}):Promise<UIResult>;snapshot():StateSnapshot;dispose():void}
+export function startUIWorker(scope:{addEventListener(type:"message",listener:(event:{data:any})=>void):void;postMessage(message:unknown):void}):void;
+export function splitUIMessage(text:string):({kind:'text';id:string;text:string}|{kind:'ui';id:string;source:string;partial:boolean})[];
+export const MCP_UI_URI:string,MCP_UI_MIME:string,MCP_APP_VERSION:string;
+export const MCP_UI_META:Readonly<object>,UI_TOOL_SCHEMAS:Readonly<Record<string,object>>,UI_TOOL_REQUIRED:Readonly<Record<string,string[]>>,UI_TOOL_DESCRIPTIONS:Readonly<Record<string,string>>;
+export interface UIOwner {principal?:string;sessionKey?:string;signal?:AbortSignal}
+export class McpUIService {constructor(options?:{onChange?:(event:{type:string;result:Json;owner:string})=>void;maxDocuments?:number;maxOwners?:number;resourceHtml?:string});capture(tool:string,result:Json,context:UIOwner):void;run(method:'catalog'|'present'|'update'|'read'|'list'|'close',args:Record<string,Json>,context:UIOwner):any;resources():object[];readResource(uri:string):object[];revoke(owner:string):void;clear():void;dispose():void}
+export class McpAppClient {ready:boolean;context:Record<string,Json>;capabilities:Record<string,Json>;constructor(options?:{window?:Window;hostOrigin?:string;timeout?:number;onNotification?:(method:string,params:Record<string,Json>)=>unknown;onTeardown?:()=>void});connect():Promise<any>;request(method:string,params?:Record<string,Json>):Promise<any>;notify(method:string,params:Record<string,Json>):void;dispose():void}
+export function startMcpApp(options?:{root?:HTMLElement}):{client:McpAppClient;surface:UISurface;ready:Promise<void>;dispose():void};
