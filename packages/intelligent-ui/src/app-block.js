@@ -27,7 +27,7 @@ export function createAppBlockFactory({proxyUrl,approveApp=async()=>false,approv
       try{const url=typeof proxyUrl==='function'?proxyUrl():proxyUrl;appProxyUrl(url,document.defaultView.location.origin);
         if(await approveApp({...snapshot,proxyUrl:url})!==true)throw new UIError('denied','App execution declined.');if(disposed||generation!==token)return;end();
         app=new McpAppHost(view,{proxyUrl:url,html:appBlockDocument(snapshot.html),hostContext:hostContext(),approve:approveAction,
-          onMessage:p=>dispatchAction({type:'message',args:[p.content.map(c=>c.text).join('\n')]}),onContext:p=>dispatchAction({type:'context',args:[p.structuredContent||{content:p.content}]}),openLink:url=>dispatchAction({type:'link',args:[url]}),onError:error});
+          onMessage:(p,context)=>dispatchAction({type:'message',args:[p.content.map(c=>c.text).join('\n')]},context),onContext:(p,context)=>dispatchAction({type:'context',args:[p.structuredContent||{content:p.content}]},context),openLink:(url,context)=>dispatchAction({type:'link',args:[url]},context),onError:error});
         run.disabled=true;stop.hidden=false;notice.textContent='Running on a separate origin. No project, clipboard or tool capability is granted to this app.';
       }catch(e){if(!disposed&&generation===token){error(e);run.disabled=false;}}
     };

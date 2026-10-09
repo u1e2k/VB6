@@ -1,5 +1,5 @@
 export const UI_EXAMPLES=Object.freeze({
-  app:{title:'Isolated interactive app',source:`<AppBlock title="Counter app" app_block_id="counter"><h2>Isolated counter</h2><button id="increment">Count: 0</button><script>let count=0;document.querySelector('#increment').onclick=event=>{event.target.textContent='Count: '+(++count)};</script></AppBlock>`},
+  app:{title:'Isolated interactive app',source:`<AppBlock title="Counter app" app_block_id="counter"><h2>Isolated counter</h2><button id="increment">Count: 0</button><button id="followup">Ask agent</button><output id="delivery"></output><script>let count=0;document.querySelector('#increment').onclick=event=>{event.target.textContent='Count: '+(++count)};document.querySelector('#followup').onclick=async()=>{const output=document.querySelector('#delivery');output.textContent='Awaiting review';try{await GenUI.issueNewTurn('Explain counter '+count);output.textContent='Queued';}catch{output.textContent='Declined';}};</script></AppBlock>`},
   references:{title:'Inspected reference',source:'<title>Inspected project reference</title><Cite ref="preview-project" />'},
   calculator:{title:'Reactive estimate',source:`{@body const [seats, setSeats] = DIL.useState(8)}
 {@body const monthly = seats * 29}

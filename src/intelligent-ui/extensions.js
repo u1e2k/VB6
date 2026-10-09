@@ -1,3 +1,4 @@
+import {pinUIActionContext} from './action-context.js';
 import {el} from '../core/core.js';
 import {modal} from '../ide/ui.js';
 import {UIReferenceStore} from '../../packages/intelligent-ui/src/references.js';
@@ -51,14 +52,14 @@ export function createStudioUIExtensions(ide,host){
       };
     },
     openMcpApp(root,adapter,owner,ui){
-      const url=proxy(),captured=host.adapter.workspaceEpoch;
-      const live=()=>{if(!host.enabled||captured!==host.adapter.workspaceEpoch)throw new Error('App project context was revoked.');const current=adapter.intelligentUI.service.run('read',{id:ui.id},{principal:owner});if(current.ui.revision!==ui.revision)throw new Error('This app result is obsolete. Open the latest revision.');};live();
-      const app=new McpAppHost(root,{proxyUrl:url,html:INTELLIGENT_UI_MCP_HTML,hostContext:context(),tools:adapter.enabled?adapter.tools:[],
-        ...(adapter.enabled?{callTool:async(name,args,{signal})=>{live();const tool=adapter.tools.find(t=>t.name===name);if(!tool)throw new Error('Unknown connection tool.');const result=await tool.execute(args,{principal:owner,signal});return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result};}}:{}),
+      const url=proxy(),pinned=pinUIActionContext(host,{adapter,owner}),captured=pinned.epoch;let app;
+      const live=()=>{pinned.assertLive();app?.live();if(!host.enabled||captured!==host.adapter.workspaceEpoch)throw new Error('App project context was revoked.');const current=adapter.intelligentUI.service.run('read',{id:ui.id},{principal:owner});if(current.ui.revision!==ui.revision)throw new Error('This app result is obsolete. Open the latest revision.');};live();
+      app=new McpAppHost(root,{proxyUrl:url,html:INTELLIGENT_UI_MCP_HTML,hostContext:context(),tools:adapter.enabled?adapter.tools:[],
+        ...(adapter.enabled?{callTool:async(name,args,{signal})=>{live();const tool=adapter.tools.find(t=>t.name===name);if(!tool)throw new Error('Unknown connection tool.');const result=await tool.execute(args,pinned.transportContext(signal));return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result};}}:{}),
         approve:async(action,options)=>{live();const allowed=await review('MCP App — Review request','Approve this exact request once. Normal IDE permissions, sharing and project revision checks still apply.',JSON.stringify(action,null,2),options);live();return allowed;},
-        onMessage:p=>{live();return host.action({type:'message',args:[p.content.map(c=>c.text).join('\n')]},{origin:ui.title,epoch:captured,assertLive:live});},
-        onContext:p=>{live();return host.action({type:'context',args:[p.structuredContent||{content:p.content}]},{origin:ui.title,epoch:captured,assertLive:live});},
-        openLink:url=>{live();return host.action({type:'link',args:[url]},{origin:ui.title,epoch:captured,assertLive:live});},
+        onMessage:p=>{live();return host.action({type:'message',args:[p.content.map(c=>c.text).join('\n')]},{...pinned,origin:ui.title,assertLive:live});},
+        onContext:p=>{live();return host.action({type:'context',args:[p.structuredContent||{content:p.content}]},{...pinned,origin:ui.title,assertLive:live});},
+        openLink:url=>{live();return host.action({type:'link',args:[url]},{...pinned,origin:ui.title,assertLive:live});},
         onError:error=>{const p=root.ownerDocument.createElement('p');p.textContent=error.message;root.append(p);}
       });
       const off=adapter.intelligentUI.onChange(event=>{if(event.owner===owner&&event.result.ui.id===ui.id){app.dispose();apps.delete(app);}}),dispose=app.dispose.bind(app);

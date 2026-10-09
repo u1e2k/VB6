@@ -14,9 +14,15 @@ parser.add_argument('--browser', choices=['chromium', 'firefox', 'webkit'], defa
 args = parser.parse_args()
 REPORT = ROOT / 'reports/intelligent-ui' / args.browser
 REPORT.mkdir(parents=True, exist_ok=True)
-results = []
+results, browser_events = [], []
+browser_identity = {}
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args): pass
+    def do_GET(self):
+        if self.path == '/intelligent-ui-test-host':
+            data = b'<!doctype html><meta charset="utf-8"><iframe title="MCP test view" sandbox="allow-scripts" style="width:100%;height:650px"></iframe>'
+            self.send_response(200); self.send_header('Content-Type','text/html'); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(data); return
+        super().do_GET()
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, directory=str(ROOT / 'dist')))
 threading.Thread(target=server.serve_forever, daemon=True).start()
 base = 'http://127.0.0.1:' + str(server.server_port)
@@ -156,7 +162,12 @@ def package_cases(browser):
 def app_cases(browser):
     page = browser.new_page(viewport={'width': 900, 'height': 800})
     page.set_default_timeout(12000)
-    page.set_content('<iframe title="MCP test view" sandbox="allow-scripts" style="width:100%;height:650px"></iframe>')
+    # An actual MCP App host has an HTTP(S) origin. --opaque remains an explicit
+    # local-only diagnostic; do not silently substitute it for deployment tests.
+    if args.opaque: page.set_content('<iframe title="MCP test view" sandbox="allow-scripts" style="width:100%;height:650px"></iframe>')
+    else: page.goto(base + '/intelligent-ui-test-host')
+    page.on('crash', lambda: browser_events.append({'event':'app-page-crash'}))
+    page.on('pageerror', lambda error: browser_events.append({'event':'app-page-error','message':str(error)}))
     page.evaluate('''html=>{
       const frame=document.querySelector('iframe');window.messages=[];window.toolSource='{@body const [n,setN] = DIL.useState(3)}<slider label="App count" min={1} max={10} step={1} value={n} onChange={v => setN(v)} /><metric label="App total" value={n*10}/><button onClick={() => GenUI.issueNewTurn("Explain "+n)}>Ask host</button>';
       window.sendApp=message=>frame.contentWindow.postMessage(message,'*');
@@ -194,6 +205,8 @@ try:
             if executable: kwargs['executable_path']=executable
             kwargs['args']=['--no-sandbox']
         browser=launcher.launch(**kwargs)
+        browser_identity={'version':browser.version,'options':kwargs}
+        browser.on('disconnected', lambda: browser_events.append({'event':'browser-disconnected'}))
         try:
             for mode in (['opaque'] if args.opaque else ['modules','standalone','file']): ide_cases(browser,mode)
             package_cases(browser)
@@ -201,4 +214,4 @@ try:
         finally: browser.close()
 finally:
     server.shutdown()
-    (REPORT/'results.json').write_text(json.dumps({'browser':args.browser,'transportMode':'opaque-document-only' if args.opaque else 'HTTP-and-file','cases':results},indent=2)+'\n')
+    (REPORT/'results.json').write_text(json.dumps({'browser':args.browser,'transportMode':'opaque-document-only' if args.opaque else 'HTTP-and-file','cases':results,'browserIdentity':browser_identity,'browserEvents':browser_events},indent=2)+'\n')

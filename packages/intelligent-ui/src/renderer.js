@@ -16,7 +16,7 @@ export class DOMRenderer {
     const d=this.doc,make=(tag,cls)=>{const n=d.createElement(tag);if(cls)n.className=cls;return n;};
     if(type==='#text'){const node=d.createTextNode('');return {id,type,node,host:node,props:{},children:[]};}
     if(type!=='markdown'&&!Object.hasOwn(CATALOG,type)&&!Object.hasOwn(this.factories,type))throw new UIError('component','Unsupported rendered component.');
-    const custom=this.factories[type]?.({document:d,id,onAction:action=>this.action(action),onEvent:(event,args)=>this.event(id,event,args)});
+    const custom=this.factories[type]?.({document:d,id,onAction:(action,context)=>this.action(action,context),onEvent:(event,args)=>this.event(id,event,args)});
     if(custom){custom.node.classList.add('iui-component');return {id,type,node:custom.node,host:custom.childHost||custom.node,custom,props:{},children:[]};}
     const node=make(tags[type]||'div','iui-component iui-'+type),r={id,type,node,host:node,props:{},children:[]};
     if(inputs[type]){r.label=make('span','iui-input-label');r.input=make(inputs[type]==='textarea'?'textarea':'input');if(inputs[type]!=='textarea')r.input.type=inputs[type];r.host=make('span','iui-input-content');node.append(r.label,r.input,r.host);r.input.id='iui-field-'+(++DOMRenderer.sequence);r.label.id=r.input.id+'-label';r.input.setAttribute('aria-labelledby',r.label.id);
@@ -35,7 +35,14 @@ export class DOMRenderer {
     return r;
   }
   event(id,name,args){const r=this.records.get(id);if(r?.props.disabled||!r?.props[name]||this.disposed)return;try{Promise.resolve(this.onEvent(r.props[name],args)).catch(this.onError);}catch(error){this.onError(error);}}
-  action(action){try{Promise.resolve(this.onAction(action)).catch(this.onError);}catch(error){this.onError(error);}}
+  action(action,context={}) {
+    let pending;
+    try { pending=Promise.resolve(this.onAction(action,context)); }
+    catch(error) { pending=Promise.reject(error); }
+    // Observe failures for DOM events, but preserve the original promise for RPC callers.
+    pending.catch(error=>{try{this.onError(error);}catch{}});
+    return pending;
+  }
   apply(operations){
     if(this.disposed)throw new UIError('disposed','Renderer is disposed.');if(!Array.isArray(operations)||operations.length>LIMITS.nodes*4)throw new UIError('operations','Invalid operation batch.');
     const affected=new Set();
