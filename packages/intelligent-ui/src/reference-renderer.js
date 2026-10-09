@@ -11,7 +11,7 @@ export function createReferenceFactories({resolveReference=async()=>null,allowRe
     const image=(record,token)=>{
       const figure=document.createElement('figure'),caption=document.createElement('figcaption'),button=document.createElement('button');button.type='button';button.textContent='Load external image';caption.textContent=record.title||record.alt||props.alt||'';figure.append(button,caption);view.append(figure);
       const url=safeUrl(record.src);
-      const load=()=>{if(disposed||generation!==token)return;const img=document.createElement('img');img.alt=record.alt||props.alt||record.title||'';img.referrerPolicy='no-referrer';img.loading='lazy';img.style.maxWidth='100%';img.onerror=()=>{if(generation===token)caption.textContent='Image unavailable: '+caption.textContent;};img.src=url;button.replaceWith(img);};
+      const load=()=>{if(disposed||generation!==token)return;const img=document.createElement('img');img.alt=record.alt||props.alt||record.title||'';img.referrerPolicy='no-referrer';img.loading='lazy';img.style.maxWidth='100%';img.style.aspectRatio=String(props.aspectRatio||'auto').replace(':','/');img.style.objectFit=props.objectFit||'contain';img.onerror=()=>{if(generation===token)caption.textContent='Image unavailable: '+caption.textContent;};img.src=url;button.replaceWith(img);};
       if(allowResource(url)===true)load();
       else button.onclick=async()=>{button.disabled=true;try{if(await approveResource(url)!==true)throw new UIError('resource_denied','Image loading was declined.');load();}catch(error){if(generation===token){button.disabled=false;caption.textContent=error.message;}}};
       if(record.url){const link=document.createElement('button');link.type='button';link.textContent='Open source';link.onclick=()=>action({type:'link',args:[safeUrl(record.url)]});figure.append(link);}
@@ -35,6 +35,6 @@ export function createReferenceFactories({resolveReference=async()=>null,allowRe
       }catch(error){if(!disposed&&token===generation)status(error.message||'Reference resolution failed.');}
     };
     const off=subscribe?.(event=>{if(!event.id||event.id===props.ref)void render();});
-    return {node,childHost,update(next){props=next;const nextStamp=JSON.stringify([props.ref,props.query,props.src,props.alt]);if(stamp!==nextStamp){stamp=nextStamp;void render();}},dispose(){disposed=true;generation++;controller?.abort();off?.();view.replaceChildren();}};
+    return {node,childHost,update(next){props=next;const nextStamp=JSON.stringify([props.ref,props.query,props.src,props.alt,props.aspectRatio,props.objectFit]);if(stamp!==nextStamp){stamp=nextStamp;void render();}},dispose(){disposed=true;generation++;controller?.abort();off?.();view.replaceChildren();}};
   }]));
 }

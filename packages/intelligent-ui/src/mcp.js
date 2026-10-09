@@ -1,3 +1,4 @@
+import {BREAKPOINTS} from './viewport.js';
 import {UIError, boundedData, record, safeKey} from './safety.js';
 import {UIRuntime} from './runtime.js';
 import {catalogDescription} from './catalog.js';
@@ -34,7 +35,7 @@ export class McpUIService {
   }
   run(method,args={},context={}){
     context.signal?.throwIfAborted();if(!Object.hasOwn(UI_TOOL_SCHEMAS,method))throw new UIError('method','Unknown UI operation.');args=boundedData(args,200000);if(!record(args))throw new UIError('arguments','UI arguments must be an object.');const bucket=this.bucket(context,method==='present');
-    if(method==='catalog')return {version:1,components:catalogDescription(),references:[...(bucket?.bindings.keys()||[])],bindings:[...(bucket?.bindings.values()||[])].map(({value,...info})=>info),syntax:'Markdown, component tags, {@body const [x,setX] = DIL.useState(initial)}, const derived expressions, {expression}, {#if test}, {#each rows as row,i (row.id)}; callbacks and GenUI actions are bounded. No host JavaScript.'};
+    if(method==='catalog')return {version:1,viewportHooks:['DIL.useViewport()','DIL.useBreakpoint(name)'],breakpoints:BREAKPOINTS,components:catalogDescription(),references:[...(bucket?.bindings.keys()||[])],bindings:[...(bucket?.bindings.values()||[])].map(({value,...info})=>info),syntax:'Markdown, component tags, {@body const [x,setX] = DIL.useState(initial)}, const derived expressions, {expression}, {#if test}, {#each rows as row,i (row.id)}; callbacks and GenUI actions are bounded. No host JavaScript.'};
     if(method==='list')return {documents:[...(bucket?.documents.values()||[])].map(d=>({id:d.ui.id,title:d.ui.title,uiRevision:d.ui.revision}))};
     if(method==='present'){
       if([...this.owners.values()].reduce((n,b)=>n+b.documents.size,0)>=this.maxDocuments||bucket.documents.size>=8)throw new UIError('document_limit','UI document limit reached. Close an old UI first.');

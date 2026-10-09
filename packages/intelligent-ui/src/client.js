@@ -15,7 +15,7 @@ export class UIClient {
   request(method,payload={}){
     if(this.disposed)return Promise.reject(new UIError('disposed','UI client is disposed.'));
     if(this.failure)return Promise.reject(this.failure);
-    if(!this.worker){try{let result;if(method==='update')result=this.runtime.update(payload.source,payload.options);else if(method==='event')result=this.runtime.dispatch(payload.id,payload.args,payload.version);else throw new UIError('method','Unknown UI request.');this.lastSnapshot=this.runtime.snapshot();return Promise.resolve(result);}catch(error){return Promise.reject(error);}}
+    if(!this.worker){try{let result;if(method==='update')result=this.runtime.update(payload.source,payload.options);else if(method==='apply')result=this.runtime.apply(payload.document,payload.options);else if(method==='patch')result=this.runtime.patch(payload.patch,payload.version);else if(method==='resize')result=this.runtime.resize(payload.viewport,payload.version);else if(method==='event')result=this.runtime.dispatch(payload.id,payload.args,payload.version);else throw new UIError('method','Unknown UI request.');this.lastSnapshot=this.runtime.snapshot();return Promise.resolve(result);}catch(error){return Promise.reject(error);}}
     if(this.pending.size>=32)return Promise.reject(new UIError('queue','UI request queue is full.'));
     const id=++this.nextId;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>this.fail(new UIError('watchdog','UI worker exceeded its watchdog; last rendered view was retained.')),this.timeout);this.pending.set(id,{resolve,reject,timer});try{this.worker.postMessage({id,method,payload,...(id===1?{snapshot:this.lastSnapshot,catalog:this.catalog}:{})});}catch(error){clearTimeout(timer);this.pending.delete(id);reject(error);}});
   }
@@ -29,6 +29,9 @@ export function startUIWorker(scope){
     const message=event.data;if(!Number.isSafeInteger(message?.id)||message.id<1)return;
     try{if(!initialized){runtime=new UIRuntime({catalog:message.catalog});if(message.snapshot)runtime.restore(message.snapshot);initialized=true;}let result;
       if(message.method==='update')result=runtime.update(message.payload.source,message.payload.options);
+      else if(message.method==='apply')result=runtime.apply(message.payload.document,message.payload.options);
+      else if(message.method==='patch')result=runtime.patch(message.payload.patch,message.payload.version);
+      else if(message.method==='resize')result=runtime.resize(message.payload.viewport,message.payload.version);
       else if(message.method==='event')result=runtime.dispatch(message.payload.id,message.payload.args,message.payload.version);
       else throw new UIError('method','Unknown UI worker method.');
       scope.postMessage({id:message.id,result,snapshot:runtime.snapshot()});

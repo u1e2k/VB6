@@ -1,7 +1,8 @@
+import {renderIcon} from './icons.js';
 import {UIError, LIMITS, safeUrl, display, record} from './safety.js';
 import {CATALOG} from './catalog.js';
 
-const tags={box:'div',row:'div',column:'div',grid:'div',title:'h3',text:'span',caption:'small',bold:'strong',italic:'em',code:'code',codeBlock:'pre',quote:'blockquote',divider:'hr',list:'ul',listItem:'li',badge:'span',button:'button',link:'button',form:'form',option:'option',select:'select',tabs:'div',tab:'section',details:'details',summary:'summary',VB6Label:'span',VB6Button:'button'};
+const tags={box:'div',row:'div',column:'div',grid:'div',title:'h3',text:'span',caption:'small',bold:'strong',italic:'em',code:'code',codeBlock:'pre',quote:'blockquote',divider:'hr',list:'ul',listItem:'li',badge:'span',icon:'span',button:'button',link:'button',form:'form',option:'option',select:'select',tabs:'div',tab:'section',details:'details',summary:'summary',VB6Label:'span',VB6Button:'button'};
 const inputs={slider:'range',input:'text',textarea:'textarea',checkbox:'checkbox',radio:'radio',VB6TextBox:'text',VB6CheckBox:'checkbox'};
 const write=(node,value)=>{value=display(value);if(node.textContent!==value)node.textContent=value;};
 const dimension=value=>typeof value==='number'?value+'px':value||'';
@@ -29,7 +30,8 @@ export class DOMRenderer {
     if(type==='chart'){r.view=make('div','iui-chart-view');r.host=make('div');node.append(r.view,r.host);}
     if(['image','AsyncImage','AsyncImageGroup','Entity','Cite'].includes(type)){r.view=make('div','iui-resolved-content');r.host=make('div');node.append(r.view,r.host);}
     if(type==='AppBlock'){r.warning=make('p');r.run=make('button');r.run.type='button';r.run.textContent='Run isolated app';r.stop=make('button');r.stop.type='button';r.stop.textContent='Stop app';r.stop.hidden=true;r.warning.textContent='Arbitrary-code AppBlock requires a separately isolated host renderer. The default renderer does not execute this source.';r.run.hidden=true;node.append(r.warning,r.run,r.stop);r.host=make('div');node.append(r.host);r.run.onclick=()=>this.app(r);r.stop.onclick=()=>{r.frame?.remove();r.frame=null;r.run.hidden=false;r.stop.hidden=true;};}
-    if(type==='metric'){r.value=make('strong','iui-metric-value');r.unit=make('span');r.label=make('small');r.host=make('div');node.append(r.label,r.value,r.unit,r.host);}
+    if(type==='icon'){r.iconView=make('span');r.host=make('span');node.append(r.iconView,r.host);}
+    if(type==='metric'){r.value=make('strong','iui-metric-value');r.unit=make('span');r.label=make('small');r.change=make('small','iui-metric-change');r.host=make('div');node.append(r.label,r.value,r.unit,r.change,r.host);}
     if(type==='progress'){r.input=make('progress');r.label=make('span');r.host=make('div');node.append(r.label,r.input,r.host);}
     if(type==='tabs'){r.nav=make('div','iui-tab-buttons');r.nav.setAttribute('role','tablist');r.host=make('div');node.append(r.nav,r.host);}
     return r;
@@ -66,6 +68,7 @@ export class DOMRenderer {
     n.style.padding=p.padding===undefined?'':p.padding*4+'px';n.style.gap=p.gap===undefined?'':p.gap*4+'px';n.style.width=dimension(p.width);n.style.height=dimension(p.height);n.style.maxWidth=dimension(p.maxWidth);n.classList.toggle('iui-bordered',p.border===true);n.classList.toggle('iui-block',p.block===true);n.title=p.title||'';
     if(r.custom){r.custom.update?.(p,previous);return;}
     if(r.type==='markdown'){this.markdown(r,text||'');return;}
+    if(r.type==='icon'){n.style.display=p.inline?'inline-flex':'flex';renderIcon(d,r.iconView,p.name,p.label);return;}
     if(r.type==='grid')n.style.gridTemplateColumns='repeat('+Math.min(12,p.columns||2)+', minmax(0,1fr))';
     if(r.type==='title'){n.setAttribute('role','heading');n.setAttribute('aria-level',String(p.level||3));}
     if(['button','VB6Button','link'].includes(r.type)){n.disabled=!!p.disabled;n.type=p.submit?'submit':'button';if(p.caption!==undefined)write(n,p.caption);}
@@ -81,7 +84,7 @@ export class DOMRenderer {
       else if(r.type!=='select'&&p.value!==undefined&&c.value!==String(p.value))c.value=String(p.value);
       if(r.label)write(r.label,p.label||p.caption||p.name||(['checkbox','VB6CheckBox'].includes(r.type)?'Select option':r.type==='slider'?'Value':''));
     }
-    if(r.type==='metric'){write(r.label,p.label||'');write(r.value,p.value);write(r.unit,p.unit||'');}
+    if(r.type==='metric'){write(r.label,p.label||'');write(r.value,p.value);write(r.unit,p.unit||'');r.change.hidden=p.change===undefined;write(r.change,p.change??'');}
     if(r.type==='table')this.table(r);
     if(r.type==='chart')this.chart(r);
     if(['image','AsyncImage','AsyncImageGroup','Entity','Cite'].includes(r.type))this.resolved(r);
@@ -113,7 +116,7 @@ export class DOMRenderer {
   resolved(r){
     const p=r.props,d=this.doc;r.view.replaceChildren();
     if(['Entity','Cite'].includes(r.type)){const button=d.createElement('button');button.type='button';button.textContent=p.label||p.ref||r.type;button.onclick=()=>this.action({type:'entity',args:[p.ref]});r.view.append(button);return;}
-    if(p.src){try{const url=safeUrl(p.src);if(this.allowResource(url)!==true)throw new UIError('resource_denied','External image requires host permission.');const img=d.createElement('img');img.alt=p.alt||p.label||'';img.referrerPolicy='no-referrer';img.loading='lazy';img.src=url;r.view.append(img);return;}catch(error){r.view.textContent=error.message;return;}}
+    if(p.src){try{const url=safeUrl(p.src);if(this.allowResource(url)!==true)throw new UIError('resource_denied','External image requires host permission.');const img=d.createElement('img');img.alt=p.alt||p.label||'';img.referrerPolicy='no-referrer';img.loading='lazy';img.style.aspectRatio=String(p.aspectRatio||'auto').replace(':','/');img.style.objectFit=p.objectFit||'contain';img.src=url;r.view.append(img);return;}catch(error){r.view.textContent=error.message;return;}}
     r.view.textContent=p.alt||p.label||'Waiting for host-resolved image data.';
   }
   tabs(r){

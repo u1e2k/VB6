@@ -431,9 +431,14 @@ jobs:
       - name: Intelligent UI on HTTP, file and real separate-origin sandbox
         env:
           VB6_BROWSER: ${{ matrix.browser }}
+          DEBUG: pw:browser
         run: |
-          python tools/intelligent-ui-browser-tests.py
-          python tools/intelligent-ui-host-browser-tests.py
+          # Collect both transport suites even when one fails; either failure
+          # still fails this job. Keep the installed browser/version and assertions.
+          status=0
+          python tools/intelligent-ui-browser-tests.py || status=$?
+          python tools/intelligent-ui-host-browser-tests.py || status=$?
+          exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

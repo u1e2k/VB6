@@ -91,6 +91,13 @@ source removes abandoned state. Failed evaluation retains the last good state an
 view. Stale event versions are rejected. Snapshots contain only bounded local
 state, not closures, credentials or host objects. Persistence is an embedder choice.
 
+Trusted factories may pass an `AbortSignal` as the second argument of `onAction`.
+The surface forwards it to its host callback as the third argument, `{signal}`.
+A host that awaits approval must recheck this signal immediately before effects.
+The action promise is returned unchanged through the renderer, so an MCP App does
+not receive success before the actual review completes. The VB6 integration uses
+this for cancellation/revocation while a review dialog is open.
+
 `StreamingCompiler` accepts prefixes/chunks and distinguishes program changes
 from constant-only changes. Parsing is a bounded full-prefix pass, not an
 incremental token parser. `UISurface` coalesces partial updates and `DOMRenderer`
@@ -212,3 +219,31 @@ Original implementation inspired by:
 - https://github.com/modelcontextprotocol/ext-apps/blob/main/src/spec.types.ts
 
 No OpenAI private source, OpenUI source, or external runtime dependency is bundled.
+
+## Precompiled updates and responsive layouts
+
+`UISurface.updateCompiled(document, options)` accepts the inert result of
+`compile(source)` from a server or another process. It uses the same bounded
+runtime and Worker path without parsing source again. Its Source panel shows the
+compiled JSON. This is the library's own versioned JSON format, not executable
+JavaScript or OpenAI's private wire format.
+
+For lower-level integrations, `UIRuntime.patch({constants, data, viewport},
+expectedVersion)` and `UIClient.request('patch', {patch, version})` update existing
+string constants or replace bound data without recompiling. Unknown constant
+keys/fields and stale versions are rejected. A failed render restores the prior
+program, state, viewport, handlers and tree. Use `UIClient.request('apply',
+{document, options})` for a new compiled program; the host still reviews actions.
+
+`DIL.useViewport()` returns `{width, height}` in CSS pixels. In a surface, width
+is the measured container width and height is the browser viewport height.
+`DIL.useBreakpoint("md")` is a minimum-width test: sm=640, md=768, lg=1024,
+xl=1280. `UISurface` coalesces ResizeObserver updates and retains keyed controls
+and state; set `responsive:false` for explicit `setViewport({width,height})`
+control. `UIRuntime.resize` and the client's `resize` request use the compiled
+program without source parsing. The headless default is 1024 by 768.
+
+The IDE includes a **Responsive dashboard** example. The catalog now exposes
+trusted named SVG icons, image `aspectRatio`/`objectFit` and rendered metric
+`change` text. Unknown icon names, CSS expressions and invalid ratios are rejected.
+Image aspect ratios do not grant permission to load external URLs.

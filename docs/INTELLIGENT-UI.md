@@ -134,6 +134,10 @@ epoch. Task switches and hidden/evicted entries dispose their DOM/Workers; bound
 state snapshots are kept only under that in-memory thread. A reset, workspace
 change, stale document revision or task switch cannot redirect an old button into
 a new task. Rich UI toggle does not grant project/network/tool authority.
+Gallery MCP Apps use the original agent session key for permission-checked tool
+calls and pin follow-ups to their original task. App RPC requests await the actual
+host approval result; closing/cancelling an app while review is pending revokes
+the request before it can enter the follow-up queue.
 
 Model context and public presentation have independent limits. A large UI may be
 omitted from provider context while the bounded local tool result remains visible.
@@ -211,3 +215,31 @@ outputs and payloads in addition to all prior IDE/runtime/sample artifacts.
 - https://www.openui.com/blog/how-chatgpt-intelligent-ui-works
 - https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx
 - https://github.com/modelcontextprotocol/ext-apps/blob/main/src/spec.types.ts
+
+## Precompiled updates and responsive layouts
+
+`UISurface.updateCompiled(document, options)` accepts the inert result of
+`compile(source)` from a server or another process. It uses the same bounded
+runtime and Worker path without parsing source again. Its Source panel shows the
+compiled JSON. This is the library's own versioned JSON format, not executable
+JavaScript or OpenAI's private wire format.
+
+For lower-level integrations, `UIRuntime.patch({constants, data, viewport},
+expectedVersion)` and `UIClient.request('patch', {patch, version})` update existing
+string constants or replace bound data without recompiling. Unknown constant
+keys/fields and stale versions are rejected. A failed render restores the prior
+program, state, viewport, handlers and tree. Use `UIClient.request('apply',
+{document, options})` for a new compiled program; the host still reviews actions.
+
+`DIL.useViewport()` returns `{width, height}` in CSS pixels. In a surface, width
+is the measured container width and height is the browser viewport height.
+`DIL.useBreakpoint("md")` is a minimum-width test: sm=640, md=768, lg=1024,
+xl=1280. `UISurface` coalesces ResizeObserver updates and retains keyed controls
+and state; set `responsive:false` for explicit `setViewport({width,height})`
+control. `UIRuntime.resize` and the client's `resize` request use the compiled
+program without source parsing. The headless default is 1024 by 768.
+
+The IDE includes a **Responsive dashboard** example. The catalog now exposes
+trusted named SVG icons, image `aspectRatio`/`objectFit` and rendered metric
+`change` text. Unknown icon names, CSS expressions and invalid ratios are rejected.
+Image aspect ratios do not grant permission to load external URLs.
