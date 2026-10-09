@@ -67,7 +67,7 @@ export const nativeStringInteropMethods = {
     }
     // The original owner is replaced only after decoding/allocation succeeds.
     // The stored destination, not a second evaluation of its subscript, is used.
-    x.push(); this.rawStorageAddress(destination); x.emit(0x8b,0x00);if(inline)x.push(fixedLength).push().call('native:record:assign-fixed');else x.push().call('native:string:assign');
+    x.push(); this.rawStorageAddress(destination); x.emit(0x8b,0x00);if(inline)x.pushOperand(fixedLength).push().call('native:record:assign-fixed');else x.push().call('native:string:assign');
   },
   nativeExternalStringResult(ansiOwner) {
     const wide = this.temporaryString(), x = this.x;

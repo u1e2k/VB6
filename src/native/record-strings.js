@@ -34,12 +34,14 @@ export const nativeRecordStringMethods={
   loadInlineRecordString(variable){
     if(variable.recordFieldArray)this.fail('Native record array field requires indices');
     this.address(variable);
-    this.x.push(variable.fixedLength).push().invoke('oleaut32.dll','SysAllocStringLen').test().branch('e','error:7');
+    // Preserve the field pointer in EAX while placing the length on the stack.
+    // Legacy push(value) loads EAX; the machine PUSH operand does not.
+    this.x.pushOperand(variable.fixedLength).push().invoke('oleaut32.dll','SysAllocStringLen').test().branch('e','error:7');
     this.ownString();
   },
   storeInlineRecordString(variable){
     if(variable.recordFieldArray)this.fail('Native record array field requires indices');
-    const x=this.x;x.push();this.address(variable);x.push(variable.fixedLength).push().call(P+'assign-fixed');
+    const x=this.x;x.push();this.address(variable);x.pushOperand(variable.fixedLength).push().call(P+'assign-fixed');
   },
   initializeRecordStrings(variable){
     const layout=variable.nativeRecord;
