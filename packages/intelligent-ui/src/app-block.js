@@ -16,11 +16,12 @@ export function appBlockDocument(html){
   const script='('+bootstrap.toString()+')();';
   return '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root{--viz-panel:#fff;--viz-text:#111;--viz-background:#c0c0c0;--viz-border:#808080}body{margin:8px;font:13px/1.45 system-ui;background:var(--viz-panel);color:var(--viz-text)}button,input,select,textarea{font:inherit}*{box-sizing:border-box}</style><script>'+script.replace(/<\/script/gi,'<\\/script')+'</script>'+html;
 }
-export function createAppBlockFactory({proxyUrl,approveApp=async()=>false,approveAction=async()=>false,onAction=()=>{},hostContext=()=>({})}={}) {
+export function createAppBlockFactory({proxyUrl,approveApp=async()=>false,approveAction=async()=>false,onAction=()=>{},hostContext=()=>({}),subscribeLifecycle}={}) {
   return ({document,onAction:dispatchAction=onAction})=>{
     const node=document.createElement('section'),notice=document.createElement('p'),run=document.createElement('button'),stop=document.createElement('button'),view=document.createElement('div');run.type=stop.type='button';run.textContent='Run isolated app';stop.textContent='Stop app';stop.hidden=true;node.append(notice,run,stop,view);let props={},generation=0,app=null,disposed=false;const observer=document.defaultView.MutationObserver?new document.defaultView.MutationObserver(()=>app?.updateHostContext(hostContext())):null;observer?.observe(document.documentElement,{attributes:true});
     const end=()=>{app?.dispose();app=null;view.replaceChildren();run.disabled=false;stop.hidden=true;};
     const error=e=>{notice.textContent=e.message||String(e);};
+    const off=subscribeLifecycle?.(()=>{generation++;end();notice.textContent='App stopped because its host context changed. Review before running again.';});
     run.onclick=async()=>{
       const token=generation,snapshot={html:props.html,title:props.title||'AppBlock'};run.disabled=true;
       try{const url=typeof proxyUrl==='function'?proxyUrl():proxyUrl;appProxyUrl(url,document.defaultView.location.origin);
@@ -31,6 +32,6 @@ export function createAppBlockFactory({proxyUrl,approveApp=async()=>false,approv
       }catch(e){if(!disposed&&generation===token){error(e);run.disabled=false;}}
     };
     stop.onclick=()=>{generation++;end();notice.textContent='App stopped. Its private state was discarded.';};
-    return {node,childHost:document.createElement('span'),update(value){const changed=props.html!==value.html;props=value;if(changed){generation++;end();notice.textContent='Review before running arbitrary app code. A separate-origin sandbox service is required; browser isolation is not an operating-system network firewall.';}},dispose(){disposed=true;generation++;observer?.disconnect();end();}};
+    return {node,childHost:document.createElement('span'),update(value){const changed=props.html!==value.html;props=value;if(changed){generation++;end();notice.textContent='Review before running arbitrary app code. A separate-origin sandbox service is required; browser isolation is not an operating-system network firewall.';}},dispose(){disposed=true;generation++;observer?.disconnect();off?.();end();}};
   };
 }

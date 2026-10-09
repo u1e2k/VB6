@@ -2,12 +2,56 @@
   "version": 2,
   "files": {
     "dist/studio.js": {
-      "bytes": 8378267,
-      "sha256": "3a66069af1a0915e6f677043e5dea1352b6bdc00a216abcbf700e911a03dbd02"
+      "bytes": 8704862,
+      "sha256": "0e4aedf20c9cae9917ccae2fa50fb86c57896a82575dae63a2bc0eb00dc74706"
     },
     "dist/VB6-Studio-Web.html": {
-      "bytes": 8714079,
-      "sha256": "c92839fd2eaa19bbd3d7f3e24f925ab2e97af1dec912c5a2faba1caf5874b818"
+      "bytes": 9046030,
+      "sha256": "3b7e148bd5e082fbf759f49870167fff7c856b318f7dc1db0960bb13484d6244"
+    },
+    "dist/intelligent-ui-sandbox.html": {
+      "bytes": 21365,
+      "sha256": "245cc9c7e04f7d2ebde52e5e55286cb12a8965915824665d3c2568a8954d1d66"
+    },
+    "packages/intelligent-ui/dist/intelligent-ui-sandbox.html": {
+      "bytes": 21365,
+      "sha256": "245cc9c7e04f7d2ebde52e5e55286cb12a8965915824665d3c2568a8954d1d66"
+    },
+    "dist/intelligent-ui.js": {
+      "bytes": 125642,
+      "sha256": "a842dfd5ecaf6431fa116a744187ae72e316cdee447af35bef12f4f5c5e5efaa"
+    },
+    "dist/intelligent-ui-worker.js": {
+      "bytes": 47986,
+      "sha256": "29cbafc8c2d6e02914140c5c50c1300fdc29e14a4d047a74a783862beca7db19"
+    },
+    "dist/intelligent-ui.css": {
+      "bytes": 4480,
+      "sha256": "2f62235a0a8080c626e64515397abd2dc9ef0f194cb0f75c8d77c4b790788d90"
+    },
+    "dist/intelligent-ui-mcp.html": {
+      "bytes": 130404,
+      "sha256": "6a4adfa2ec5a1c6c22a0e489afc7d6486f579b6af10593dcd0f8d3f6c775d60f"
+    },
+    "src/intelligent-ui/payload.js": {
+      "bytes": 180501,
+      "sha256": "fda08f9369013f112a66895df9fba8d97a3728762f388c20a11336f6fec36f98"
+    },
+    "packages/intelligent-ui/dist/intelligent-ui.js": {
+      "bytes": 125642,
+      "sha256": "a842dfd5ecaf6431fa116a744187ae72e316cdee447af35bef12f4f5c5e5efaa"
+    },
+    "packages/intelligent-ui/dist/intelligent-ui-worker.js": {
+      "bytes": 47986,
+      "sha256": "29cbafc8c2d6e02914140c5c50c1300fdc29e14a4d047a74a783862beca7db19"
+    },
+    "packages/intelligent-ui/dist/intelligent-ui.css": {
+      "bytes": 4480,
+      "sha256": "2f62235a0a8080c626e64515397abd2dc9ef0f194cb0f75c8d77c4b790788d90"
+    },
+    "packages/intelligent-ui/dist/intelligent-ui-mcp.html": {
+      "bytes": 130404,
+      "sha256": "6a4adfa2ec5a1c6c22a0e489afc7d6486f579b6af10593dcd0f8d3f6c775d60f"
     },
     "dist/win32-browser.js": {
       "bytes": 212919,
@@ -38,8 +82,8 @@
       "sha256": "6a900e92bb4c8960bfacfafa9111db9c9f4801cf76e0a39633f1cb4b9e03a304"
     },
     "dist/studio.css": {
-      "bytes": 335350,
-      "sha256": "10e70dd69284010031db7ca30d1f92980f38319e36c2a10d30bb6c694865cf06"
+      "bytes": 340703,
+      "sha256": "b609c24372516ec508d817c1eb857bff807c8e33481e01f73b4958c0d2e190b7"
     },
     "dist/vb6-controls.css": {
       "bytes": 159748,

@@ -29,7 +29,7 @@ export function startMcpApp({root=globalThis.document?.getElementById('intellige
   if(!root)throw new UIError('root','MCP App root is missing.');const win=root.ownerDocument.defaultView;let surface,lastUI=null,cancelled=false,observer=null;
   const status=root.ownerDocument.createElement('p');status.textContent='Connecting to MCP Apps host…';root.append(status);const host=root.ownerDocument.createElement('div');root.append(host);
   const context=value=>{root.dataset.theme=value.theme||'light';const vars=value.styles?.variables||{};for(const [source,target] of [['--color-background-primary','--iui-bg'],['--color-text-primary','--iui-text'],['--color-border-primary','--iui-edge'],['--color-background-secondary','--iui-face']]){surface.viewport.style.removeProperty(target);if(typeof vars[source]==='string'&&win.CSS?.supports('color',vars[source]))surface.viewport.style.setProperty(target,vars[source]);}};
-  const show=async ui=>{if(cancelled||!ui||typeof ui.source!=='string')return;if(lastUI&&lastUI.id!==ui.id){surface.dispose();surface=makeSurface();}lastUI=ui;await surface.update(ui.source,{data:ui.data||{},partial:false});status.textContent=ui.title||'Intelligent UI';};
+  const show=async ui=>{if(cancelled||!ui||typeof ui.source!=='string')return;if(lastUI&&lastUI.id!==ui.id){surface.dispose();surface=makeSurface();}lastUI=ui;await surface.update(ui.source,{data:ui.data||{},partial:false});surface.refreshReferences();status.textContent=ui.title||'Intelligent UI';};
   const client=new McpAppClient({window:win,onTeardown:()=>{observer?.disconnect();surface?.dispose();},onNotification:async(method,params)=>{
     if(cancelled&&method.startsWith('ui/notifications/tool-'))return;
     if(method==='ui/notifications/tool-input-partial'&&typeof params.arguments?.source==='string')await surface.update(params.arguments.source,{partial:true,data:params.arguments.data||{}});
@@ -38,7 +38,7 @@ export function startMcpApp({root=globalThis.document?.getElementById('intellige
     else if(method==='ui/notifications/tool-cancelled'){cancelled=true;status.textContent='Tool cancelled. Last UI retained; source and fallback remain available.';}
     else if(method==='ui/notifications/host-context-changed')context(client.context);
   }});
-  const makeSurface=()=>new UISurface(host,{onAction:async action=>{if(cancelled||!client.ready)throw new UIError('cancelled','This tool view is not active.');action=normalizeAction(action);let result;
+  const makeSurface=()=>new UISurface(host,{resolveReference:async id=>lastUI?.references?.[id]||null,onAction:async action=>{if(cancelled||!client.ready)throw new UIError('cancelled','This tool view is not active.');action=normalizeAction(action);let result;
     if(action.type==='message')result=await client.request('ui/message',{role:'user',content:[{type:'text',text:action.args[0]}]});
     else if(action.type==='context')result=await client.request('ui/update-model-context',{structuredContent:{intelligentUI:action.args[0]}});
     else if(action.type==='link')result=await client.request('ui/open-link',{url:safeUrl(action.args[0])});
@@ -50,5 +50,5 @@ export function startMcpApp({root=globalThis.document?.getElementById('intellige
   surface=makeSurface();
   observer=win.ResizeObserver?new win.ResizeObserver(()=>client.notify('ui/notifications/size-changed',{height:Math.min(2000,Math.ceil(root.scrollHeight))})):null;observer?.observe(root);
   const ready=client.connect().then(info=>{context(info.hostContext||{});status.textContent='Waiting for tool data…';}).catch(error=>{status.textContent=error.message;});
-  return {client,surface,ready,dispose(){observer?.disconnect();surface.dispose();client.dispose();}};
+  return {client,get surface(){return surface;},ready,dispose(){observer?.disconnect();surface.dispose();client.dispose();}};
 }

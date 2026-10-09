@@ -38,16 +38,17 @@ export class McpUIService {
     if(method==='list')return {documents:[...(bucket?.documents.values()||[])].map(d=>({id:d.ui.id,title:d.ui.title,uiRevision:d.ui.revision}))};
     if(method==='present'){
       if([...this.owners.values()].reduce((n,b)=>n+b.documents.size,0)>=this.maxDocuments||bucket.documents.size>=8)throw new UIError('document_limit','UI document limit reached. Close an old UI first.');
-      const id='surface-'+(++serial),result=this.document(id,1,args,this.resolve(args,context));bucket.documents.set(id,result);this.notify('present',result,context);return boundedData(result);
+      const id='surface-'+(++serial),result=this.document(id,1,args,this.resolve(args,context),this.referenceSnapshot(context));bucket.documents.set(id,result);this.notify('present',result,context);return boundedData(result);
     }
     const old=bucket?.documents.get(args.id);if(!old)throw new UIError('not_found','UI document is unavailable to this caller.');
     if(method==='read')return boundedData(old);
     if(!Number.isInteger(args.expectedUIRevision)||old.ui.revision!==args.expectedUIRevision)throw new UIError('stale_revision','UI changed; read its current ui.revision before updating.');
     if(method==='close'){bucket.documents.delete(args.id);this.notify('close',old,context);return {id:args.id,closed:true};}
     if(method!=='update')throw new UIError('method','Unknown UI operation.');
-    const result=this.document(args.id,old.ui.revision+1,{source:args.source??old.ui.source,title:old.ui.title},this.resolve(args,context,old.ui));bucket.documents.set(args.id,result);this.notify('update',result,context);return boundedData(result);
+    const result=this.document(args.id,old.ui.revision+1,{source:args.source??old.ui.source,title:old.ui.title},this.resolve(args,context,old.ui),this.referenceSnapshot(context));bucket.documents.set(args.id,result);this.notify('update',result,context);return boundedData(result);
   }
-  document(id,revision,args,resolved){if(typeof args.source!=='string'||!args.source.trim()||args.source.length>32000)throw new UIError('source','UI source must contain 1–32,000 characters.');if(args.title!==undefined&&(typeof args.title!=='string'||args.title.length>200))throw new UIError('title','Invalid UI title.');const runtime=new UIRuntime();try{const rendered=runtime.update(args.source,{data:resolved.data});return {ui:{version:1,id,revision,title:args.title||'Intelligent UI',source:args.source,...resolved},fallbackMarkdown:rendered.fallbackMarkdown,diagnostics:rendered.diagnostics};}finally{runtime.dispose();}}
+  referenceSnapshot(context){return boundedData(Object.fromEntries([...(this.bucket(context)?.bindings.keys()||[])].map(id=>[id,{...this.reference(id,context),details:this.reference(id,context).details.slice(0,2000)}])),64000);}
+  document(id,revision,args,resolved,references={}){if(typeof args.source!=='string'||!args.source.trim()||args.source.length>32000)throw new UIError('source','UI source must contain 1–32,000 characters.');if(args.title!==undefined&&(typeof args.title!=='string'||args.title.length>200))throw new UIError('title','Invalid UI title.');const runtime=new UIRuntime();try{const rendered=runtime.update(args.source,{data:resolved.data});return {ui:{version:1,id,revision,title:args.title||'Intelligent UI',source:args.source,...resolved,references},fallbackMarkdown:rendered.fallbackMarkdown,diagnostics:rendered.diagnostics};}finally{runtime.dispose();}}
   reference(id,context){const binding=this.bucket(context)?.bindings.get(id);if(!binding)return null;return boundedData({kind:'citation',title:binding.value.module||binding.value.name||binding.tool,details:JSON.stringify(binding.value,null,2).slice(0,16000),provenance:{source:binding.tool,revision:binding.revision,capturedAt:binding.capturedAt}});}
   notify(type,result,context){try{this.onChange({type,result:boundedData(result),owner:this.identity(context)});}catch{/* UI observers cannot alter successful tool results. */}}
   resources(){return [{uri:MCP_UI_URI,name:'Intelligent UI',mimeType:MCP_UI_MIME,description:'Reusable VB6-themed interactive tool result view.'}];}

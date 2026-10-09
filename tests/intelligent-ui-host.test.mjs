@@ -71,3 +71,26 @@ test('sandbox HTTP service enforces real headers, embedding origin, read-only ro
  const response=await fetch(base+'/intelligent-ui-sandbox.html?parentOrigin=https%3A%2F%2Fide.example');assert.equal(response.status,200);assert.match(response.headers.get('content-security-policy'),/frame-ancestors https:\/\/ide.example/);assert.match(response.headers.get('content-security-policy'),/connect-src 'none'/);assert.equal(response.headers.get('referrer-policy'),'no-referrer');assert.equal(response.headers.get('cache-control'),'no-store');
  assert.equal((await fetch(base+'/intelligent-ui-sandbox.html?parentOrigin=https%3A%2F%2Fother.example')).status,403);assert.equal((await fetch(base+'/project.json')).status,404);assert.equal((await fetch(base+'/intelligent-ui-sandbox.html',{method:'POST',body:'no'})).status,405);
 });
+
+test('UI documents pin inspected references and do not trust model-provided reference objects',()=>{
+ const service=new McpUIService(),owner={principal:'pin-test'};
+ service.capture('vb6.module.read',{module:'Before',code:'Original',revision:1},owner);
+ const first=service.run('present',{source:'<Cite ref="vb6.module.read"/>',data:{references:{'vb6.module.read':{title:'Fake'}}}},owner);
+ service.capture('vb6.module.read',{module:'After',code:'New',revision:2},owner);
+ assert.equal(first.ui.references['vb6.module.read'].title,'Before');
+ assert.equal(service.run('read',{id:first.ui.id},owner).ui.references['vb6.module.read'].title,'Before');
+ const next=service.run('update',{id:first.ui.id,expectedUIRevision:1},owner);
+ assert.equal(next.ui.references['vb6.module.read'].title,'After');
+ next.ui.references['vb6.module.read'].title='Mutated';
+ assert.equal(service.run('read',{id:first.ui.id},owner).ui.references['vb6.module.read'].title,'After');
+});
+test('MCP host cancellation promptly rejects outstanding host requests',async t=>{
+ const f=hostFixture();t.after(()=>f.host.dispose());await f.init();
+ const pending=f.host.request('tools/list');f.host.cancel();
+ await assert.rejects(pending,/cancelled/);assert.equal(f.host.pending.size,0);
+ await assert.rejects(f.host.request('tools/list'));
+});
+test('MCP host cleans pending request state when serialization fails',async t=>{
+ const f=hostFixture();t.after(()=>f.host.dispose());await f.init();
+ await assert.rejects(f.host.request('tools/call',{fn(){}}));assert.equal(f.host.pending.size,0);
+});

@@ -3,10 +3,10 @@ import {validateReference} from './references.js';
 
 /** Trusted resolver results, never model data, supply reference details and image URLs. */
 export function createReferenceFactories({resolveReference=async()=>null,allowResource=()=>false,approveResource=async()=>false,onAction=()=>{},subscribe}={}) {
-  return Object.fromEntries(['image','AsyncImage','AsyncImageGroup','Entity','Cite'].map(type=>[type,({document})=>{
+  return Object.fromEntries(['image','AsyncImage','AsyncImageGroup','Entity','Cite'].map(type=>[type,({document,onAction:dispatchAction=onAction})=>{
     const node=document.createElement('div'),childHost=document.createElement('span'),view=document.createElement('div');node.className='iui-reference';node.append(view,childHost);
     let props={},stamp='',generation=0,controller=null,disposed=false;
-    const action=value=>Promise.resolve(onAction(value)).catch(error=>{if(!disposed)status(error.message);});
+    const action=value=>Promise.resolve().then(()=>dispatchAction(value)).catch(error=>{if(!disposed)status(error.message);});
     const status=text=>{view.textContent=String(text).slice(0,2000);};
     const image=(record,token)=>{
       const figure=document.createElement('figure'),caption=document.createElement('figcaption'),button=document.createElement('button');button.type='button';button.textContent='Load external image';caption.textContent=record.title||record.alt||props.alt||'';figure.append(button,caption);view.append(figure);
