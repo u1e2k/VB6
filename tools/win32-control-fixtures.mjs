@@ -1,3 +1,4 @@
+import {nativeErrorArgumentFixture} from './win32-error-arguments-fixture.mjs';
 import {nativeMathControlFixture} from './win32-math-fixture.mjs';
 import {nativeRecordStringFixture} from './win32-record-string-fixture.mjs';
 import {nativeFileControlFixture} from './win32-file-fixture.mjs';
@@ -48,7 +49,7 @@ export function rangeControlFixture(){
   add('Progress.Value=180000\nTrack.Value=160000');check('Progress.Value=180000 And Track.Value=160000','progress and trackbar positions remain signed 32-bit');
   add('trackChanges=0\nn=SendValue(Track.hWnd, &H405, 1, 190000)\nn=SendValue(Group.hWnd, &H114, 5, Track.hWnd)');
   check('Track.Value=190000 And trackChanges=1 And trackScrolls=1','native trackbar notification reads actual position and dispatches Scroll');
-  add('notice.hwnd=Spin.hWnd\nnotice.id=GetDlgCtrlID(Spin.hWnd)\nnotice.code=-722\nnotice.position=170000\nnotice.delta=11\nn=SendRecord(Group.hWnd,&H4E,notice.id,notice)');
+  add('notice.hwnd=Spin.hWnd\nnotice.id=GetDlgCtrlID(Spin.hWnd)\nnotice.code=-722\nnotice.position=170000\nnotice.delta=11\nn=SendRecord(Group.hWnd, &H4E, notice.id, notice)');
   check('Spin.Value=170011 And spinChanges=1 And n=1','NMUPDOWN signed delta updates once and vetoes duplicate default application');
   add('On Error Resume Next\nErr.Clear\nBar.Value=100001');check('Err.Number=5 And Bar.Value=100000','invalid Value raises an error without changing the position');
   add('Err.Clear\nOn Error GoTo 0');
@@ -255,7 +256,7 @@ Private Declare Function DeleteFileW Lib "kernel32" (ByVal path As Long) As Long
  selectionChanges=selectionChanges+1
 End Sub`);
 }
-export function nativeControlFixtures(){return [nativeMathControlFixture(fixture),nativeRecordStringFixture(fixture),nativeFileControlFixture(fixture),nativeListControlFixture(fixture),commonItemControlFixture(fixture),rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture(),...advancedNativeControlFixtures(fixture),...gridControlFixtures(),...gridEditControlFixtures(),chartControlFixture(),...tabControlFixtures()];}
+export function nativeControlFixtures(){return [nativeErrorArgumentFixture(fixture),nativeMathControlFixture(fixture),nativeRecordStringFixture(fixture),nativeFileControlFixture(fixture),nativeListControlFixture(fixture),commonItemControlFixture(fixture),rangeControlFixture(),contentControlFixture(),editControlFixture(),fileControlFixture(),drawingControlFixture(),richTextControlFixture(),...advancedNativeControlFixtures(fixture),...gridControlFixtures(),...gridEditControlFixtures(),chartControlFixture(),...tabControlFixtures()];}
 export function buildControlFixtures(directory='reports/native-controls'){
   fs.mkdirSync(directory,{recursive:true});const builds=[];
   for(const {project,checks}of nativeControlFixtures())for(const optimization of [0,1,2]){

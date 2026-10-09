@@ -18,7 +18,7 @@ export const nativeCompilerExpressionMethods={
     const integerType=this.integerType(node);if(integerType)return integerType;
     const numericType=this.numericType(node);if(numericType)return numericType;
     if (node.kind === 'group') return this.type(node.expr);
-    const errorProperty=this.errorProperty(node);if(errorProperty)return ['number','lastdllerror'].includes(errorProperty)?'long':'string';
+    const errorProperty=this.errorProperty(node);if(errorProperty)return ['number','lastdllerror','helpcontext'].includes(errorProperty)?'long':'string';
     const variable=this.variable(node);if(variable)return key(variable.type);
     if(node.kind==='call'){
       const name=node.callee.kind==='id'?key(node.callee.name).replace(/\$$/,''):'';
