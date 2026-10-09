@@ -1,6 +1,6 @@
 # VB6 Studio Web
 
-A browser-native classic Visual Basic development environment, source runtime and controls library. Built from HTML, CSS and JavaScript, with WebGPU drawing and Canvas2D fallback. Export edited projects as independent single HTML applications.
+A browser-native classic Visual Basic development environment, source runtime and controls library. Built from HTML, CSS and JavaScript, with WebGPU drawing and Canvas2D fallback. Features complete Japanese edition localization (Microsoft Visual Basic 6.0 日本語版) out-of-the-box with authentic UI terminology and classic Windows typography. Export edited projects as independent single HTML applications.
 
 **Not a complete, native or pixel-identical Microsoft VB6 replacement.** See [Compatibility](docs/COMPATIBILITY.md) for supported behavior and limits, and [Testing](docs/TESTING.md) for validation evidence.
 
@@ -8,6 +8,7 @@ A browser-native classic Visual Basic development environment, source runtime an
 
 - [Getting started](#getting-started)
 - [IDE and form design](#ide-and-form-design)
+  - [Japanese edition localization (日本語対応)](#japanese-edition-localization-日本語対応)
 - [Language, runtime and debugging](#language-runtime-and-debugging)
 - [Controls and data sources](#controls-and-data-sources)
 - [Project files and resources](#project-files-and-resources)
@@ -36,16 +37,33 @@ The initial Order Entry project is editable and runnable:
 
 | Action | Command |
 |---|---|
-| Run the project | **F5** |
-| Stop execution | **Shift+F5** |
-| Export an independent application | **File → Make <project>.html…** |
-| Download an editable `.vb6web` file | **Save Project** |
+| Run the project (実行) | **F5** |
+| Stop execution (終了) | **Shift+F5** |
+| Export an independent application (独立HTMLの作成) | **ファイル(&F) → <プロジェクト名>.html の作成…** |
+| Download an editable `.vb6web` file (プロジェクトの保存) | **プロジェクトの保存** (Save Project) |
+
 
 Save explicit project backups. Origin storage and layout persistence are best-effort browser facilities, not a replacement for downloaded backups.
 
 The generated IDE/runtime bundles, embedded runtime payload and sample HTML apps are build artifacts rather than checked-in snapshots. Every build checks their exact bytes against `tools/ide-artifacts.json`. CI artifacts and the GitHub Pages build provide built applications. See [IDE build artifacts](docs/IDE-BUILD-ARTIFACTS.md).
 
 ## IDE and form design
+
+### Japanese edition localization (日本語対応)
+
+The IDE features complete authentic Japanese localization modeled after **Microsoft Visual Basic 6.0 日本語版**:
+
+- **Menubar and access keys**: Standard VB6 accelerators `ファイル(&F)`, `編集(&E)`, `表示(&V)`, `プロジェクト(&P)`, `書式(&O)`, `デバッグ(&D)`, `実行(&R)`, `ツール(&T)`, `ウィンドウ(&W)`, `ヘルプ(&H)` with full Alt access-key shortcuts.
+- **Command bars & toolbars**: Standard, Edit, Debug, and Form Editor toolbars (`標準`, `編集`, `デバッグ`, `フォーム エディタ`) with authentic Japanese tooltips.
+- **Panels and tools**:
+  - **Project Explorer** (`プロジェクト エクスプローラ`): Folder classification (`プロジェクト`, `フォーム`, `標準モジュール`, `クラス モジュール`) and context menus.
+  - **Properties Window** (`プロパティ`): Categorized (`項目別`) and alphabetical (`アルファベット順`) tabs with translated property categories (`外観`, `動作`, `位置`, `配置`, `その他`, `データ`) and complete localized descriptions for properties.
+  - **Toolbox** (`ツールボックス`): Group filters (`標準`, `コントロール`, `すべて`) and control tips.
+  - **Object Browser** (`オブジェクト ブラウザ`): Class/member navigation, signature inspection, and status reporting.
+  - **Debug Windows**: `イミディエイト`, `ローカル`, `ウォッチ`, `呼び出し履歴`, `ブレークポイント`, `エラー一覧`, `出力`, and watch/variable editor dialogs.
+- **Classic dialogs**: Localized New Project (`新規プロジェクト` with `標準 EXE`), Project Properties (`プロジェクトのプロパティ`), Options (`オプション`), Procedure Addition (`プロシージャの追加`), Menu Editor, Components, References, and About dialogs.
+- **Typography & Font Stack**: Windows classic Japanese UI font stack (`"MS UI Gothic"`, `"Segoe UI"`, `"Meiryo"`, `"Yu Gothic UI"`) and code font stack (`"MS Gothic"`) for pixel-crisp vintage rendering.
+- **Architecture**: Modular localization dictionary in [`src/ide/i18n.js`](src/ide/i18n.js) with `t()` translation helper, property description mappings (`PROPERTY_DESCRIPTIONS_JA`), and locale state management while preserving all internal command IDs.
 
 ### Workspace and editing
 
@@ -313,7 +331,7 @@ transformations, extension contracts, architecture and verification boundaries.
 |---|---|
 | `src/language`, `src/runtime`, `src/core` | Parsing, compilation, diagnostics, VM, host and value semantics |
 | `src/controls`, `src/graphics`, `src/theme` | Browser controls, drawing and shared themes |
-| `src/editor`, `src/ide`, `src/designer` | Editor services, workspace/tool windows and form editing |
+| `src/editor`, `src/ide`, `src/designer` | Editor services, workspace/tool windows, i18n localization (`src/ide/i18n.js`) and form editing |
 | `src/project`, `src/exporter` | Project/native-text interchange, resource preservation and standalone export |
 | `src/migration`, `packages/vbnet-*` | VB.NET migration, reusable converter, source runtime and .NET 10 project export |
 | `tools`, `tests`, `reports` | Reproducible build/package tools, regression tests and validation evidence |

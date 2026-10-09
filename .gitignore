@@ -79,3 +79,25 @@ packages/intelligent-ui/dist/
 
 # Generated isolated Intelligent UI proxy
 /dist/intelligent-ui-sandbox.html
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Package manager and environment logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env
+.env.local
+.env.*.local
+
